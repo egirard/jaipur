@@ -45,7 +45,7 @@
   let seatQrs = $state<SeatQr[]>([]);
   // AR Card Viewer attachment (see src/lib/ar/): per-seat AR QRs + solitaire bot.
   let ar = $state<ArTabletop | undefined>(undefined);
-  let arQrs = $state<Array<{ seat: Seat; image: string }>>([]);
+  let arQrs = $state<Array<{ seat: Seat; url: string; image: string }>>([]);
   let arViewers = $state(0);
   let solitaire = false;
   let scheduledBotKey = '';
@@ -205,10 +205,11 @@
       ar.attach();
       arQrs = await Promise.all(([1, 2] as const).map(async (seat) => ({
         seat,
+        url: ar!.arViewerUrl(seat),
         image: await QRCode.toDataURL(ar!.arViewerUrl(seat), {
           errorCorrectionLevel: 'M',
           margin: 2,
-          width: 280,
+          width: 360,
           color: { dark: '#0d2622', light: '#eafff0' }
         })
       })));
@@ -347,22 +348,61 @@
     }
   }
 
-  // AR tap intent: tapping a hand card in AR toggles it as ready-to-trade
-  // (the existing tabletop intent), which republishes the hand with a glow —
-  // the AR highlight is always host-driven game state.
+  // AR taps are intents onto TABLE assets; the table (authoritative host)
+  // maps each to the same game action its own on-screen control uses, so the
+  // AR phone drives the flow while the table stays the source of truth. The
+  // relay stamps the seat, so a tap out of turn is simply a no-op.
   async function handleArTap(seatToken: string, nodeId: string) {
-    if (!nodeId.startsWith('hand:')) return;
     const seat = Number(seatToken);
     if (seat !== 1 && seat !== 2) return;
     const player = playerForSeat(seat as Seat);
     const round = lobby.round;
-    if (!player || !round) return;
-    const cardId = nodeId.slice('hand:'.length);
-    if (!(round.hands[player.uid] ?? []).some((card) => card.id === cardId)) return;
-    const selected = new Set(selectedReturnIds(player.uid));
-    if (selected.has(cardId)) selected.delete(cardId);
-    else selected.add(cardId);
-    await publishIntent(player.uid, [...selected], exchangeLoads(player.uid));
+    if (!player || !round || round.status !== 'active' || busy) return;
+    const uid = player.uid;
+
+    // Hand card: toggle ready-to-trade (allowed off-turn — a private
+    // selection the owner stages before their turn).
+    if (nodeId.startsWith('hand:')) {
+      const cardId = nodeId.slice('hand:'.length);
+      if (!(round.hands[uid] ?? []).some((card) => card.id === cardId)) return;
+      const selected = new Set(selectedReturnIds(uid));
+      if (selected.has(cardId)) selected.delete(cardId);
+      else selected.add(cardId);
+      await publishIntent(uid, [...selected], exchangeLoads(uid));
+      return;
+    }
+
+    // Everything below is a turn action — only the active player acts.
+    if (round.activeUid !== uid) return;
+
+    if (nodeId.startsWith('mkt:')) {
+      const cardId = nodeId.slice('mkt:'.length);
+      const card = round.market.find((c) => c.id === cardId);
+      if (!card) return;
+      if (pendingDraw) {
+        // A pending draw is confirmed by tapping its card again; tapping a
+        // different market card abandons it.
+        if (pendingDraw.cardIds.includes(cardId)) await confirmPendingDraw();
+        else await abandonPendingDraw();
+      } else if (card.kind !== 'camel' && selectedReturnIds(uid).length > 0) {
+        await chooseExchangeTarget(uid, cardId); // stage an exchange
+      } else {
+        await chooseMarket(card); // begin a take (creates the pending draw)
+      }
+      return;
+    }
+
+    if (nodeId.startsWith('tok:')) {
+      const good = nodeId.slice('tok:'.length) as Good;
+      if (canSell(good)) await sell(good, seat);
+      return;
+    }
+
+    if (nodeId === 'confirm') {
+      if (Object.keys(exchangeLoads(uid)).length > 0) await confirmExchange(uid);
+      else if (pendingDraw) await confirmPendingDraw();
+      return;
+    }
   }
 
   async function appendFor(
@@ -741,7 +781,7 @@
       <p>Choose a name on your phone. The market opens when both seats join.</p>
     </div>
     {#if qr}
-      <a href={qr.url} aria-label={`Join tabletop ${gameId} as Player ${seat}`}>
+      <a href={qr.url} class="qr-frame" aria-label={`Join tabletop ${gameId} as Player ${seat}`}>
         <img src={qr.image} alt={`QR code to join as Player ${seat}`} />
       </a>
     {:else}
@@ -749,8 +789,10 @@
     {/if}
     {#if arQr}
       <div class="ar-join">
-        <span data-ar-session={ar?.host.session}>AR viewer · {ar?.host.session ?? ''}{arViewers > 0 ? ` · ${arViewers} phone${arViewers === 1 ? '' : 's'}` : ''}</span>
-        <img src={arQr.image} alt={`QR code for Player ${seat}'s AR viewer`} />
+        <a href={arQr.url} class="qr-frame ar-frame" aria-label={`Open Player ${seat}'s AR viewer`}>
+          <img src={arQr.image} alt={`QR code for Player ${seat}'s AR viewer`} />
+        </a>
+        <span data-ar-session={ar?.host.session}>AR viewer{arViewers > 0 ? ` · ${arViewers} phone${arViewers === 1 ? '' : 's'}` : ''}</span>
       </div>
     {/if}
   </section>
@@ -1080,9 +1122,11 @@
 </main>
 
 <style>
-  /* Same footprint as the hand QR, side by side in the join strip. */
-  .ar-join { display: grid; justify-items: center; align-content: center; gap: 0.25rem; font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.9; }
-  .ar-join img { height: min(22vh, 11rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.65rem; }
+  /* AR QR sits beside the hand QR at the identical footprint. */
+  .ar-join { display: grid; justify-items: center; align-content: center; gap: 0.3rem; font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.9; }
+  .qr-frame { display: block; height: min(22vh, 11rem); aspect-ratio: 1; }
+  .qr-frame img { width: 100%; height: 100%; border-radius: 0.65rem; }
+  .ar-frame img { border: 2px solid #0d2622; }
 
   :global(*) { box-sizing: border-box; }
   :global(html), :global(body) {

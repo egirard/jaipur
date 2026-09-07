@@ -56,6 +56,48 @@ function drawCardArt(kind: string): string {
   return c.toDataURL('image/png');
 }
 
+const GOODS = ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather'] as const;
+
+/** A coin-like sell target per good (tap it in AR to sell selected cards of
+ *  that good). Bears the good's color and its next token value. */
+function drawTokenArt(good: string, value: number): string {
+  const c = document.createElement('canvas');
+  c.width = c.height = 160;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = KIND_COLORS[good] ?? '#c9a24a';
+  ctx.beginPath();
+  ctx.arc(80, 80, 74, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#183a37';
+  ctx.stroke();
+  ctx.fillStyle = '#183a37';
+  ctx.font = 'bold 56px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(value), 80, 84);
+  return c.toDataURL('image/png');
+}
+
+function drawConfirmArt(): string {
+  const c = document.createElement('canvas');
+  c.width = c.height = 160;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#1d7a4a';
+  ctx.beginPath();
+  ctx.arc(80, 80, 74, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#eafff0';
+  ctx.lineWidth = 12;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(46, 84);
+  ctx.lineTo(70, 108);
+  ctx.lineTo(116, 54);
+  ctx.stroke();
+  return c.toDataURL('image/png');
+}
+
 function drawBackArt(): string {
   const c = document.createElement('canvas');
   c.width = 256;
@@ -211,13 +253,21 @@ export class ArTabletop {
     const wM = (sampleRect?.width ?? 60) * this.mPerPx;
     const hM = (sampleRect?.height ?? 84) * this.mPerPx;
 
-    // Artwork: one asset per card kind + the back (content-addressed).
+    // Artwork: card kinds + back, one sell coin per good, and a confirm mark
+    // (content-addressed; the coin value only changes the token asset id).
     const kinds = ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather', 'camel'];
-    const key = `${wM.toFixed(4)}x${hM.toFixed(4)}`;
+    const tokM = wM * 0.55;
+    const tokenTop: Record<string, number> = {};
+    for (const g of GOODS) tokenTop[g] = round?.goodsTokens[g]?.at(-1)?.value ?? 0;
+    const key = `${wM.toFixed(4)}x${hM.toFixed(4)}|${GOODS.map((g) => tokenTop[g]).join(',')}`;
     if (key !== this.assetsKey) {
       this.assetsKey = key;
-      const assets: Record<string, ArAsset> = { back: { img: drawBackArt(), wM, hM } };
+      const assets: Record<string, ArAsset> = {
+        back: { img: drawBackArt(), wM, hM },
+        confirm: { img: drawConfirmArt(), wM: tokM, hM: tokM },
+      };
       for (const k of kinds) assets[`k-${k}`] = { img: drawCardArt(k), wM, hM };
+      for (const g of GOODS) assets[`tok-${g}`] = { img: drawTokenArt(g, tokenTop[g]), wM: tokM, hM: tokM };
       this.host.publishAssets(assets);
     }
 
@@ -243,6 +293,23 @@ export class ArTabletop {
           id: 'deck', kind: 'stack', xM, zM, rotY: 0,
           count: round.deck.length, face: 'back',
         });
+      }
+      // Sell coins: a shared row below the market. Tapping a coin (as the
+      // active player) sells the selected cards of that good; the count badge
+      // is the remaining token supply.
+      const half = (this.trackedPx * this.mPerPx) / 2;
+      const pitchT = tokM * 1.35;
+      GOODS.forEach((g, i) => {
+        nodes.push({
+          id: `tok:${g}`, kind: 'stack',
+          xM: (i - (GOODS.length - 1) / 2) * pitchT, zM: half * 0.42, rotY: 0,
+          count: round.goodsTokens[g]?.length ?? 0, face: `tok-${g}`,
+        });
+      });
+      // Confirm coin: shown when the active player has staged an exchange.
+      const activeLoads = lobby.tabletopIntents[round.activeUid]?.exchangeLoads ?? {};
+      if (Object.keys(activeLoads).length > 0) {
+        nodes.push({ id: 'confirm', kind: 'tile', xM: half * 0.5, zM: half * 0.42, rotY: 0, face: 'confirm' });
       }
     }
     this.host.publishScene({ nodes });
