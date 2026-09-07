@@ -186,7 +186,10 @@
           botUid: `bot-${hostUid}`,
           displayName: 'Boring Bot',
           difficulty: 'apprentice',
-          engineVersion: 1
+          engineVersion: 1,
+          // Seat 1: the human plays seat 2, which is upright from the test
+          // table's viewing side.
+          seat: 1
         });
       }
 
@@ -746,7 +749,7 @@
     {/if}
     {#if arQr}
       <div class="ar-join">
-        <span data-ar-session={ar?.host.session}>AR {ar?.host.session ?? ''}{arViewers > 0 ? ` · ${arViewers} connected` : ''}</span>
+        <span data-ar-session={ar?.host.session}>AR viewer · {ar?.host.session ?? ''}{arViewers > 0 ? ` · ${arViewers} phone${arViewers === 1 ? '' : 's'}` : ''}</span>
         <img src={arQr.image} alt={`QR code for Player ${seat}'s AR viewer`} />
       </div>
     {/if}
@@ -1077,8 +1080,9 @@
 </main>
 
 <style>
-  .ar-join { display: grid; justify-items: center; gap: 0.2rem; margin-top: 0.55rem; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.85; }
-  .ar-join img { width: 108px; height: 108px; border-radius: 8px; }
+  /* Same footprint as the hand QR, side by side in the join strip. */
+  .ar-join { display: grid; justify-items: center; align-content: center; gap: 0.25rem; font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.9; }
+  .ar-join img { height: min(22vh, 11rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.65rem; }
 
   :global(*) { box-sizing: border-box; }
   :global(html), :global(body) {
@@ -1125,7 +1129,7 @@
     display: grid;
     width: 100%;
     height: 100%;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 1rem;
     padding: clamp(0.7rem, 1.8vmin, 1.4rem) clamp(5rem, 11vw, 10rem);

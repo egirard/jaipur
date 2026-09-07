@@ -138,13 +138,15 @@ export function reduceLobby(events: GameEvent[]): LobbyState {
       const botUid = event.payload.botUid;
       const difficulty = event.payload.difficulty;
       const engineVersion = event.payload.engineVersion;
+      const requestedBotSeat = event.payload.seat === 1 ? 1 : 2;
       if (
         event.actorUid !== state.hostUid ||
         // Solitaire/test support: a tabletop may seat a computer opponent
-        // so a single player (and a single AR phone) can exercise the loop.
+        // (on either seat) so a single player and a single AR phone can
+        // exercise the loop.
         (state.mode !== 'standard' && state.mode !== 'tabletop') ||
         (state.mode === 'standard' && state.players.length !== 1) ||
-        (state.mode === 'tabletop' && state.players.some((p) => p.seat === 2)) ||
+        (state.mode === 'tabletop' && state.players.some((p) => p.seat === requestedBotSeat)) ||
         !displayName ||
         typeof botUid !== 'string' ||
         botUid.length < 1 ||
@@ -163,7 +165,12 @@ export function reduceLobby(events: GameEvent[]): LobbyState {
         difficulty,
         engineVersion: difficulty === 'maharaja' ? 2 : 1
       };
-      state.players.push({ uid: botUid, displayName, ready: true, seat: 2 });
+      state.players.push({
+        uid: botUid,
+        displayName,
+        ready: true,
+        seat: state.mode === 'tabletop' ? requestedBotSeat : 2
+      });
       state.activity.push({
         id: event.id,
         type: event.type,
