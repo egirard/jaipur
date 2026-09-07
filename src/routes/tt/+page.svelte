@@ -27,7 +27,9 @@
     type PendingDraw,
     type Token
   } from '$lib/jaipur-rules';
-  import { generateRoomCode } from '$lib/room-code';
+  import { generateRoomCode, isRoomCode } from '$lib/room-code';
+  import { ArTabletop } from '$lib/ar/arTabletop';
+  import { botActionEvent, chooseBotAction, createBotObservation } from '$lib/jaipur-bot';
 
   type Seat = 1 | 2;
   type SeatQr = { seat: Seat; url: string; image: string };
@@ -41,6 +43,12 @@
   let repository = $state<GameRepository>();
   let lobby = $state<GameState>(reduceGame([]));
   let seatQrs = $state<SeatQr[]>([]);
+  // AR Card Viewer attachment (see src/lib/ar/): per-seat AR QRs + solitaire bot.
+  let ar = $state<ArTabletop | undefined>(undefined);
+  let arQrs = $state<Array<{ seat: Seat; image: string }>>([]);
+  let arViewers = $state(0);
+  let solitaire = false;
+  let scheduledBotKey = '';
   let startingRound = false;
   let repositoryReady = false;
   let knownActivityIds = new Set<string>();
@@ -92,13 +100,23 @@
       marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') !== 'off';
       const services = await initializeFirebase();
       hostUid = services.auth.currentUser?.uid ?? '';
-      let attempts = 0;
-      do {
-        gameId = generateRoomCode();
-        attempts += 1;
-      } while (attempts < 8 && (await gameRoomExists(services.db, gameId)));
-      if (await gameRoomExists(services.db, gameId)) {
-        throw new Error('Could not reserve a tabletop. Reload to try again.');
+      // Test hook: ?game=ABCDE pins the room code (reusing it across
+      // reloads) so scripted runs know the ids up front.
+      const pageParams = new URLSearchParams(location.search);
+      const forcedGame = pageParams.get('game');
+      let freshGame = true;
+      if (forcedGame && isRoomCode(forcedGame.toUpperCase())) {
+        gameId = forcedGame.toUpperCase();
+        freshGame = !(await gameRoomExists(services.db, gameId));
+      } else {
+        let attempts = 0;
+        do {
+          gameId = generateRoomCode();
+          attempts += 1;
+        } while (attempts < 8 && (await gameRoomExists(services.db, gameId)));
+        if (await gameRoomExists(services.db, gameId)) {
+          throw new Error('Could not reserve a tabletop. Reload to try again.');
+        }
       }
 
       const joinBase = `${location.origin}${base}/hand/`;
@@ -146,6 +164,8 @@
             }
           }
           void maybeOpenFirstRound();
+          void tick().then(() => ar?.publishFromState(lobby));
+          maybeBotTurn();
         },
         (error) => {
           statusKind = 'error';
@@ -156,7 +176,39 @@
           status = nextStatus === 'synced' ? 'Tabletop synced' : 'Synchronizing tabletop…';
         }
       );
-      await attached.append('tabletop/created', { gameId });
+      if (freshGame) await attached.append('tabletop/created', { gameId });
+
+      // Solitaire/test mode (?bot=1): seat 2 is a computer opponent, so a
+      // single player and a single AR phone can exercise the whole loop.
+      solitaire = pageParams.get('bot') === '1';
+      if (solitaire && freshGame) {
+        await attached.append('bot/added', {
+          botUid: `bot-${hostUid}`,
+          displayName: 'Boring Bot',
+          difficulty: 'apprentice',
+          engineVersion: 1
+        });
+      }
+
+      // AR attachment: registration underlay + relay session + seat AR QRs.
+      ar = new ArTabletop(
+        pageParams.get('arsession')?.slice(0, 32) ??
+        localStorage.getItem('jaipur:ar:session') ??
+        undefined
+      );
+      localStorage.setItem('jaipur:ar:session', ar.host.session);
+      ar.onTap = (seat, nodeId) => void handleArTap(seat, nodeId);
+      ar.onViewersChanged = (n) => (arViewers = n);
+      ar.attach();
+      arQrs = await Promise.all(([1, 2] as const).map(async (seat) => ({
+        seat,
+        image: await QRCode.toDataURL(ar!.arViewerUrl(seat), {
+          errorCorrectionLevel: 'M',
+          margin: 2,
+          width: 280,
+          color: { dark: '#0d2622', light: '#eafff0' }
+        })
+      })));
     } catch (error) {
       statusKind = 'error';
       status = error instanceof Error ? error.message : 'Could not create tabletop';
@@ -257,6 +309,57 @@
     } finally {
       startingRound = false;
     }
+  }
+
+  // The boring computer opponent: the shipped apprentice bot, driven from
+  // the tabletop page. Tabletop mode already lets the host act on behalf of
+  // any seated player, so its moves need no additional trust.
+  function maybeBotTurn() {
+    const botUid = lobby.bot?.uid;
+    const round = lobby.round;
+    if (!botUid || !repository || round?.status !== 'active' || round.activeUid !== botUid) return;
+    const key = `${lobby.epoch}:${round.number}:${round.turnNumber}`;
+    if (scheduledBotKey === key) return;
+    scheduledBotKey = key;
+    setTimeout(() => void playBotTurn(key), 800);
+  }
+
+  async function playBotTurn(expectedKey: string) {
+    const botUid = lobby.bot?.uid;
+    const round = lobby.round;
+    if (!botUid || !repository || round?.status !== 'active' || round.activeUid !== botUid) return;
+    if (`${lobby.epoch}:${round.number}:${round.turnNumber}` !== expectedKey) return;
+    if (cardFlights.length > 0 || tokenFlights.length > 0) {
+      setTimeout(() => void playBotTurn(expectedKey), 120);
+      return;
+    }
+    const observation = createBotObservation(lobby);
+    const action = observation ? chooseBotAction(observation) : null;
+    if (!observation || !action) return;
+    const event = botActionEvent(observation, action);
+    try {
+      await repository.append(event.type, event.payload);
+    } catch {
+      scheduledBotKey = '';
+    }
+  }
+
+  // AR tap intent: tapping a hand card in AR toggles it as ready-to-trade
+  // (the existing tabletop intent), which republishes the hand with a glow —
+  // the AR highlight is always host-driven game state.
+  async function handleArTap(seatToken: string, nodeId: string) {
+    if (!nodeId.startsWith('hand:')) return;
+    const seat = Number(seatToken);
+    if (seat !== 1 && seat !== 2) return;
+    const player = playerForSeat(seat as Seat);
+    const round = lobby.round;
+    if (!player || !round) return;
+    const cardId = nodeId.slice('hand:'.length);
+    if (!(round.hands[player.uid] ?? []).some((card) => card.id === cardId)) return;
+    const selected = new Set(selectedReturnIds(player.uid));
+    if (selected.has(cardId)) selected.delete(cardId);
+    else selected.add(cardId);
+    await publishIntent(player.uid, [...selected], exchangeLoads(player.uid));
   }
 
   async function appendFor(
@@ -627,6 +730,7 @@
 
 {#snippet joinSeat(seat: Seat)}
   {@const qr = seatQrs.find((candidate) => candidate.seat === seat)}
+  {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
   <section class="join-seat" data-seat={seat} aria-label={`Player ${seat} join code`}>
     <div>
       <span class="seat-kicker">Player {seat}</span>
@@ -639,6 +743,12 @@
       </a>
     {:else}
       <span class="qr-placeholder" aria-hidden="true"></span>
+    {/if}
+    {#if arQr}
+      <div class="ar-join">
+        <span data-ar-session={ar?.host.session}>AR {ar?.host.session ?? ''}{arViewers > 0 ? ` · ${arViewers} connected` : ''}</span>
+        <img src={arQr.image} alt={`QR code for Player ${seat}'s AR viewer`} />
+      </div>
     {/if}
   </section>
 {/snippet}
@@ -967,6 +1077,9 @@
 </main>
 
 <style>
+  .ar-join { display: grid; justify-items: center; gap: 0.2rem; margin-top: 0.55rem; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.85; }
+  .ar-join img { width: 108px; height: 108px; border-radius: 8px; }
+
   :global(*) { box-sizing: border-box; }
   :global(html), :global(body) {
     width: 100%;

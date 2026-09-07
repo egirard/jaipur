@@ -9,3 +9,4 @@ node_modules/
 playwright-report/
 result
 test-results/
+.env.local

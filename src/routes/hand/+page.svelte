@@ -54,9 +54,14 @@
       const services = await initializeFirebase();
       uid = services.auth.currentUser?.uid ?? '';
       displayName = localStorage.getItem(`jaipur:${gameId}:${uid}:name`) ?? '';
+      // Test hook: ?name=Tester&auto=1 prefills and auto-takes the seat
+      // (used by scripted E2E runs; harmless for humans).
+      const presetName = params.get('name');
+      if (presetName) displayName = presetName.slice(0, 32);
       attach(services.db);
       status = 'synced';
       statusText = displayName ? 'Private hand connected' : 'Choose your trader name';
+      if (presetName && params.get('auto') === '1') void join();
     } catch (error) {
       fail(error);
     }

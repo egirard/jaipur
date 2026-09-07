@@ -140,8 +140,11 @@ export function reduceLobby(events: GameEvent[]): LobbyState {
       const engineVersion = event.payload.engineVersion;
       if (
         event.actorUid !== state.hostUid ||
-        state.mode !== 'standard' ||
-        state.players.length !== 1 ||
+        // Solitaire/test support: a tabletop may seat a computer opponent
+        // so a single player (and a single AR phone) can exercise the loop.
+        (state.mode !== 'standard' && state.mode !== 'tabletop') ||
+        (state.mode === 'standard' && state.players.length !== 1) ||
+        (state.mode === 'tabletop' && state.players.some((p) => p.seat === 2)) ||
         !displayName ||
         typeof botUid !== 'string' ||
         botUid.length < 1 ||
@@ -154,7 +157,7 @@ export function reduceLobby(events: GameEvent[]): LobbyState {
         state.diagnostics.push(`${event.id}: invalid bot seat`);
         continue;
       }
-      state.mode = 'bot';
+      if (state.mode === 'standard') state.mode = 'bot';
       state.bot = {
         uid: botUid,
         difficulty,
