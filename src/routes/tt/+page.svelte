@@ -481,6 +481,25 @@
     );
   }
 
+  // Why the staged exchange can't be confirmed yet, in the player's terms
+  // (mirrors isLegalExchange, which only answers yes/no).
+  function exchangeProblem(uid: string): string | null {
+    const round = lobby.round;
+    if (!round) return null;
+    const loads = exchangeLoads(uid);
+    const taken = round.market.filter(({ id }) => id in loads);
+    const returnedIds = Object.values(loads);
+    const available = [...(round.hands[uid] ?? []), ...(round.herds[uid] ?? [])];
+    const returned = available.filter(({ id }) => returnedIds.includes(id));
+    if (taken.length < 2) return 'Place at least two returns to trade.';
+    const takenGoods = new Set(taken.map(({ kind }) => kind));
+    const clash = returned.find(({ kind }) => kind !== 'camel' && takenGoods.has(kind));
+    if (clash) return `You can't return ${label(clash.kind)} while taking ${label(clash.kind)}.`;
+    const fromHand = returned.filter((card) => round.hands[uid]?.some(({ id }) => id === card.id)).length;
+    if ((round.hands[uid]?.length ?? 0) - fromHand + taken.length > 7) return 'That would leave more than 7 cards in your hand.';
+    return isLegalExchange(round, uid, Object.keys(loads), returnedIds) ? null : 'This trade is not allowed.';
+  }
+
   async function confirmExchange(uid: string) {
     if (!lobby.round || pendingDraw) return;
     const loads = exchangeLoads(uid);
@@ -948,7 +967,8 @@
           <button type="button" disabled={busy} data-confirm-draw onclick={confirmPendingDraw}>Confirm</button>
           <button type="button" disabled={busy} data-abandon-draw onclick={abandonPendingDraw}>Undo</button>
         {:else if Object.keys(promptLoads).length >= 2}
-          <span>{Object.keys(promptLoads).length} face-down returns placed.</span>
+          {@const problem = exchangeProblem(activeUid)}
+          <span>{problem ?? `${Object.keys(promptLoads).length} face-down returns placed.`}</span>
           <button
             type="button"
             disabled={!isLegalExchange(lobby.round, activeUid, Object.keys(promptLoads), Object.values(promptLoads))}
@@ -1264,7 +1284,8 @@
     grid-row: 2;
     min-height: 0;
     padding: clamp(0.4rem, 1vmin, 0.75rem) clamp(0.65rem, 1.5vw, 1.25rem);
-    background-image: linear-gradient(rgb(255 250 238 / 84%), rgb(255 250 238 / 84%)), var(--market-art);
+    /* Lighter wash than upstream (84%): the pattern is a large part of what AR phones image-track. */
+    background-image: linear-gradient(rgb(255 250 238 / 62%), rgb(255 250 238 / 62%)), var(--market-art);
     background-position: center;
     background-size: auto, min(40vh, 28rem);
   }
