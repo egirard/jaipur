@@ -218,6 +218,9 @@
           color: { dark: '#0d2622', light: '#eafff0' }
         })
       })));
+      // The seat QRs are prime tracking features: re-capture once they show.
+      await tick();
+      ar.refreshTracking(600);
     } catch (error) {
       statusKind = 'error';
       status = error instanceof Error ? error.message : 'Could not create tabletop';

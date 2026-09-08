@@ -1,8 +1,11 @@
 // AR bridge for the tabletop page (GPLv3, part of this fork).
 //
 // Owns everything AR about /tt so the page itself only needs a few calls:
-// - a feature-rich registration underlay canvas behind the board (phones
-//   image-track it; game DOM occludes parts of it, which is fine),
+// - registration: phones image-track the WHOLE tabletop screen. The page
+//   captures itself (html2canvas) and publishes the capture as the tracked
+//   image, re-capturing whenever the table changes so the phone's target
+//   never drifts from the glass. The game's own panels (cards, QR codes,
+//   text) carry the features — no synthetic pattern is drawn,
 // - physical scale from a screen-diagonal setting (?diag=27, persisted),
 // - artwork + scene projection: market/deck mapped from their real DOM
 //   rects so AR pieces sit on their on-screen counterparts; hands laid
@@ -16,6 +19,7 @@
 //
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
+import html2canvas from 'html2canvas';
 import { ArHost, type ArAction, type ArAsset, type ArNode } from './arHost';
 import type { Card, GameState } from '../jaipur-rules';
 
@@ -87,55 +91,15 @@ function drawBackArt(): string {
   return c.toDataURL('image/png');
 }
 
-/** Non-repeating high-contrast pattern: image tracking needs rich features
- *  (a flat board never locks — hard-won ARViewer lesson). Deterministic so
- *  the published image only changes when the size does. */
-function drawUnderlay(canvas: HTMLCanvasElement, px: number): void {
-  canvas.width = px;
-  canvas.height = px;
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#0d2622';
-  ctx.fillRect(0, 0, px, px);
-  let seed = 1234567;
-  const rnd = () => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed / 0x7fffffff;
-  };
-  for (let i = 0; i < 260; i++) {
-    const x = rnd() * px;
-    const y = rnd() * px;
-    const r = 4 + rnd() * (px / 14);
-    ctx.strokeStyle = `rgba(${120 + rnd() * 120}, ${170 + rnd() * 60}, ${140 + rnd() * 60}, ${0.25 + rnd() * 0.5})`;
-    ctx.lineWidth = 1 + rnd() * 3;
-    ctx.beginPath();
-    ctx.arc(x, y, r, rnd() * Math.PI * 2, rnd() * Math.PI * 2 + 1 + rnd() * 4);
-    ctx.stroke();
-    if (i % 5 === 0) {
-      ctx.fillStyle = `rgba(${180 + rnd() * 75}, ${200 + rnd() * 55}, ${170 + rnd() * 60}, ${0.5 + rnd() * 0.4})`;
-      ctx.fillRect(rnd() * px, rnd() * px, 2 + rnd() * 8, 2 + rnd() * 8);
-    }
-  }
-  // border ticks, ruler-style
-  ctx.strokeStyle = 'rgba(220,240,225,0.8)';
-  ctx.lineWidth = 2;
-  for (let t = 0; t < px; t += px / 40) {
-    const len = t % (px / 8) < 1 ? 18 : 9;
-    for (const [x1, y1, x2, y2] of [
-      [t, 0, t, len], [t, px, t, px - len], [0, t, len, t], [px, t, px - len, t],
-    ] as const) {
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-    }
-  }
-}
-
 export class ArTabletop {
   readonly host: ArHost;
-  private underlay: HTMLCanvasElement | null = null;
   private mPerPx = 0;
-  private trackedPx = 0;
+  private attached = false;
+  private trackingEpoch = 0;
+  private captureTimer: ReturnType<typeof setTimeout> | null = null;
+  private capturing = false;
+  private captureAgain = false;
+  private lastTrackingJpeg = '';
   private assetsKey = '';
   private lastSeatSceneJson = new Map<string, string>();
   onJoin: ArJoinHandler | null = null;
@@ -161,54 +125,98 @@ export class ArTabletop {
     });
   }
 
-  /** Mount the registration pattern as the shared-market band's background
-   *  layer — the largest VISIBLE square the camera can track, with game
-   *  pieces merely occluding parts of it (occlusion is fine; invisible
-   *  pixels are not: the tracked image must be exactly what is on screen).
-   *  Call once after the board has mounted. */
+  /** Start publishing: physical scale from the screen diagonal, connect to
+   *  the relay, and capture the screen as the tracked image. Call once after
+   *  the board has mounted. */
   attach(): void {
     const diag = readDiagInches();
     const cssDiag = Math.hypot(innerWidth, innerHeight);
     this.mPerPx = (diag * 0.0254) / cssDiag;
-    const band = document.querySelector<HTMLElement>('.shared-market');
-    const canvas = document.createElement('canvas');
-    let sizeCss: number;
-    if (band) {
-      const r = band.getBoundingClientRect();
-      sizeCss = Math.min(r.width, r.height);
-      canvas.style.cssText =
-        'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);' +
-        `width:${sizeCss}px;height:${sizeCss}px;z-index:0;pointer-events:none;`;
-      band.prepend(canvas);
-    } else {
-      sizeCss = Math.min(innerWidth, innerHeight) * 0.5;
-      canvas.style.cssText =
-        'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);' +
-        `width:${sizeCss}px;height:${sizeCss}px;z-index:1;pointer-events:none;`;
-      document.body.prepend(canvas);
-    }
-    drawUnderlay(canvas, 1024);
-    this.underlay = canvas;
-    this.trackedPx = sizeCss;
+    this.attached = true;
     this.host.connect();
-    this.host.publishTracking(canvas.toDataURL('image/jpeg', 0.85), sizeCss * this.mPerPx);
+    this.refreshTracking(0);
+    addEventListener('resize', this.onResize);
   }
 
   detach(): void {
-    this.underlay?.remove();
+    this.attached = false;
+    removeEventListener('resize', this.onResize);
+    if (this.captureTimer) clearTimeout(this.captureTimer);
     this.host.close();
+  }
+
+  private onResize = () => {
+    const diag = readDiagInches();
+    this.mPerPx = (diag * 0.0254) / Math.hypot(innerWidth, innerHeight);
+    this.refreshTracking(300);
+  };
+
+  /** Re-capture the screen and republish it as the tracked image, debounced
+   *  (a burst of state changes and their flight animations collapse into
+   *  one capture once the screen has settled). */
+  refreshTracking(delayMs = 1200): void {
+    if (!this.attached) return;
+    if (this.captureTimer) clearTimeout(this.captureTimer);
+    this.captureTimer = setTimeout(() => {
+      this.captureTimer = null;
+      void this.captureAndPublish();
+    }, delayMs);
+  }
+
+  private async captureAndPublish(): Promise<void> {
+    if (this.capturing) {
+      this.captureAgain = true;
+      return;
+    }
+    this.capturing = true;
+    try {
+      // ~1280px wide keeps the JPEG small over the relay while leaving the
+      // card art and QR modules sharp enough to match features against.
+      const scale = Math.min(1, 1280 / innerWidth);
+      const canvas = await html2canvas(document.body, {
+        scale,
+        width: innerWidth,
+        height: innerHeight,
+        x: 0,
+        y: 0,
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: innerWidth,
+        windowHeight: innerHeight,
+        backgroundColor: '#f5ead3',
+        logging: false,
+        useCORS: true,
+        // In-flight pieces are transient; leave them out of the target.
+        ignoreElements: (el) =>
+          el.classList?.contains('table-card-flight') || el.classList?.contains('table-token-flight'),
+      });
+      const jpeg = canvas.toDataURL('image/jpeg', 0.8);
+      if (jpeg !== this.lastTrackingJpeg && this.attached) {
+        this.lastTrackingJpeg = jpeg;
+        this.trackingEpoch += 1;
+        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch);
+      }
+    } catch (error) {
+      console.warn('AR: screen capture failed', error);
+    } finally {
+      this.capturing = false;
+      if (this.captureAgain) {
+        this.captureAgain = false;
+        this.refreshTracking(200);
+      }
+    }
   }
 
   arViewerUrl(seat?: 1 | 2): string {
     return this.host.viewerUrl(seat ? String(seat) : undefined);
   }
 
-  /** Screen rect center -> meters in the tracked-image frame. */
+  /** Screen rect center -> meters in the tracked-image frame (the tracked
+   *  image is the whole screen, so its origin is the viewport center). */
   private toMeters(r: DOMRect): { xM: number; zM: number } {
-    const u = this.underlay!.getBoundingClientRect();
     return {
-      xM: (r.left + r.width / 2 - (u.left + u.width / 2)) * this.mPerPx,
-      zM: (r.top + r.height / 2 - (u.top + u.height / 2)) * this.mPerPx,
+      xM: (r.left + r.width / 2 - innerWidth / 2) * this.mPerPx,
+      zM: (r.top + r.height / 2 - innerHeight / 2) * this.mPerPx,
     };
   }
 
@@ -216,7 +224,10 @@ export class ArTabletop {
    *  Call after the DOM has settled (the market rects are measured live so
    *  AR pieces sit exactly on their on-screen counterparts). */
   publishFromState(lobby: GameState): void {
-    if (!this.underlay || !this.mPerPx) return;
+    if (!this.attached || !this.mPerPx) return;
+    // The screen just changed under the phones: refresh their target once
+    // the pieces have settled.
+    this.refreshTracking();
     const round = lobby.round;
     const sampleRect = document.querySelector('[data-market-card-id]')?.getBoundingClientRect();
     const wM = (sampleRect?.width ?? 60) * this.mPerPx;
