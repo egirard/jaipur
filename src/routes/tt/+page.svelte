@@ -89,7 +89,11 @@
   let turnTransitioning = $state(false);
   let busy = $derived(requestBusy || actionAnimating || turnPause || turnTransitioning);
   let pendingDraw = $derived<PendingDraw | null>(lobby.pendingDraw);
-  let marketFacingEnabled = $state(true);
+  // Off by default on the AR table: the market band rotating 180° toward
+  // the active trader makes the screen stop matching the image the phones
+  // registered against, and the whole AR scene flips with it. The header
+  // toggle still turns it on (remembered).
+  let marketFacingEnabled = $state(false);
   let marketFacingSeat = $state<Seat>(2);
   let marketRotation = $state(0);
   let pendingTurnSeat: Seat | undefined;
@@ -101,7 +105,7 @@
 
   onMount(async () => {
     try {
-      marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') !== 'off';
+      marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') === 'on';
       const services = await initializeFirebase();
       hostUid = services.auth.currentUser?.uid ?? '';
       // Test hook: ?game=ABCDE pins the room code (reusing it across
