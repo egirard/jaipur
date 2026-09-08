@@ -6,7 +6,7 @@
 // codebases, which is what keeps them separate works.
 //
 // Usage sketch (from the tabletop page):
-//   const ar = new ArHost({ onAction: handleArAction });
+//   const ar = new ArHost({ onAction: handleArAction }); // 'join' actions seat phones
 //   ar.connect();
 //   ar.publishTracking(boardJpegDataUrl, widthM);      // static board layer
 //   ar.publishAssets(cardArtwork);                      // shared artwork
@@ -34,7 +34,10 @@ export type ArNode = {
   back?: string;
 };
 
-export type ArScene = { nodes: ArNode[] };
+/** A scene; a seat's private scene may also carry who holds the seat, so
+ *  the viewer can show "seated as NAME" (and a reconnecting phone knows it
+ *  is already in). */
+export type ArScene = { nodes: ArNode[]; player?: { name: string } };
 
 /** An action forwarded by the relay; viewerId/seat are relay-stamped. */
 export type ArAction = {

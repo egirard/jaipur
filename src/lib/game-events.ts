@@ -188,22 +188,35 @@ export function reduceLobby(events: GameEvent[]): LobbyState {
       const seat = requestedSeat === 1 || requestedSeat === 2
         ? requestedSeat
         : openSeats[0];
+      // A tabletop host may seat a player on their behalf (the AR viewer
+      // flow: the phone never touches Firestore — it asks the table to seat
+      // it over the AR relay, and the table writes the join). The seated
+      // uid is host-chosen and must not collide with the host itself.
+      const requestedPlayerUid = event.payload.playerUid;
+      const onBehalf = state.mode === 'tabletop' &&
+        event.actorUid === state.hostUid &&
+        typeof requestedPlayerUid === 'string';
+      const uid = onBehalf ? requestedPlayerUid : event.actorUid;
       if (
         !displayName ||
         !seat ||
         !openSeats.includes(seat) ||
         state.players.length >= 2 ||
-        state.players.some(({ uid }) => uid === event.actorUid)
+        typeof uid !== 'string' ||
+        uid.length < 1 ||
+        uid.length > 128 ||
+        (onBehalf && uid === event.actorUid) ||
+        state.players.some((player) => player.uid === uid)
       ) {
         state.diagnostics.push(`${event.id}: invalid join`);
         continue;
       }
-      state.players.push({ uid: event.actorUid, displayName, ready: false, seat });
+      state.players.push({ uid, displayName, ready: false, seat });
       state.players.sort((left, right) => left.seat - right.seat);
       state.activity.push({
         id: event.id,
         type: event.type,
-        actorUid: event.actorUid
+        actorUid: uid
       });
       continue;
     }

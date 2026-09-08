@@ -7,14 +7,19 @@
 // - artwork + scene projection: market/deck mapped from their real DOM
 //   rects so AR pieces sit on their on-screen counterparts; hands laid
 //   along the owner's table edge and sent only to that seat,
-// - AR taps surfaced as intents with the relay-stamped seat.
+// - seat joins: a phone that scanned a seat QR asks to sit down (with a
+//   name) over the relay; the page seats it in the game.
+//
+// The AR phone is a WINDOW onto the table, not a controller: after joining,
+// every game interaction happens on the tabletop itself (the phone only
+// reveals the owner's private cards). AR taps are therefore ignored here.
 //
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
 import { ArHost, type ArAction, type ArAsset, type ArNode } from './arHost';
 import type { Card, GameState } from '../jaipur-rules';
 
-export type ArTapHandler = (seat: string, nodeId: string) => void;
+export type ArJoinHandler = (seat: string, name: string) => void;
 
 const KIND_COLORS: Record<string, string> = {
   diamond: '#9fd7e8',
@@ -53,48 +58,6 @@ function drawCardArt(kind: string): string {
   ctx.strokeStyle = '#183a37';
   ctx.lineWidth = 6;
   ctx.strokeRect(12, 12, 232, 334);
-  return c.toDataURL('image/png');
-}
-
-const GOODS = ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather'] as const;
-
-/** A coin-like sell target per good (tap it in AR to sell selected cards of
- *  that good). Bears the good's color and its next token value. */
-function drawTokenArt(good: string, value: number): string {
-  const c = document.createElement('canvas');
-  c.width = c.height = 160;
-  const ctx = c.getContext('2d')!;
-  ctx.fillStyle = KIND_COLORS[good] ?? '#c9a24a';
-  ctx.beginPath();
-  ctx.arc(80, 80, 74, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.lineWidth = 8;
-  ctx.strokeStyle = '#183a37';
-  ctx.stroke();
-  ctx.fillStyle = '#183a37';
-  ctx.font = 'bold 56px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(String(value), 80, 84);
-  return c.toDataURL('image/png');
-}
-
-function drawConfirmArt(): string {
-  const c = document.createElement('canvas');
-  c.width = c.height = 160;
-  const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#1d7a4a';
-  ctx.beginPath();
-  ctx.arc(80, 80, 74, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#eafff0';
-  ctx.lineWidth = 12;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(46, 84);
-  ctx.lineTo(70, 108);
-  ctx.lineTo(116, 54);
-  ctx.stroke();
   return c.toDataURL('image/png');
 }
 
@@ -175,15 +138,21 @@ export class ArTabletop {
   private trackedPx = 0;
   private assetsKey = '';
   private lastSeatSceneJson = new Map<string, string>();
-  onTap: ArTapHandler | null = null;
+  onJoin: ArJoinHandler | null = null;
   viewers = 0;
   onViewersChanged: ((n: number) => void) | null = null;
+  private seatNames = new Map<string, string>();
 
   constructor(session?: string) {
     this.host = new ArHost({
       session,
       onAction: (a: ArAction) => {
-        if (a.action === 'tap' && a.seat && a.nodeId) this.onTap?.(a.seat, a.nodeId);
+        // The only action the table honours: a seated phone asking to join
+        // with a trader name. Taps stay viewer-local (peek at hidden sides).
+        if (a.action === 'join' && a.seat) {
+          const name = (a.data as { name?: unknown } | undefined)?.name;
+          if (typeof name === 'string' && name.trim()) this.onJoin?.(a.seat, name.trim().slice(0, 32));
+        }
       },
       onViewers: (n) => {
         this.viewers = n;
@@ -253,21 +222,14 @@ export class ArTabletop {
     const wM = (sampleRect?.width ?? 60) * this.mPerPx;
     const hM = (sampleRect?.height ?? 84) * this.mPerPx;
 
-    // Artwork: card kinds + back, one sell coin per good, and a confirm mark
-    // (content-addressed; the coin value only changes the token asset id).
+    // Artwork: card kinds + back (content-addressed; only re-sent when the
+    // physical card size changes).
     const kinds = ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather', 'camel'];
-    const tokM = wM * 0.55;
-    const tokenTop: Record<string, number> = {};
-    for (const g of GOODS) tokenTop[g] = round?.goodsTokens[g]?.at(-1)?.value ?? 0;
-    const key = `${wM.toFixed(4)}x${hM.toFixed(4)}|${GOODS.map((g) => tokenTop[g]).join(',')}`;
+    const key = `${wM.toFixed(4)}x${hM.toFixed(4)}`;
     if (key !== this.assetsKey) {
       this.assetsKey = key;
-      const assets: Record<string, ArAsset> = {
-        back: { img: drawBackArt(), wM, hM },
-        confirm: { img: drawConfirmArt(), wM: tokM, hM: tokM },
-      };
+      const assets: Record<string, ArAsset> = { back: { img: drawBackArt(), wM, hM } };
       for (const k of kinds) assets[`k-${k}`] = { img: drawCardArt(k), wM, hM };
-      for (const g of GOODS) assets[`tok-${g}`] = { img: drawTokenArt(g, tokenTop[g]), wM: tokM, hM: tokM };
       this.host.publishAssets(assets);
     }
 
@@ -294,56 +256,52 @@ export class ArTabletop {
           count: round.deck.length, face: 'back',
         });
       }
-      // Sell coins: a shared row below the market. Tapping a coin (as the
-      // active player) sells the selected cards of that good; the count badge
-      // is the remaining token supply.
-      const half = (this.trackedPx * this.mPerPx) / 2;
-      const pitchT = tokM * 1.35;
-      GOODS.forEach((g, i) => {
-        nodes.push({
-          id: `tok:${g}`, kind: 'stack',
-          xM: (i - (GOODS.length - 1) / 2) * pitchT, zM: half * 0.42, rotY: 0,
-          count: round.goodsTokens[g]?.length ?? 0, face: `tok-${g}`,
-        });
-      });
-      // Confirm coin: shown when the active player has staged an exchange.
-      const activeLoads = lobby.tabletopIntents[round.activeUid]?.exchangeLoads ?? {};
-      if (Object.keys(activeLoads).length > 0) {
-        nodes.push({ id: 'confirm', kind: 'tile', xM: half * 0.5, zM: half * 0.42, rotY: 0, face: 'confirm' });
-      }
     }
     this.host.publishScene({ nodes });
 
-    // Hands: private per seat, along that player's table edge, glowing when
-    // selected as ready-to-trade (jaipur's tabletopIntents drive the glow —
-    // the host's game state is the single source of truth).
-    if (round) {
-      const half = (this.trackedPx * this.mPerPx) / 2;
-      for (const player of lobby.players) {
-        if (player.seat !== 1 && player.seat !== 2) continue;
-        const hand: Card[] = round.hands[player.uid] ?? [];
-        const selected = new Set(lobby.tabletopIntents[player.uid]?.selectedReturnIds ?? []);
-        const edgeZ = player.seat === 1 ? half - hM * 0.75 : -(half - hM * 0.75);
-        const rotY = player.seat === 1 ? 0 : Math.PI;
-        const pitch = wM * 1.15;
-        const handNodes: ArNode[] = hand.map((card, i) => ({
+    // Hands: private per seat, drawn on top of the owner's face-down cards
+    // on the table (measured from the live DOM, so the AR face sits exactly
+    // on its physical counterpart). Cards the owner has selected on the
+    // tabletop glow — jaipur's tabletopIntents drive the glow, so the phone
+    // and the table can never disagree. A seat's scene also names who holds
+    // it, so the phone can confirm the join.
+    for (const seatNo of [1, 2] as const) {
+      const seat = String(seatNo);
+      const player = lobby.players.find((p) => p.seat === seatNo);
+      const hand: Card[] = (player && round?.hands[player.uid]) ?? [];
+      const selected = new Set((player && lobby.tabletopIntents[player.uid]?.selectedReturnIds) ?? []);
+      const rotY = seatNo === 1 ? Math.PI : 0;
+      const handNodes: ArNode[] = [];
+      for (const card of hand) {
+        const rect = document
+          .querySelector(`[data-table-hand-card="${CSS.escape(card.id)}"]`)
+          ?.getBoundingClientRect();
+        if (!rect) continue;
+        const { xM, zM } = this.toMeters(rect);
+        handNodes.push({
           id: `hand:${card.id}`,
           kind: 'card',
-          xM: (i - (hand.length - 1) / 2) * pitch * (player.seat === 1 ? 1 : -1),
-          zM: edgeZ,
-          rotY,
+          xM, zM, rotY,
           faceUp: true,
           peek: false,
           glow: selected.has(card.id) ? '#66ffcc' : false,
           face: `k-${card.kind}`,
           back: 'back',
-        }));
-        const json = JSON.stringify(handNodes);
-        if (this.lastSeatSceneJson.get(String(player.seat)) !== json) {
-          this.lastSeatSceneJson.set(String(player.seat), json);
-          this.host.publishSceneFor(String(player.seat), { nodes: handNodes });
-        }
+        });
+      }
+      const name = player?.displayName ?? this.seatNames.get(seat);
+      const scene = { nodes: handNodes, ...(name ? { player: { name } } : {}) };
+      const json = JSON.stringify(scene);
+      if (this.lastSeatSceneJson.get(seat) !== json) {
+        this.lastSeatSceneJson.set(seat, json);
+        this.host.publishSceneFor(seat, scene);
       }
     }
+  }
+
+  /** Remember a name the table accepted for a seat (so the seat scene can
+   *  confirm it even before the game state catches up). */
+  rememberSeatName(seat: string, name: string): void {
+    this.seatNames.set(seat, name);
   }
 }

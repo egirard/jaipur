@@ -47,6 +47,10 @@
   let ar = $state<ArTabletop | undefined>(undefined);
   let arQrs = $state<Array<{ seat: Seat; url: string; image: string }>>([]);
   let arViewers = $state(0);
+  // The AR phone is the way to sit down at this table. The upstream phone
+  // controller (/hand, Firebase-driven) is a distinct offering; ?phone=1
+  // brings its QR back for anyone who wants it, never both per player.
+  let legacyPhone = $state(false);
   let solitaire = false;
   let scheduledBotKey = '';
   let startingRound = false;
@@ -120,7 +124,8 @@
       }
 
       const joinBase = `${location.origin}${base}/hand/`;
-      seatQrs = await Promise.all(([1, 2] as const).map(async (seat) => {
+      legacyPhone = pageParams.get('phone') === '1';
+      if (legacyPhone) seatQrs = await Promise.all(([1, 2] as const).map(async (seat) => {
         const url = `${joinBase}?gameId=${gameId}&seat=${seat}`;
         return {
           seat,
@@ -200,7 +205,7 @@
         undefined
       );
       localStorage.setItem('jaipur:ar:session', ar.host.session);
-      ar.onTap = (seat, nodeId) => void handleArTap(seat, nodeId);
+      ar.onJoin = (seat, name) => void joinFromAr(seat, name);
       ar.onViewersChanged = (n) => (arViewers = n);
       ar.attach();
       arQrs = await Promise.all(([1, 2] as const).map(async (seat) => ({
@@ -348,61 +353,44 @@
     }
   }
 
-  // AR taps are intents onto TABLE assets; the table (authoritative host)
-  // maps each to the same game action its own on-screen control uses, so the
-  // AR phone drives the flow while the table stays the source of truth. The
-  // relay stamps the seat, so a tap out of turn is simply a no-op.
-  async function handleArTap(seatToken: string, nodeId: string) {
+  // A phone that scanned a seat's AR QR asks to sit down with a trader
+  // name. The relay stamps the seat, so a phone can only ever claim the seat
+  // it scanned. The table seats it on the phone's behalf (the phone never
+  // touches the game store), marks it ready, and from then on the phone is
+  // purely a window: every game interaction happens on this tabletop.
+  const arSeatUid = (seat: Seat) => `ar-${gameId}-${seat}`;
+  async function joinFromAr(seatToken: string, name: string) {
     const seat = Number(seatToken);
-    if (seat !== 1 && seat !== 2) return;
-    const player = playerForSeat(seat as Seat);
-    const round = lobby.round;
-    if (!player || !round || round.status !== 'active' || busy) return;
-    const uid = player.uid;
-
-    // Hand card: toggle ready-to-trade (allowed off-turn — a private
-    // selection the owner stages before their turn).
-    if (nodeId.startsWith('hand:')) {
-      const cardId = nodeId.slice('hand:'.length);
-      if (!(round.hands[uid] ?? []).some((card) => card.id === cardId)) return;
-      const selected = new Set(selectedReturnIds(uid));
-      if (selected.has(cardId)) selected.delete(cardId);
-      else selected.add(cardId);
-      await publishIntent(uid, [...selected], exchangeLoads(uid));
+    if ((seat !== 1 && seat !== 2) || !repository || !gameId) return;
+    const uid = arSeatUid(seat as Seat);
+    const holder = playerForSeat(seat as Seat);
+    if (holder) {
+      // Already seated (a reconnecting phone re-sends its join): just make
+      // sure the phone hears its name back.
+      if (holder.uid === uid) ar?.rememberSeatName(seatToken, holder.displayName);
       return;
     }
+    if (lobby.players.some((player) => player.uid === uid)) return;
+    ar?.rememberSeatName(seatToken, name);
+    await repository.append('player/joined', { displayName: name, seat, playerUid: uid });
+    await repository.append('player/ready', { playerUid: uid, ready: true });
+  }
 
-    // Everything below is a turn action — only the active player acts.
-    if (round.activeUid !== uid) return;
+  // On-table private-card selection: the active trader taps their own
+  // face-down cards (or herd camels) to stage them for a trade — the AR
+  // phone shows which is which and glows the selected ones.
+  function canSelectReturns(uid: string): boolean {
+    return lobby.round?.status === 'active' && lobby.round.activeUid === uid && !pendingDraw && !busy;
+  }
 
-    if (nodeId.startsWith('mkt:')) {
-      const cardId = nodeId.slice('mkt:'.length);
-      const card = round.market.find((c) => c.id === cardId);
-      if (!card) return;
-      if (pendingDraw) {
-        // A pending draw is confirmed by tapping its card again; tapping a
-        // different market card abandons it.
-        if (pendingDraw.cardIds.includes(cardId)) await confirmPendingDraw();
-        else await abandonPendingDraw();
-      } else if (card.kind !== 'camel' && selectedReturnIds(uid).length > 0) {
-        await chooseExchangeTarget(uid, cardId); // stage an exchange
-      } else {
-        await chooseMarket(card); // begin a take (creates the pending draw)
-      }
-      return;
-    }
-
-    if (nodeId.startsWith('tok:')) {
-      const good = nodeId.slice('tok:'.length) as Good;
-      if (canSell(good)) await sell(good, seat);
-      return;
-    }
-
-    if (nodeId === 'confirm') {
-      if (Object.keys(exchangeLoads(uid)).length > 0) await confirmExchange(uid);
-      else if (pendingDraw) await confirmPendingDraw();
-      return;
-    }
+  async function toggleReturn(uid: string, cardId: string) {
+    if (!canSelectReturns(uid)) return;
+    const loads = exchangeLoads(uid);
+    if (Object.values(loads).includes(cardId)) return; // already placed beside a market card
+    const selected = new Set(selectedReturnIds(uid));
+    if (selected.has(cardId)) selected.delete(cardId);
+    else selected.add(cardId);
+    await publishIntent(uid, [...selected], loads);
   }
 
   async function appendFor(
@@ -778,22 +766,22 @@
     <div>
       <span class="seat-kicker">Player {seat}</span>
       <h2>Scan to sit here</h2>
-      <p>Choose a name on your phone. The market opens when both seats join.</p>
+      <p>Scan with the AR viewer and enter your name. The market opens when both seats join.</p>
     </div>
-    {#if qr}
-      <a href={qr.url} class="qr-frame" aria-label={`Join tabletop ${gameId} as Player ${seat}`}>
-        <img src={qr.image} alt={`QR code to join as Player ${seat}`} />
-      </a>
-    {:else}
-      <span class="qr-placeholder" aria-hidden="true"></span>
-    {/if}
     {#if arQr}
       <div class="ar-join">
-        <a href={arQr.url} class="qr-frame ar-frame" aria-label={`Open Player ${seat}'s AR viewer`}>
-          <img src={arQr.image} alt={`QR code for Player ${seat}'s AR viewer`} />
+        <a href={arQr.url} class="qr-frame ar-frame" aria-label={`Sit here with the AR viewer as Player ${seat}`}>
+          <img src={arQr.image} alt={`QR code to sit here with the AR viewer as Player ${seat}`} />
         </a>
         <span data-ar-session={ar?.host.session}>AR viewer{arViewers > 0 ? ` · ${arViewers} phone${arViewers === 1 ? '' : 's'}` : ''}</span>
       </div>
+    {:else}
+      <span class="qr-placeholder" aria-hidden="true"></span>
+    {/if}
+    {#if legacyPhone && qr}
+      <a href={qr.url} class="qr-frame" aria-label={`Join tabletop ${gameId} as Player ${seat} with the phone controller`}>
+        <img src={qr.image} alt={`QR code to join as Player ${seat} with the phone controller`} />
+      </a>
     {/if}
   </section>
 {/snippet}
@@ -819,18 +807,27 @@
       <div
         class="tabletop-hand"
         data-table-hand={player.uid}
-        role="img"
+        role="group"
         aria-label={`${player.displayName} has ${lobby.round?.hands[player.uid]?.length ?? 0} face-down cards`}
       >
         {#each lobby.round?.hands[player.uid] ?? [] as card}
-          <img
+          {@const selected = selectedReturnIds(player.uid).includes(card.id)}
+          {@const loaded = Object.values(exchangeLoads(player.uid)).includes(card.id)}
+          <button
+            type="button"
+            class="table-hand-card"
             class:arriving={arrivingCardIds.includes(card.id)}
-            src={componentImage('card-back')}
-            alt=""
+            class:selected
+            class:loaded
+            disabled={!canSelectReturns(player.uid) || loaded}
+            aria-pressed={selected}
+            aria-label={`${selected ? 'Deselect' : 'Select'} face-down card for a trade`}
             data-table-hand-card={card.id}
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
-            draggable="false"
-          />
+            onclick={() => toggleReturn(player.uid, card.id)}
+          >
+            <img src={componentImage('card-back')} alt="" draggable="false" />
+          </button>
         {/each}
       </div>
       <div
@@ -839,16 +836,26 @@
         role="img"
         aria-label={`${player.displayName}'s camel herd`}
       >
-        <span class="herd-pile" aria-hidden="true">
+        <span class="herd-pile">
           {#each (lobby.round?.herds[player.uid] ?? []).slice(-5) as camel, index}
-            <img
+            {@const selected = selectedReturnIds(player.uid).includes(camel.id)}
+            {@const loaded = Object.values(exchangeLoads(player.uid)).includes(camel.id)}
+            <button
+              type="button"
+              class="table-herd-card"
               class:arriving={arrivingCardIds.includes(camel.id)}
-              src={componentImage('camel')}
-              alt=""
+              class:selected
+              class:loaded
+              disabled={!canSelectReturns(player.uid) || loaded}
+              aria-pressed={selected}
+              aria-label={`${selected ? 'Deselect' : 'Select'} camel for a trade`}
               data-table-herd-card={camel.id}
               data-card-arriving={arrivingCardIds.includes(camel.id) || undefined}
               style={`--pile-index:${index}`}
-            />
+              onclick={() => toggleReturn(player.uid, camel.id)}
+            >
+              <img src={componentImage('camel')} alt="" draggable="false" />
+            </button>
           {/each}
         </span>
         <span>Herd</span>
@@ -946,9 +953,9 @@
             onclick={() => confirmExchange(activeUid)}
           >Trade {Object.keys(promptLoads).length} for {Object.values(promptLoads).length}</button>
         {:else if promptReturns.length > 0}
-          <span>{promptReturns.length} selected on the private phone · tap a return area or token stack.</span>
+          <span>{promptReturns.length} selected · tap a return area or token stack.</span>
         {:else}
-          <span>Choose private cards on the phone, then use the market or token supplies.</span>
+          <span>Tap your face-down cards (see them in AR) to select, then use the market or token supplies.</span>
         {/if}
       </div>
       <div class="market-stage">
@@ -1011,7 +1018,7 @@
                 disabled={busy || Boolean(pendingDraw) || (!loadedReturnId && selectedReturnIds(activeUid).length === 0)}
                 aria-pressed={Boolean(loadedReturnId)}
                 aria-label={loadedReturnId
-                  ? `Return the face-down card beside ${label(card.kind)} to the phone selection`
+                  ? `Return the face-down card beside ${label(card.kind)} to your selection`
                   : `Place a selected private card face-down beside ${label(card.kind)}`}
                 data-table-exchange-target={card.id}
                 data-return-seat={marketFacingSeat}
@@ -1211,7 +1218,7 @@
   .active .turn-state { background: #a6442d; color: white; }
   .seat-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) clamp(5rem, 10vw, 16rem) clamp(8rem, 14vw, 26rem); align-items: center; gap: 0.5rem; }
   .tabletop-hand { display: flex; min-width: 0; height: 100%; align-items: center; }
-  .tabletop-hand > img, .market-card {
+  .tabletop-hand > .table-hand-card, .market-card {
     position: relative;
     width: clamp(3.7rem, 9.8vh, 12rem);
     height: clamp(3.7rem, 9.8vh, 12rem);
@@ -1224,7 +1231,12 @@
     color: white;
     object-fit: cover;
   }
-  .tabletop-hand > img + img { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
+  .tabletop-hand > .table-hand-card + .table-hand-card { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
+  .table-hand-card, .table-herd-card { cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; }
+  .table-hand-card > img, .table-herd-card > img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .table-hand-card:disabled, .table-herd-card:disabled { cursor: default; }
+  .table-hand-card.selected, .table-herd-card.selected { transform: translateY(-14%); box-shadow: 0 0 0 3px #66ffcc, 0 0.5rem 1rem rgb(10 32 30 / 35%); z-index: 1; }
+  .table-hand-card.loaded, .table-herd-card.loaded { opacity: 0.45; }
   .market-card :global(.piece-image) { width: 100%; height: 100%; object-fit: cover; }
   .tabletop-herd {
     display: grid;
@@ -1236,7 +1248,8 @@
     border-radius: 0.55rem;
   }
   .herd-pile { position: relative; width: clamp(6.8rem, 13vw, 22rem); height: clamp(3.7rem, 9.8vh, 12rem); }
-  .herd-pile img { position: absolute; left: calc(var(--pile-index) * clamp(0.55rem, 1.1vmin, 1.4rem)); width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); border: 2px solid #a6442d; border-radius: 0.55rem; object-fit: cover; transform: rotate(calc((var(--pile-index) - 2) * 2deg)); }
+  .herd-pile .table-herd-card { position: absolute; padding: 0; background: none; overflow: hidden; left: calc(var(--pile-index) * clamp(0.55rem, 1.1vmin, 1.4rem)); width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); border: 2px solid #a6442d; border-radius: 0.55rem; transform: rotate(calc((var(--pile-index) - 2) * 2deg)); }
+  .herd-pile .table-herd-card.selected { transform: rotate(calc((var(--pile-index) - 2) * 2deg)) translateY(-14%); }
   .seat-tokens { display: grid; min-width: 0; min-height: 2.5rem; place-items: center; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .shared-market {
     --table-market-card-size: clamp(4rem, min(18vh, 10.5vw), 20rem);
