@@ -73,6 +73,7 @@ function makeSessionCode(): string {
 
 export class ArHost {
   readonly session: string;
+  private readonly loadNonce = Date.now().toString(36);
   private relayUrl: string;
   private viewerBase: string;
   private opts: ArHostOptions;
@@ -105,6 +106,9 @@ export class ArHost {
     u.searchParams.set('s', this.session);
     u.searchParams.set('relay', this.relayUrl);
     if (seat) u.searchParams.set('seat', seat);
+    // Per-table-load nonce: the hosted viewer is cached by URL for 10 min,
+    // so a re-scanned QR must not hand the phone a stale page.
+    u.searchParams.set('t', this.loadNonce);
     return u.toString();
   }
 
