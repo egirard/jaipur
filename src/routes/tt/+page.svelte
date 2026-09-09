@@ -239,18 +239,11 @@
 
       // Solitaire/test mode (?bot=1): seat 2 is a computer opponent, so a
       // single player and a single AR phone can exercise the whole loop.
+      // Seat 1: the human plays seat 2, which is upright from the test
+      // table's viewing side. The join panels also offer "Play as a bot"
+      // per seat, so a table can be tested with one or two humans at will.
       solitaire = pageParams.get('bot') === '1';
-      if (solitaire && freshGame) {
-        await attached.append('bot/added', {
-          botUid: `bot-${hostUid}`,
-          displayName: 'Boring Bot',
-          difficulty: 'apprentice',
-          engineVersion: 1,
-          // Seat 1: the human plays seat 2, which is upright from the test
-          // table's viewing side.
-          seat: 1
-        });
-      }
+      if (solitaire && freshGame) await addBot(1);
 
       // AR attachment: registration underlay + relay session + seat AR QRs.
       ar = new ArTabletop(
@@ -420,6 +413,24 @@
       scheduledBotKey = '';
     }
   }
+
+  // Seat the shipped apprentice bot on an empty seat (one bot per table).
+  async function addBot(seat: Seat) {
+    if (!repository || lobby.bot || playerForSeat(seat) || busy) return;
+    await repository.append('bot/added', {
+      botUid: `bot-${hostUid}`,
+      displayName: 'Boring Bot',
+      difficulty: 'apprentice',
+      engineVersion: 1,
+      seat
+    });
+  }
+
+  // AR phones seated at this table (their uid marks them); when fewer
+  // phones are connected than AR seats, someone has dropped and the seat
+  // QR is shown again inline so they can rescan.
+  const arSeatedCount = () => lobby.players.filter((p) => p.uid.startsWith('ar-')).length;
+  const seatDropped = (player: Player) => player.uid.startsWith('ar-') && arViewers < arSeatedCount();
 
   // A phone that scanned a seat's AR QR asks to sit down with a trader
   // name. The relay stamps the seat, so a phone can only ever claim the seat
@@ -870,6 +881,11 @@
         <img src={qr.image} alt={`QR code to join as Player ${seat} with the phone controller`} />
       </a>
     {/if}
+    {#if !lobby.bot}
+      <button type="button" class="bot-seat-button" data-bot-seat={seat} disabled={!repository || busy} onclick={() => addBot(seat)}>
+        Play as a bot
+      </button>
+    {/if}
   </section>
 {/snippet}
 
@@ -889,6 +905,15 @@
       </div>
       <strong class="turn-state">{isActive ? 'Your turn' : 'Waiting'}</strong>
       <span>{lobby.seals[player.uid] ?? 0} / 2 seals</span>
+      {#if seatDropped(player)}
+        {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
+        {#if arQr}
+          <span class="rejoin" data-rejoin-seat={seat}>
+            <img src={arQr.image} alt={`QR code to rejoin as Player ${seat}`} />
+            <small>Phone dropped — rescan to rejoin</small>
+          </span>
+        {/if}
+      {/if}
     </header>
     <div class="seat-body">
       <div
@@ -1208,6 +1233,16 @@
         <button type="button" onclick={toggleFullscreen}>{physical.fullscreen ? 'Exit full screen' : 'Full screen'}</button>
         <button type="button" onclick={newTable}>New table</button>
       </div>
+      <div class="rejoin-codes" aria-label="AR join codes">
+        {#each arQrs as arQr}
+          {@const holder = playerForSeat(arQr.seat)}
+          <figure>
+            <img src={arQr.image} alt={`AR viewer QR for Player ${arQr.seat}`} />
+            <figcaption>Player {arQr.seat}{holder ? ` · ${holder.displayName}` : ' · open'}<br /><small>{holder ? 'rescan to rejoin' : 'scan to sit here'}</small></figcaption>
+          </figure>
+        {/each}
+        <p><small>{arViewers} phone{arViewers === 1 ? '' : 's'} connected · session {ar?.host.session}</small></p>
+      </div>
     </section>
   {/if}
 
@@ -1323,7 +1358,9 @@
     display: grid;
     width: 100%;
     height: 100%;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    grid-auto-columns: auto;
     align-items: center;
     gap: 1rem;
     padding: clamp(0.7rem, 1.8vmin, 1.4rem) clamp(5rem, 11vw, 10rem);
@@ -1352,7 +1389,9 @@
   .player-seat.active { border-color: #d38b21; background: #fff4d6; }
   .player-seat > header {
     display: grid;
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr;
+    grid-auto-flow: column;
+    grid-auto-columns: auto;
     align-items: center;
     gap: clamp(0.55rem, 1.5vw, 1.4rem);
   }
@@ -1427,6 +1466,14 @@
   .scale-facts dt { font-weight: 700; color: #a6442d; }
   .scale-facts dd { margin: 0; }
   .scale-actions { display: flex; gap: 0.5rem; margin-top: 0.8rem; }
+  .rejoin-codes { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: flex-start; margin-top: 0.9rem; padding-top: 0.7rem; border-top: 1px solid #d8ccb0; }
+  .rejoin-codes figure { margin: 0; text-align: center; }
+  .rejoin-codes img { width: min(9rem, 24vw); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.5rem; }
+  .rejoin-codes p { flex-basis: 100%; margin: 0; }
+  .bot-seat-button { min-height: 44px; padding: 0.4rem 0.9rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
+  .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
+  .rejoin img { width: clamp(3rem, 7vh, 6rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
+  .rejoin small { max-width: 8rem; color: #a6442d; font-weight: 700; line-height: 1.15; }
   .orientation-toggle {
     min-width: 44px;
     min-height: 36px;
