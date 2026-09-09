@@ -97,6 +97,8 @@
     image: string;
     revealImage?: string;
     concealsDestination: boolean;
+    /** Sale flight: flips in the hand first, then arcs and shrinks to the token stack. */
+    sale?: boolean;
     startLeft: number;
     startTop: number;
     startSize: number;
@@ -709,7 +711,8 @@
     delay = 0,
     cardId?: string,
     revealImage?: string,
-    concealsDestination = false
+    concealsDestination = false,
+    sale = false
   ) {
     if (!source || !destination) {
       if (cardId) arrivingCardIds = arrivingCardIds.filter((id) => id !== cardId);
@@ -724,6 +727,7 @@
       image,
       revealImage,
       concealsDestination,
+      sale,
       startLeft: source.left + (source.width - startSize) / 2,
       startTop: source.top + (source.height - startSize) / 2,
       startSize,
@@ -732,7 +736,7 @@
       endSize,
       delay
     }];
-    setTimeout(() => finishCardFlight(key), 1400 + delay);
+    setTimeout(() => finishCardFlight(key), (sale ? 1900 : 1400) + delay);
   }
 
   function finishCardFlight(key: number) {
@@ -774,6 +778,7 @@
       revealImage?: string;
       concealDestination: boolean;
       delay: number;
+      sale?: boolean;
     }> = [];
     const tokenMovements: Array<{
       source: DOMRect | undefined;
@@ -829,6 +834,8 @@
         // side), whichever stack was tapped.
         const tokenView = tokenViewSelector(uid);
         delete saleTokenViewSeats[uid];
+        // The sold cards flip face-up in the hand, then arc (shrinking) to
+        // that good's stack on the seller's side; the tokens follow after.
         activity.cardIds?.forEach((cardId, index) => movements.push({
           cardId,
           source: box(`[data-table-hand-card="${CSS.escape(cardId)}"]`),
@@ -836,8 +843,10 @@
             (activity.cardKinds?.[index] as Good | undefined) ?? 'leather'
           )}"]`,
           image: componentImage('card-back'),
+          revealImage: componentImage((activity.cardKinds?.[index] as Good | undefined) ?? 'leather'),
           concealDestination: false,
-          delay: index * 55
+          delay: index * 90,
+          sale: true
         }));
         const oldTokens = new Set([
           ...(previous.round?.ownedGoodsTokens[uid] ?? []),
@@ -853,7 +862,8 @@
             : box(`${tokenView} [data-token-kind="${CSS.escape(token.kind)}"] .rail-chip`),
           destinationSelector: `[data-table-tokens="${CSS.escape(uid)}"]`,
           token,
-          delay: 180 + index * 80
+          // after the sold cards have landed on the stack
+          delay: 1250 + (activity.cardIds?.length ?? 1) * 90 + index * 80
         }));
       }
     }
@@ -880,7 +890,7 @@
       ...movements.filter(({ concealDestination }) => concealDestination).map(({ cardId }) => cardId)
     ])];
     await tick();
-    movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay }) =>
+    movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay, sale }) =>
       cardFlight(
         source,
         box(destinationSelector),
@@ -888,7 +898,8 @@
         delay,
         cardId,
         revealImage,
-        concealDestination
+        concealDestination,
+        sale
       )
     );
     tokenMovements.forEach(({ source, destinationSelector, token, delay }) => {
@@ -1404,8 +1415,9 @@
     <span
       class="table-card-flight"
       class:flips={Boolean(flight.revealImage)}
+      class:sale={Boolean(flight.sale)}
       aria-hidden="true"
-      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms`}
+      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
       onanimationend={(event) => {
         if (event.currentTarget === event.target) finishCardFlight(flight.key);
       }}
@@ -1785,6 +1797,23 @@
     68% { width: var(--end-size); height: var(--end-size); opacity: 1; transform: translate(calc(var(--end-left) - var(--start-left)), calc(var(--end-top) - var(--start-top))) rotate(-2deg) scale(1.05); }
     84% { width: var(--end-size); height: var(--end-size); opacity: 1; transform: translate(calc(var(--end-left) - var(--start-left)), calc(var(--end-top) - var(--start-top))) rotate(1deg) scale(0.97); }
     100% { width: var(--end-size); height: var(--end-size); opacity: 1; transform: translate(calc(var(--end-left) - var(--start-left)), calc(var(--end-top) - var(--start-top))) rotate(0) scale(1); }
+  }
+  /* Sale flight: the card flips where it lies (first 30%), then arcs to
+     the good's stack, shrinking as it goes. */
+  .table-card-flight.sale { animation: sale-card-across 1500ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, sale-card-lift 1500ms ease-in-out var(--flight-delay) both; }
+  .table-card-flight.sale .table-card-flight-inner { animation: sale-card-flip 1500ms ease-in-out var(--flight-delay) both; }
+  @keyframes sale-card-across {
+    0%, 30% { translate: 0 0; width: var(--start-size); height: var(--start-size); opacity: 1; }
+    100% { translate: calc(var(--end-left) - var(--start-left)) calc(var(--end-top) - var(--start-top)); width: var(--end-size); height: var(--end-size); opacity: 0.85; }
+  }
+  @keyframes sale-card-lift {
+    0%, 30% { transform: translateY(0) scale(1); }
+    65% { transform: translateY(calc(var(--arc-lift) * -1)) scale(1.08); }
+    100% { transform: translateY(0) scale(0.7); }
+  }
+  @keyframes sale-card-flip {
+    0% { transform: rotateY(0deg); }
+    26%, 100% { transform: rotateY(180deg); }
   }
   @keyframes table-card-flip {
     0%, 52% { transform: rotateY(0deg); }
