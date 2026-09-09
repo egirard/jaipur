@@ -18,8 +18,12 @@
     if (kind === 'camel') return 'camel';
     return kind as Good;
   };
-  const rimLabel = (kind: Token['kind'], value: number) =>
-    hidden ? `${kind.replace('bonus-', '')}+` : String(value);
+  // Bonus stacks are labelled by the sale size that earns them: 3, 4, 5+.
+  const rimLabel = (kind: Token['kind'], value: number) => {
+    if (!hidden) return String(value);
+    const size = kind.replace('bonus-', '');
+    return size === '5' ? '5+' : size;
+  };
 </script>
 
 <span
@@ -99,6 +103,22 @@
   }
   .token-chip.hidden .token-chip-image {
     opacity: 0.94;
+  }
+  /* Face-down bonus tokens carry their size label centered on the face. */
+  .token-chip.hidden .token-chip-rim {
+    top: 50%;
+    bottom: auto;
+    left: 50%;
+    width: 1.6em;
+    height: 1.6em;
+    font-size: clamp(0.8rem, 44cqi, 3rem);
+    transform: translate(-50%, -50%);
+  }
+  .token-chip.hidden.side-rim .token-chip-rim {
+    top: 50%;
+    right: auto;
+    left: 50%;
+    transform: translate(-50%, -50%);
   }
   .token-chip.side-rim .token-chip-rim {
     top: 50%;

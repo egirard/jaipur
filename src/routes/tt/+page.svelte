@@ -824,7 +824,9 @@
         });
       }
       if (activity.type === 'cards/sold') {
-        const tokenView = tokenViewSelector(uid, saleTokenViewSeats[uid]);
+        // Tokens come from the token section facing the seller (their own
+        // side), whichever stack was tapped.
+        const tokenView = tokenViewSelector(uid);
         delete saleTokenViewSeats[uid];
         activity.cardIds?.forEach((cardId, index) => movements.push({
           cardId,
@@ -1456,7 +1458,7 @@
   button, summary { font: inherit; }
   button:focus-visible, summary:focus-visible { outline: 3px solid #d38b21; outline-offset: 2px; }
   .tabletop {
-    --rail-width: clamp(8.5rem, 17vw, 30rem);
+    --rail-width: clamp(8.5rem, 14vw, 24rem);
     --edge-size: minmax(0, 25vh);
     position: fixed;
     inset: 0;
@@ -1564,7 +1566,10 @@
   .seat-tokens { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .seat-tokens .earned { width: clamp(1.4rem, 3.2vmin, 3.6rem); height: clamp(1.4rem, 3.2vmin, 3.6rem); flex: 0 0 auto; }
   .seat-tokens .earned.bonus { filter: saturate(0.7); }
-  .hand-slot { width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); flex: 0 0 auto; border: 2px dashed #b7aa8d; border-radius: 0.55rem; opacity: 0.45; }
+  /* Empty hand slots sit to the left of the fanned cards; only the edges
+     a real card would show are drawn (top, bottom, left — the right edge
+     hides under the next card). */
+  .hand-slot { width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); flex: 0 0 auto; border: 2px dashed #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0.55rem; opacity: 0.45; }
   .tabletop-hand > .hand-slot + .hand-slot, .tabletop-hand > .hand-slot + .table-hand-card { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
   .shared-market {
     --table-market-card-size: clamp(4rem, min(18vh, 10.5vw), 20rem);

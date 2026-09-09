@@ -22,12 +22,13 @@
     onSell: (kind: Good) => void | Promise<void>;
   } = $props();
 
-  // Chips wrap into rows of up to four so each chip can be large; the
-  // top of the stack (next to be earned) comes first.
+  // Coins overlap slightly (the most valuable, leftmost coin on top) so a
+  // stack of up to six fits on one line; seven or more split into two
+  // lines with the larger line on top. The top of the stack comes first.
   const rows = (tokens: RoundState['goodsTokens'][Good]) => {
-    const out: typeof tokens[] = [];
-    for (let i = 0; i < tokens.length; i += 4) out.push(tokens.slice(i, i + 4));
-    return out;
+    if (tokens.length <= 6) return [tokens];
+    const top = Math.ceil(tokens.length / 2);
+    return [tokens.slice(0, top), tokens.slice(top)];
   };
 </script>
 
@@ -71,8 +72,8 @@
             {#if round.goodsTokens[kind].length > 0}
               {#each rows(round.goodsTokens[kind]) as row}
                 <span class="chip-row">
-                  {#each row as token (token.id)}
-                    <span class="chip" data-supply-token-id={token.id}>
+                  {#each row as token, index (token.id)}
+                    <span class="chip" style={`--z:${row.length - index}`} data-supply-token-id={token.id}>
                       <TokenChip {token} />
                     </span>
                   {/each}
@@ -167,8 +168,8 @@
   .rail-head { display: flex; gap: 0.35rem; align-items: baseline; font-weight: 800; text-shadow: 0 0 4px #fffaf0, 0 0 4px #fffaf0; }
   .rail-count { padding: 0 0.4rem; border-radius: 99rem; background: #183a37; color: #fffaf0; text-shadow: none; }
   .rail-chip { display: grid; width: 100%; min-width: 0; justify-items: center; gap: 0.12rem; }
-  .chip-row { display: flex; justify-content: center; gap: 0.15rem; }
-  .chip { width: var(--chip); height: var(--chip); flex: 0 0 auto; }
+  .chip-row { display: flex; justify-content: center; padding-left: calc(var(--chip) * 0.22); }
+  .chip { position: relative; z-index: var(--z); width: var(--chip); height: var(--chip); flex: 0 0 auto; margin-left: calc(var(--chip) * -0.22); }
   .empty-stack { font-style: italic; opacity: 0.7; }
   .empty-rail {
     align-self: center;
