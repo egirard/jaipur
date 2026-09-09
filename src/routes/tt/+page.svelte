@@ -1441,7 +1441,7 @@
   }
   .tabletop-hand > .table-hand-card + .table-hand-card { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
   .table-hand-card, .table-herd-card { cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; }
-  .table-hand-card > img, .table-herd-card > img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .table-hand-card > img { display: block; width: 100%; height: 100%; object-fit: cover; }
   .table-hand-card:disabled, .herd-pile:disabled { cursor: default; }
   .herd-pile { display: block; padding: 0; border: none; background: none; cursor: pointer; }
   .herd-badge { position: absolute; right: -0.2rem; top: -0.4rem; z-index: 2; min-width: 1.6rem; padding: 0.15rem 0.4rem; border-radius: 99rem; background: #66ffcc; color: #0d2622; font-weight: 800; font-size: 0.9rem; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
