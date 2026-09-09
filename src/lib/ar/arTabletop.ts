@@ -41,7 +41,14 @@ function readDiagInches(): number {
     localStorage.setItem('jaipur:ar:diag', p);
     return Number(p);
   }
-  return Number(localStorage.getItem('jaipur:ar:diag') ?? '27');
+  return Number(localStorage.getItem('jaipur:ar:diag') ?? '55');
+}
+
+/** The screen diagonal (inches) the AR scale is computed from — shown on
+ *  the table so a wrong value is obvious (a 55" table rendered as 27"
+ *  puts every AR card in the wrong place). */
+export function currentDiagInches(): number {
+  return Number(localStorage.getItem('jaipur:ar:diag') ?? '55');
 }
 
 /** Simple bold artwork for the test loop: colored card with the goods name.

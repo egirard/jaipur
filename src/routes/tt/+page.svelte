@@ -28,7 +28,7 @@
     type Token
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
-  import { ArTabletop } from '$lib/ar/arTabletop';
+  import { ArTabletop, currentDiagInches } from '$lib/ar/arTabletop';
   import { botActionEvent, chooseBotAction, createBotObservation } from '$lib/jaipur-bot';
 
   type Seat = 1 | 2;
@@ -51,6 +51,7 @@
   // controller (/hand, Firebase-driven) is a distinct offering; ?phone=1
   // brings its QR back for anyone who wants it, never both per player.
   let legacyPhone = $state(false);
+  let arDiag = $state(55);
   let solitaire = false;
   let scheduledBotKey = '';
   let startingRound = false;
@@ -212,6 +213,7 @@
       ar.onJoin = (seat, name) => void joinFromAr(seat, name);
       ar.onViewersChanged = (n) => (arViewers = n);
       ar.attach();
+      arDiag = currentDiagInches();
       arQrs = await Promise.all(([1, 2] as const).map(async (seat) => ({
         seat,
         url: ar!.arViewerUrl(seat),
@@ -932,6 +934,7 @@
   >
     <header>
       <span>Tabletop <strong>{gameId || '•••••'}</strong></span>
+      <span title="Screen diagonal used for AR scale — set with ?diag=INCHES" data-ar-diag={arDiag}>AR scale {arDiag}″</span>
       {#if lobby.round}
         <span>Round {lobby.round.number}</span>
         <button
