@@ -33,7 +33,7 @@
     type Token
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
-  import { ArTabletop, currentDiagInches } from '$lib/ar/arTabletop';
+  import { ArTabletop, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo } from '$lib/ar/arTabletop';
   import { botActionEvent, chooseBotAction, createBotObservation } from '$lib/jaipur-bot';
 
   type Seat = 1 | 2;
@@ -58,6 +58,33 @@
   let legacyPhone = $state(false);
   let arDiag = $state(55);
   let localStore = $state(false);
+  let scalePanelOpen = $state(false);
+  let physical = $state<PhysicalInfo | null>(null);
+
+  function refreshPhysical() {
+    physical = physicalInfo(arDiag);
+  }
+
+  function setDiag(value: number) {
+    const next = Math.round(Math.min(DIAG_MAX, Math.max(DIAG_MIN, value)) * 2) / 2;
+    if (!Number.isFinite(next)) return;
+    arDiag = next;
+    ar?.setDiagInches(next);
+    refreshPhysical();
+  }
+
+  async function toggleFullscreen() {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen().catch(() => {});
+    setTimeout(refreshPhysical, 300);
+  }
+
+  function newTable() {
+    const url = new URL(location.href);
+    url.searchParams.delete('game');
+    url.searchParams.set('new', '1');
+    location.href = url.toString();
+  }
   let solitaire = false;
   let scheduledBotKey = '';
   let startingRound = false;
@@ -114,18 +141,22 @@
     try {
       marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') === 'on';
       const pageParams = new URLSearchParams(location.search);
-      // Local store: the AR table is the only writer, so a game can live
-      // entirely in this browser — no Firebase project needed. Chosen with
-      // ?local=1, or automatically when the build carries no Firebase config
-      // (e.g. the fork's public Pages deployment).
-      localStore = pageParams.get('local') === '1' || !import.meta.env.VITE_FIREBASE_API_KEY;
+      // The Firebase channel is disabled for this AR fork: the table is
+      // the only writer (phones join and watch over the AR relay), so the
+      // game lives in this browser's localStorage and survives reloads.
+      // The Firebase repository stays in the code base; ?firebase=1 opts a
+      // build with Firebase config back into it.
+      localStore = !(pageParams.get('firebase') === '1' && import.meta.env.VITE_FIREBASE_API_KEY);
       const services = localStore ? null : await initializeFirebase();
       hostUid = localStore ? localHostUid() : (services!.auth.currentUser?.uid ?? '');
       const roomExists = async (id: string) =>
         localStore ? localGameRoomExists(id) : gameRoomExists(services!.db, id);
-      // Test hook: ?game=ABCDE pins the room code (reusing it across
-      // reloads) so scripted runs know the ids up front.
-      const forcedGame = pageParams.get('game');
+      // ?game=ABCDE pins the room code. Otherwise a local table resumes the
+      // game it was last running (reload/restart safe); ?new=1 or the
+      // "New table" control starts another.
+      const currentKey = 'jaipur:local:current-game';
+      const remembered = localStore && pageParams.get('new') !== '1' ? localStorage.getItem(currentKey) : null;
+      const forcedGame = pageParams.get('game') ?? (remembered && localGameRoomExists(remembered) ? remembered : null);
       let freshGame = true;
       if (forcedGame && isRoomCode(forcedGame.toUpperCase())) {
         gameId = forcedGame.toUpperCase();
@@ -157,6 +188,7 @@
         };
       }));
 
+      if (localStore) localStorage.setItem(currentKey, gameId);
       const attached = localStore
         ? createLocalGameRepository(gameId, hostUid)
         : createGameRepository(services!.db, gameId, hostUid);
@@ -231,6 +263,11 @@
       ar.onViewersChanged = (n) => (arViewers = n);
       ar.attach();
       arDiag = currentDiagInches();
+      refreshPhysical();
+      ar.onGeometryChanged = () => {
+        refreshPhysical();
+        void tick().then(() => ar?.publishFromState(lobby));
+      };
       // Publish what the store already holds: with the local store the
       // last notification fired before the AR bridge existed.
       await tick();
@@ -955,7 +992,14 @@
   >
     <header>
       <span>Tabletop <strong>{gameId || '•••••'}</strong></span>
-      <span title="Screen diagonal used for AR scale — set with ?diag=INCHES" data-ar-diag={arDiag}>AR scale {arDiag}″</span>
+      <button
+        type="button"
+        class="orientation-toggle"
+        aria-expanded={scalePanelOpen}
+        aria-label="AR screen scale settings"
+        data-ar-diag={arDiag}
+        onclick={() => { scalePanelOpen = !scalePanelOpen; refreshPhysical(); }}
+      >AR scale {arDiag}″{physical && !physical.fullscreen ? ' · windowed' : ''}</button>
       {#if lobby.round}
         <span>Round {lobby.round.number}</span>
         <button
@@ -1123,6 +1167,48 @@
       </div>
     {/if}
   </section>
+
+  {#if scalePanelOpen && physical}
+    {@const cardW = 0.0856 / physical.mPerCssPx}
+    {@const cardH = 0.05398 / physical.mPerCssPx}
+    <section class="scale-panel" aria-label="AR screen scale">
+      <header>
+        <strong>AR screen scale</strong>
+        <button type="button" onclick={() => (scalePanelOpen = false)} aria-label="Close">✕</button>
+      </header>
+      <div class="scale-row">
+        <span>Screen diagonal</span>
+        <button type="button" onclick={() => setDiag(arDiag - 5)} aria-label="5 inches smaller">−5</button>
+        <button type="button" onclick={() => setDiag(arDiag - 0.5)} aria-label="Half an inch smaller">−½</button>
+        <input
+          type="number"
+          min={DIAG_MIN}
+          max={DIAG_MAX}
+          step="0.5"
+          value={arDiag}
+          onchange={(e) => setDiag(Number((e.currentTarget as HTMLInputElement).value))}
+          aria-label="Screen diagonal in inches"
+        />
+        <span>inches</span>
+        <button type="button" onclick={() => setDiag(arDiag + 0.5)} aria-label="Half an inch larger">+½</button>
+        <button type="button" onclick={() => setDiag(arDiag + 5)} aria-label="5 inches larger">+5</button>
+      </div>
+      <p class="scale-check">
+        Hold a bank card on the outline: it should match exactly.
+        <span class="card-outline" style={`width:${cardW}px;height:${cardH}px`} aria-hidden="true"></span>
+      </p>
+      <dl class="scale-facts">
+        <dt>Screen</dt><dd>{physical.screenCss[0]}×{physical.screenCss[1]} px · {(physical.screenM[0] * 100).toFixed(1)}×{(physical.screenM[1] * 100).toFixed(1)} cm</dd>
+        <dt>This page</dt><dd>{physical.viewportCss[0]}×{physical.viewportCss[1]} px · {(physical.viewportM[0] * 100).toFixed(1)}×{(physical.viewportM[1] * 100).toFixed(1)} cm · {(physical.viewportFraction * 100).toFixed(0)}% of the screen{physical.fullscreen ? ' (full screen)' : ''}</dd>
+        <dt>Pixel</dt><dd>{(physical.mPerCssPx * 1000).toFixed(3)} mm · ratio {physical.dpr.toFixed(2)} (browser zoom must be 100%)</dd>
+        <dt>Phones</dt><dd>told the table image is {(physical.viewportM[0] * 100).toFixed(1)} cm wide; they re-enter AR to pick up a change.</dd>
+      </dl>
+      <div class="scale-actions">
+        <button type="button" onclick={toggleFullscreen}>{physical.fullscreen ? 'Exit full screen' : 'Full screen'}</button>
+        <button type="button" onclick={newTable}>New table</button>
+      </div>
+    </section>
+  {/if}
 
   <div class="bottom-edge edge">
     {#if playerForSeat(2)}
@@ -1325,6 +1411,21 @@
   .shared-market > header { position: absolute; z-index: 3; top: var(--market-edge-inset); left: 50%; display: flex; min-height: 36px; align-items: center; justify-content: center; gap: clamp(0.6rem, 2vw, 3rem); font-size: clamp(0.7rem, 1.5vmin, 1.5rem); transform: translateX(-50%); }
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market > header strong { letter-spacing: 0.14em; }
+  .scale-panel {
+    position: fixed; z-index: 30; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(34rem, 92vw); padding: 0.9rem 1.1rem; border: 1px solid #8e826b; border-radius: 0.9rem;
+    background: #fffaf0; box-shadow: 0 1rem 2.4rem rgb(10 32 30 / 35%); font-size: clamp(0.8rem, 1.6vmin, 1.1rem);
+  }
+  .scale-panel > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
+  .scale-panel button { min-width: 44px; min-height: 44px; padding: 0.3rem 0.7rem; border: 1px solid #8e826b; border-radius: 0.6rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
+  .scale-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+  .scale-row input { width: 5.5rem; min-height: 44px; padding: 0.3rem; border: 1px solid #8e826b; border-radius: 0.6rem; font: inherit; font-size: 1.2em; text-align: center; }
+  .scale-check { display: grid; gap: 0.4rem; margin: 0.8rem 0; }
+  .card-outline { display: block; border: 2px dashed #a6442d; border-radius: 3.18mm; background: rgb(166 68 45 / 8%); }
+  .scale-facts { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem; margin: 0; }
+  .scale-facts dt { font-weight: 700; color: #a6442d; }
+  .scale-facts dd { margin: 0; }
+  .scale-actions { display: flex; gap: 0.5rem; margin-top: 0.8rem; }
   .orientation-toggle {
     min-width: 44px;
     min-height: 36px;

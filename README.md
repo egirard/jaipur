@@ -67,9 +67,15 @@ see their private cards in AR, while all play happens on the table.
 - Public tabletop: **https://egirard.github.io/jaipur/tt/?bot=1** (solitaire
   against the bot; drop `bot=1` for two seats). Set the screen size once
   with `?diag=INCHES` (remembered; default 55).
-- This deployment carries no Firebase configuration, so the tabletop keeps
-  the game in the browser's local storage (`?local=1` forces this mode on
-  any build). The AR table is the only writer, so nothing else is needed.
+- The Firebase channel is disabled in this fork: the tabletop keeps the
+  game in the browser's local storage and resumes it after a reload or
+  restart (the AR table is the only writer). The Firebase repository is
+  still in the code; a build with Firebase config can opt back in with
+  `?firebase=1`. `?new=1` (or **New table** in the AR scale panel) starts
+  a fresh game.
+- Tap **AR scale** in the market header to set the screen diagonal in-app,
+  check it against a bank card outline, see the screen/viewport geometry
+  the phones are told about, and go full screen.
 - The AR viewer and relay are hosted by the ARViewer project; the QR
   codes on the table embed them.
 

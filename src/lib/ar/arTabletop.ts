@@ -35,20 +35,58 @@ const KIND_COLORS: Record<string, string> = {
   camel: '#d8b26a',
 };
 
+const DIAG_KEY = 'jaipur:ar:diag';
+export const DIAG_MIN = 5;
+export const DIAG_MAX = 120;
+
 function readDiagInches(): number {
   const p = new URLSearchParams(location.search).get('diag');
-  if (p && Number(p) >= 5 && Number(p) <= 120) {
-    localStorage.setItem('jaipur:ar:diag', p);
+  if (p && Number(p) >= DIAG_MIN && Number(p) <= DIAG_MAX) {
+    localStorage.setItem(DIAG_KEY, p);
     return Number(p);
   }
-  return Number(localStorage.getItem('jaipur:ar:diag') ?? '55');
+  return Number(localStorage.getItem(DIAG_KEY) ?? '55');
 }
 
-/** The screen diagonal (inches) the AR scale is computed from — shown on
- *  the table so a wrong value is obvious (a 55" table rendered as 27"
- *  puts every AR card in the wrong place). */
+/** The screen diagonal (inches) the AR scale is computed from. */
 export function currentDiagInches(): number {
-  return Number(localStorage.getItem('jaipur:ar:diag') ?? '55');
+  return Number(localStorage.getItem(DIAG_KEY) ?? '55');
+}
+
+/** Physical model of the display, derived from the screen diagonal and
+ *  the browser's own measurements. Meters per CSS pixel comes from the
+ *  WHOLE screen (screen.width × screen.height), not the viewport, so the
+ *  page may occupy any part of the screen — full screen, a window, a
+ *  split — and the tracked image's physical width is still exact: it is
+ *  simply the viewport width × meters-per-pixel. Assumes browser zoom
+ *  100% (the calibration card outline lets you verify by eye). */
+export type PhysicalInfo = {
+  diagIn: number;
+  screenCss: [number, number];
+  viewportCss: [number, number];
+  dpr: number;
+  mPerCssPx: number;
+  screenM: [number, number];
+  viewportM: [number, number];
+  viewportFraction: number;
+  fullscreen: boolean;
+};
+
+export function physicalInfo(diagIn = currentDiagInches()): PhysicalInfo {
+  const sw = screen.width;
+  const sh = screen.height;
+  const mPerCssPx = (diagIn * 0.0254) / Math.hypot(sw, sh);
+  return {
+    diagIn,
+    screenCss: [sw, sh],
+    viewportCss: [innerWidth, innerHeight],
+    dpr: devicePixelRatio,
+    mPerCssPx,
+    screenM: [sw * mPerCssPx, sh * mPerCssPx],
+    viewportM: [innerWidth * mPerCssPx, innerHeight * mPerCssPx],
+    viewportFraction: (innerWidth * innerHeight) / (sw * sh),
+    fullscreen: Boolean(document.fullscreenElement) || (innerWidth === sw && innerHeight === sh),
+  };
 }
 
 /** Simple bold artwork for the test loop: colored card with the goods name.
@@ -136,27 +174,53 @@ export class ArTabletop {
    *  the relay, and capture the screen as the tracked image. Call once after
    *  the board has mounted. */
   attach(): void {
-    const diag = readDiagInches();
-    const cssDiag = Math.hypot(innerWidth, innerHeight);
-    this.mPerPx = (diag * 0.0254) / cssDiag;
+    this.mPerPx = physicalInfo(readDiagInches()).mPerCssPx;
     this.attached = true;
     this.host.connect();
     this.refreshTracking(0);
     addEventListener('resize', this.onResize);
+    // Browser zoom / moving to another monitor changes the pixel ratio.
+    this.watchDpr();
   }
 
   detach(): void {
     this.attached = false;
     removeEventListener('resize', this.onResize);
+    this.dprQuery?.removeEventListener('change', this.onResize);
     if (this.captureTimer) clearTimeout(this.captureTimer);
     this.host.close();
   }
 
+  private dprQuery: MediaQueryList | null = null;
+  private watchDpr(): void {
+    this.dprQuery?.removeEventListener('change', this.onResize);
+    this.dprQuery = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    this.dprQuery.addEventListener('change', this.onResize, { once: true });
+  }
+
+  /** Viewport or screen geometry changed: the tracked image's physical
+   *  width (and every node position) must follow. */
   private onResize = () => {
-    const diag = readDiagInches();
-    this.mPerPx = (diag * 0.0254) / Math.hypot(innerWidth, innerHeight);
+    this.mPerPx = physicalInfo(currentDiagInches()).mPerCssPx;
+    this.watchDpr();
     this.refreshTracking(300);
+    this.onGeometryChanged?.();
   };
+
+  /** Called after a resize/zoom so the page republishes node positions. */
+  onGeometryChanged: (() => void) | null = null;
+
+  /** Change the screen diagonal in-app: persists it, rescales, republishes
+   *  the tracked image (new epoch) — phones pick the new size up when they
+   *  next enter AR. */
+  setDiagInches(diagIn: number): void {
+    const clamped = Math.min(DIAG_MAX, Math.max(DIAG_MIN, diagIn));
+    localStorage.setItem(DIAG_KEY, String(clamped));
+    this.mPerPx = physicalInfo(clamped).mPerCssPx;
+    this.lastTrackingJpeg = ''; // force a republish even if pixels match
+    this.refreshTracking(200);
+    this.onGeometryChanged?.();
+  }
 
   /** Re-capture the screen and republish it as the tracked image, debounced
    *  (a burst of state changes and their flight animations collapse into
