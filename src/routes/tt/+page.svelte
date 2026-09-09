@@ -462,6 +462,28 @@
     return lobby.round?.status === 'active' && lobby.round.activeUid === uid && !pendingDraw && !busy;
   }
 
+  // The camel pile is one tap target: each tap stages the top camel that
+  // isn't already selected or placed; once none is left, a tap unstages the
+  // most recently selected one (so the pile cycles rather than dead-ends).
+  function herdSelectedCount(uid: string): number {
+    const selected = selectedReturnIds(uid);
+    return (lobby.round?.herds[uid] ?? []).filter((c) => selected.includes(c.id)).length;
+  }
+
+  async function toggleHerd(uid: string) {
+    if (!canSelectReturns(uid)) return;
+    const herd = lobby.round?.herds[uid] ?? [];
+    const loads = Object.values(exchangeLoads(uid));
+    const selected = selectedReturnIds(uid);
+    const next = [...herd].reverse().find((c) => !selected.includes(c.id) && !loads.includes(c.id));
+    if (next) {
+      await publishIntent(uid, [...selected, next.id], exchangeLoads(uid));
+      return;
+    }
+    const lastCamel = [...selected].reverse().find((id) => herd.some((c) => c.id === id));
+    if (lastCamel) await publishIntent(uid, selected.filter((id) => id !== lastCamel), exchangeLoads(uid));
+  }
+
   async function toggleReturn(uid: string, cardId: string) {
     if (!canSelectReturns(uid)) return;
     const loads = exchangeLoads(uid);
@@ -686,7 +708,7 @@
     const fromHand = lobby.round?.hands[uid]?.some(({ id }) => id === returnCardId);
     const source = fromHand
       ? box(`[data-table-hand-card="${CSS.escape(returnCardId)}"]`)
-      : box(`[data-table-herd="${CSS.escape(uid)}"] img:last-child`);
+      : box(`[data-table-herd="${CSS.escape(uid)}"] img:last-of-type`);
     const destination = box(`[data-table-exchange-target="${CSS.escape(marketCardId)}"]`);
     arrivingCardIds = [...new Set([...arrivingCardIds, returnCardId])];
     cardFlight(
@@ -948,28 +970,32 @@
         role="img"
         aria-label={`${player.displayName}'s camel herd`}
       >
-        <span class="herd-pile">
+        <button
+          type="button"
+          class="herd-pile"
+          disabled={!canSelectReturns(player.uid) || (lobby.round?.herds[player.uid]?.length ?? 0) === 0}
+          aria-label={`Camel pile: tap to select the next camel for a trade (${herdSelectedCount(player.uid)} selected)`}
+          data-table-herd-pile={player.uid}
+          onclick={() => toggleHerd(player.uid)}
+        >
           {#each (lobby.round?.herds[player.uid] ?? []).slice(-5) as camel, index}
             {@const selected = selectedReturnIds(player.uid).includes(camel.id)}
             {@const loaded = Object.values(exchangeLoads(player.uid)).includes(camel.id)}
-            <button
-              type="button"
+            <img
               class="table-herd-card"
               class:arriving={arrivingCardIds.includes(camel.id)}
               class:selected
               class:loaded
-              disabled={!canSelectReturns(player.uid) || loaded}
-              aria-pressed={selected}
-              aria-label={`${selected ? 'Deselect' : 'Select'} camel for a trade`}
+              src={componentImage('camel')}
+              alt=""
+              draggable="false"
               data-table-herd-card={camel.id}
               data-card-arriving={arrivingCardIds.includes(camel.id) || undefined}
               style={`--pile-index:${index}`}
-              onclick={() => toggleReturn(player.uid, camel.id)}
-            >
-              <img src={componentImage('camel')} alt="" draggable="false" />
-            </button>
+            />
           {/each}
-        </span>
+          {#if herdSelectedCount(player.uid) > 0}<span class="herd-badge">{herdSelectedCount(player.uid)}</span>{/if}
+        </button>
         <span>Herd</span>
       </div>
       <div class="seat-tokens" data-table-tokens={player.uid}>
@@ -1416,7 +1442,9 @@
   .tabletop-hand > .table-hand-card + .table-hand-card { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
   .table-hand-card, .table-herd-card { cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; }
   .table-hand-card > img, .table-herd-card > img { display: block; width: 100%; height: 100%; object-fit: cover; }
-  .table-hand-card:disabled, .table-herd-card:disabled { cursor: default; }
+  .table-hand-card:disabled, .herd-pile:disabled { cursor: default; }
+  .herd-pile { display: block; padding: 0; border: none; background: none; cursor: pointer; }
+  .herd-badge { position: absolute; right: -0.2rem; top: -0.4rem; z-index: 2; min-width: 1.6rem; padding: 0.15rem 0.4rem; border-radius: 99rem; background: #66ffcc; color: #0d2622; font-weight: 800; font-size: 0.9rem; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
   .table-hand-card.selected, .table-herd-card.selected { transform: translateY(-14%); box-shadow: 0 0 0 3px #66ffcc, 0 0.5rem 1rem rgb(10 32 30 / 35%); z-index: 1; }
   .table-hand-card.loaded, .table-herd-card.loaded { opacity: 0.45; }
   .market-card :global(.piece-image) { width: 100%; height: 100%; object-fit: cover; }
@@ -1430,7 +1458,7 @@
     border-radius: 0.55rem;
   }
   .herd-pile { position: relative; width: clamp(6.8rem, 13vw, 22rem); height: clamp(3.7rem, 9.8vh, 12rem); }
-  .herd-pile .table-herd-card { position: absolute; padding: 0; background: none; overflow: hidden; left: calc(var(--pile-index) * clamp(0.55rem, 1.1vmin, 1.4rem)); width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); border: 2px solid #a6442d; border-radius: 0.55rem; transform: rotate(calc((var(--pile-index) - 2) * 2deg)); }
+  .herd-pile .table-herd-card { position: absolute; padding: 0; background: none; overflow: hidden; pointer-events: none; left: calc(var(--pile-index) * clamp(0.55rem, 1.1vmin, 1.4rem)); width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); border: 2px solid #a6442d; border-radius: 0.55rem; transform: rotate(calc((var(--pile-index) - 2) * 2deg)); }
   .herd-pile .table-herd-card.selected { transform: rotate(calc((var(--pile-index) - 2) * 2deg)) translateY(-14%); }
   .seat-tokens { display: grid; min-width: 0; min-height: 2.5rem; place-items: center; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .shared-market {

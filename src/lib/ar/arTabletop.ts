@@ -303,15 +303,29 @@ export class ArTabletop {
     const sampleRect = document.querySelector('[data-market-card-id]')?.getBoundingClientRect();
     const wM = (sampleRect?.width ?? 60) * this.mPerPx;
     const hM = (sampleRect?.height ?? 84) * this.mPerPx;
+    // The table draws hand cards smaller than market cards; the AR faces
+    // must match the physical card under them, so hands get their own
+    // asset set at the hand-card size (`s-` ids share the same art).
+    const handRect = document.querySelector('[data-table-hand-card]')?.getBoundingClientRect();
+    const hwM = (handRect?.width ?? sampleRect?.width ?? 60) * this.mPerPx;
+    const hhM = (handRect?.height ?? sampleRect?.height ?? 84) * this.mPerPx;
 
-    // Artwork: card kinds + back (content-addressed; only re-sent when the
-    // physical card size changes).
+    // Artwork: card kinds + back at both sizes (content-addressed; only
+    // re-sent when a physical card size changes).
     const kinds = ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather', 'camel'];
-    const key = `${wM.toFixed(4)}x${hM.toFixed(4)}`;
+    const key = `${wM.toFixed(4)}x${hM.toFixed(4)}|${hwM.toFixed(4)}x${hhM.toFixed(4)}`;
     if (key !== this.assetsKey) {
       this.assetsKey = key;
-      const assets: Record<string, ArAsset> = { back: { img: drawBackArt(), wM, hM } };
-      for (const k of kinds) assets[`k-${k}`] = { img: drawCardArt(k), wM, hM };
+      const back = drawBackArt();
+      const assets: Record<string, ArAsset> = {
+        back: { img: back, wM, hM },
+        'back-s': { img: back, wM: hwM, hM: hhM },
+      };
+      for (const k of kinds) {
+        const img = drawCardArt(k);
+        assets[`k-${k}`] = { img, wM, hM };
+        assets[`s-${k}`] = { img, wM: hwM, hM: hhM };
+      }
       this.host.publishAssets(assets);
     }
 
@@ -367,8 +381,8 @@ export class ArTabletop {
           faceUp: true,
           peek: false,
           glow: selected.has(card.id) ? '#66ffcc' : false,
-          face: `k-${card.kind}`,
-          back: 'back',
+          face: `s-${card.kind}`,
+          back: 'back-s',
         });
       }
       const name = player?.displayName ?? this.seatNames.get(seat);
