@@ -81,14 +81,14 @@
     bottom: -0.02rem;
     left: 50%;
     display: grid;
-    width: 1rem;
-    height: 1rem;
+    width: 1.3em;
+    height: 1.3em;
     padding: 0;
     place-items: center;
     border-radius: 50%;
     background: transparent;
     color: #fffbea;
-    font-size: clamp(0.72rem, 30cqi, 0.84rem);
+    font-size: clamp(0.72rem, 34cqi, 2.6rem);
     font-weight: 700;
     line-height: 1;
     text-align: center;

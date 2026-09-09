@@ -1,9 +1,8 @@
 <script lang="ts">
   import { assets as assetBase } from '$app/paths';
   import TokenChip from '$lib/TokenChip.svelte';
+  import TokenStack from '$lib/TokenStack.svelte';
   import type { Good, RoundState } from '$lib/jaipur-rules';
-
-  export type SalePreview = { cards: number; base: number; bonus: string | null };
 
   let {
     seat,
@@ -12,8 +11,7 @@
     inverted = false,
     label,
     canSell,
-    onSell,
-    preview
+    onSell
   }: {
     seat: 1 | 2;
     round: RoundState | null;
@@ -22,15 +20,13 @@
     label: (kind: Good) => string;
     canSell: (kind: Good) => boolean;
     onSell: (kind: Good) => void | Promise<void>;
-    /** What selling to this stack would earn right now (null when not sellable). */
-    preview?: (kind: Good) => SalePreview | null;
   } = $props();
 
-  // Chips wrap into rows of up to five so each chip can be large; the
+  // Chips wrap into rows of up to four so each chip can be large; the
   // top of the stack (next to be earned) comes first.
   const rows = (tokens: RoundState['goodsTokens'][Good]) => {
     const out: typeof tokens[] = [];
-    for (let i = 0; i < tokens.length; i += 5) out.push(tokens.slice(i, i + 5));
+    for (let i = 0; i < tokens.length; i += 4) out.push(tokens.slice(i, i + 4));
     return out;
   };
 </script>
@@ -46,17 +42,23 @@
     {#if round}
       <div class="bonus-row" aria-label="Bonus supplies">
         {#each ['3', '4', '5'] as size}
-          <span>{size}+ <strong>{round.bonusTokens[size as '3' | '4' | '5'].length}</strong></span>
+          <span class="bonus-stack" data-bonus-size={size} aria-label={`${size}-card bonus tokens, ${round.bonusTokens[size as '3' | '4' | '5'].length} left`}>
+            {#if round.bonusTokens[size as '3' | '4' | '5'].length > 0}
+              <TokenStack tokens={round.bonusTokens[size as '3' | '4' | '5']} direction="vertical" hidden usage="supply" />
+            {:else}
+              <span class="empty-stack">—</span>
+            {/if}
+            <small>{size}{size === '5' ? '+' : ''} cards · {round.bonusTokens[size as '3' | '4' | '5'].length}</small>
+          </span>
         {/each}
       </div>
       {#each goods as kind}
-        {@const sale = preview?.(kind) ?? null}
         <button
           type="button"
           class={`rail-token ${kind}`}
           class:sellable={canSell(kind)}
           disabled={!canSell(kind)}
-          aria-label={`Sell to ${label(kind)} token stack, ${round.goodsTokens[kind].length} left${sale ? `, earns ${sale.base}${sale.bonus ? ` plus a ${sale.bonus} bonus` : ''}` : ''}`}
+          aria-label={`Sell to ${label(kind)} token stack, ${round.goodsTokens[kind].length} left`}
           data-token-kind={kind}
           style={`--good-art: url("${assetBase}/components/${kind}.webp")`}
           onclick={() => onSell(kind)}
@@ -65,12 +67,12 @@
             <span class="rail-name">{label(kind)}</span>
             <span class="rail-count">{round.goodsTokens[kind].length}</span>
           </span>
-          <span class="rail-chip" class:two-rows={round.goodsTokens[kind].length > 5}>
+          <span class="rail-chip">
             {#if round.goodsTokens[kind].length > 0}
-              {#each rows(round.goodsTokens[kind]) as row, rowIndex}
+              {#each rows(round.goodsTokens[kind]) as row}
                 <span class="chip-row">
-                  {#each row as token, index (token.id)}
-                    <span class="chip" class:taken={sale ? rowIndex * 5 + index < sale.cards : false} data-supply-token-id={token.id}>
+                  {#each row as token (token.id)}
+                    <span class="chip" data-supply-token-id={token.id}>
                       <TokenChip {token} />
                     </span>
                   {/each}
@@ -80,11 +82,6 @@
               <span class="empty-stack">sold out</span>
             {/if}
           </span>
-          {#if sale}
-            <span class="sale-preview" data-sale-preview={kind}>
-              <strong>+{sale.base}</strong>{#if sale.bonus}<small>+{sale.bonus} bonus</small>{/if}
-            </span>
-          {/if}
         </button>
       {/each}
     {:else}
@@ -104,6 +101,8 @@
     border-radius: clamp(0.55rem, 1.3vmin, 1rem);
     background: #fffaf0;
     box-shadow: 0 0.25rem 0.8rem rgb(10 32 30 / 16%);
+    /* Big chips: sized by the screen so they read from across a table. */
+    --chip: clamp(1.8rem, min(5.6vmin, 3.6vw), 7rem);
   }
   .token-market-content {
     display: grid;
@@ -121,20 +120,23 @@
     font-size: clamp(1.05rem, 2.2vmin, 3rem);
     text-align: center;
   }
+  /* Three face-down bonus stacks (3, 4, 5+ cards). */
   .bonus-row {
     display: flex;
-    justify-content: center;
-    gap: 0.18rem;
+    justify-content: space-evenly;
+    align-items: flex-start;
+    gap: 0.3rem;
+    padding: 0.2rem 0;
     font-size: clamp(0.5rem, 0.9vmin, 1.2rem);
   }
-  .bonus-row span {
-    padding: 0.12rem 0.22rem;
-    border-radius: 99rem;
-    background: #e9dcc1;
+  .bonus-stack { display: grid; justify-items: center; gap: 0.15rem; }
+  .bonus-stack :global(.token-stack) {
+    --token-stack-chip-size: calc(var(--chip) * 0.8);
+    --token-stack-step: calc(var(--chip) * 0.12);
   }
-  /* One good per row: name + remaining count, the chips (up to two rows
-     of five, large), and — when a sale is possible right now — what it
-     would earn. The good's own art sits faded behind it all. */
+  .bonus-stack small { font-weight: 700; white-space: nowrap; }
+  /* One good per row: name + remaining count over the chips (rows of
+     four), the good's own art behind. */
   .rail-token {
     position: relative;
     display: grid;
@@ -149,42 +151,25 @@
     border: 1px solid #b7aa8d;
     border-radius: 0.6rem;
     background:
-      linear-gradient(rgb(245 234 211 / 82%), rgb(245 234 211 / 82%)),
+      linear-gradient(rgb(245 234 211 / 42%), rgb(245 234 211 / 42%)),
       var(--good-art) center / cover no-repeat;
     color: #183a37;
     font: inherit;
-    font-size: clamp(0.55rem, 1vmin, 1.3rem);
+    font-size: clamp(0.6rem, 1.1vmin, 1.4rem);
     text-align: center;
     isolation: isolate;
   }
   .rail-token:disabled { opacity: 1; }
   .rail-token.sellable {
-    border: 2px solid #1d7a4a;
-    background:
-      linear-gradient(rgb(234 255 240 / 78%), rgb(234 255 240 / 78%)),
-      var(--good-art) center / cover no-repeat;
+    border: 3px solid #1d7a4a;
     box-shadow: 0 0 0 3px rgb(29 122 74 / 22%);
   }
-  .rail-head { display: flex; gap: 0.35rem; align-items: baseline; font-weight: 700; }
-  .rail-count { padding: 0 0.35rem; border-radius: 99rem; background: #183a37; color: #fffaf0; }
+  .rail-head { display: flex; gap: 0.35rem; align-items: baseline; font-weight: 800; text-shadow: 0 0 4px #fffaf0, 0 0 4px #fffaf0; }
+  .rail-count { padding: 0 0.4rem; border-radius: 99rem; background: #183a37; color: #fffaf0; text-shadow: none; }
   .rail-chip { display: grid; width: 100%; min-width: 0; justify-items: center; gap: 0.12rem; }
-  .chip-row { display: flex; justify-content: center; gap: 0.12rem; }
-  .chip { width: clamp(1.6rem, 3.2vmin, 4.6rem); height: clamp(1.6rem, 3.2vmin, 4.6rem); flex: 0 0 auto; }
-  .two-rows .chip { width: clamp(1.4rem, 2.7vmin, 4rem); height: clamp(1.4rem, 2.7vmin, 4rem); }
-  .chip.taken { outline: 3px solid #1d7a4a; outline-offset: 1px; border-radius: 50%; }
+  .chip-row { display: flex; justify-content: center; gap: 0.15rem; }
+  .chip { width: var(--chip); height: var(--chip); flex: 0 0 auto; }
   .empty-stack { font-style: italic; opacity: 0.7; }
-  .sale-preview {
-    position: absolute;
-    right: 0.25rem;
-    bottom: 0.15rem;
-    display: grid;
-    justify-items: end;
-    line-height: 1;
-    color: #1d7a4a;
-    text-shadow: 0 1px 0 #fff, 0 0 4px #fff;
-  }
-  .sale-preview strong { font-size: 1.9em; }
-  .sale-preview small { font-size: 0.8em; font-weight: 700; }
   .empty-rail {
     align-self: center;
     grid-row: 3 / -1;

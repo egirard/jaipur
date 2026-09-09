@@ -8,7 +8,7 @@
   import PieceArt from '$lib/PieceArt.svelte';
   import GameSummary from '$lib/GameSummary.svelte';
   import StableMarketLayout from '$lib/StableMarketLayout.svelte';
-  import TabletopTokenMarket, { type SalePreview } from '$lib/TabletopTokenMarket.svelte';
+  import TabletopTokenMarket from '$lib/TabletopTokenMarket.svelte';
   import TokenChip from '$lib/TokenChip.svelte';
   import { initializeFirebase } from '$lib/firebase';
   import {
@@ -30,10 +30,11 @@
     type GameState,
     type Good,
     type PendingDraw,
-    type Token
+    type Token,
+    isGood
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
-  import { ArTabletop, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo } from '$lib/ar/arTabletop';
+  import { ArTabletop, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type SalePreview } from '$lib/ar/arTabletop';
   import { botActionEvent, chooseBotAction, createBotObservation } from '$lib/jaipur-bot';
 
   type Seat = 1 | 2;
@@ -254,6 +255,7 @@
       );
       localStorage.setItem('jaipur:ar:session', ar.host.session);
       ar.onJoin = (seat, name) => void joinFromAr(seat, name);
+      ar.previewFor = (kind) => (isGood(kind) ? salePreview(kind) : null); // AR-only sale preview
       ar.onViewersChanged = (n) => (arViewers = n);
       ar.attach();
       arDiag = currentDiagInches();
@@ -316,6 +318,11 @@
       turnPause = false;
       turnTransitioning = false;
       if (pendingTurnSeat === seat) pendingTurnSeat = undefined;
+      // The turn may already have passed again while this transition ran
+      // (the bot answers within a second); catch up instead of waiting for
+      // the next store change.
+      const live = activeSeat();
+      if (live && live !== marketFacingSeat && pendingTurnSeat === undefined) applyMarketFacing(live);
     }
   }
 
@@ -647,7 +654,7 @@
 
   // Sale celebration: after the token flights land, a summary rises from
   // the player's token zone ("4 tokens · +7!") and fades.
-  let saleSummaries = $state<Array<{ key: number; left: number; top: number; inverted: boolean; count: number; goods: number; bonusCount: number }>>([]);
+  let saleSummaries = $state<Array<{ key: number; left: number; top: number; inverted: boolean; count: number; cards: number }>>([]);
 
   function canSell(kind: Good): boolean {
     const uid = lobby.round?.activeUid;
@@ -839,7 +846,7 @@
         ].filter(({ id }) => !oldTokens.has(id));
         awards.forEach((token, index) => tokenMovements.push({
           source: token.kind.startsWith('bonus-')
-            ? box(`${tokenView} .bonus-row`)
+            ? box(`${tokenView} [data-bonus-size="${token.kind.replace('bonus-', '')}"]`)
             : box(`${tokenView} [data-token-kind="${CSS.escape(token.kind)}"] .rail-chip`),
           destinationSelector: `[data-table-tokens="${CSS.escape(uid)}"]`,
           token,
@@ -905,15 +912,14 @@
       const uid = activity.actorUid;
       const target = box(`[data-table-tokens="${CSS.escape(uid)}"]`);
       if (!target) continue;
-      const goods = tokenMovements.filter((m) => !m.token.kind.startsWith('bonus-')).reduce((sum, m) => sum + m.token.value, 0);
-      const bonusCount = tokenMovements.filter((m) => m.token.kind.startsWith('bonus-')).length;
+      const cards = activity.cardIds?.length ?? 0;
       const seat = lobby.players.find((p) => p.uid === uid)?.seat;
       const key = ++flightSequence;
       const lastDelay = Math.max(...tokenMovements.map((m) => m.delay));
       setTimeout(() => {
         saleSummaries = [...saleSummaries, {
           key, left: target.left + target.width / 2, top: target.top + target.height / 2,
-          inverted: seat === 1, count: tokenMovements.length, goods, bonusCount
+          inverted: seat === 1, count: tokenMovements.length, cards
         }];
         setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600);
       }, 900 + lastDelay);
@@ -993,6 +999,9 @@
         role="group"
         aria-label={`${player.displayName} has ${lobby.round?.hands[player.uid]?.length ?? 0} face-down cards`}
       >
+        {#each Array(Math.max(0, 7 - (lobby.round?.hands[player.uid]?.length ?? 0))) as _, slot}
+          <span class="hand-slot" aria-hidden="true" data-hand-slot={slot}></span>
+        {/each}
         {#each lobby.round?.hands[player.uid] ?? [] as card}
           {@const selected = selectedReturnIds(player.uid).includes(card.id)}
           {@const loaded = Object.values(exchangeLoads(player.uid)).includes(card.id)}
@@ -1048,9 +1057,15 @@
         </button>
         <span>Herd</span>
       </div>
-      <div class="seat-tokens" data-table-tokens={player.uid}>
-        <span><strong>{ownedTokens(player.uid).length}</strong> {ownedTokens(player.uid).length === 1 ? 'token' : 'tokens'}</span>
-      </div>
+    </div>
+    <div class="seat-tokens" data-table-tokens={player.uid} aria-label={`${player.displayName}'s earned tokens`}>
+      {#each lobby.round?.ownedGoodsTokens[player.uid] ?? [] as token (token.id)}
+        <span class="earned" data-owned-token-id={token.id}><TokenChip {token} /></span>
+      {/each}
+      {#each lobby.round?.ownedBonusTokens[player.uid] ?? [] as token (token.id)}
+        <span class="earned bonus" data-owned-token-id={token.id} data-owned-bonus={token.id}><TokenChip {token} hidden /></span>
+      {/each}
+      {#if ownedTokens(player.uid).length === 0}<small>No tokens yet</small>{/if}
     </div>
   </section>
 {/snippet}
@@ -1364,7 +1379,6 @@
       {label}
       {canSell}
       onSell={(kind) => sell(kind, 1)}
-      preview={salePreview}
     />
   </div>
   <div class="token-view bottom-token-view">
@@ -1375,7 +1389,6 @@
       {label}
       {canSell}
       onSell={(kind) => sell(kind, 2)}
-      preview={salePreview}
     />
   </div>
 
@@ -1415,7 +1428,7 @@
       style={`--left:${summary.left}px;--top:${summary.top}px`}
     >
       <span class="sale-coins">{#each Array(summary.count) as _, i}<i style={`--i:${i}`}></i>{/each}</span>
-      <strong>+{summary.goods}{summary.bonusCount > 0 ? ` +bonus` : ''}!</strong>
+      <strong>{summary.cards} card{summary.cards === 1 ? '' : 's'} sold!</strong>
     </span>
   {/each}
 </main>
@@ -1443,7 +1456,7 @@
   button, summary { font: inherit; }
   button:focus-visible, summary:focus-visible { outline: 3px solid #d38b21; outline-offset: 2px; }
   .tabletop {
-    --rail-width: clamp(8.5rem, 14vw, 24rem);
+    --rail-width: clamp(8.5rem, 17vw, 30rem);
     --edge-size: minmax(0, 25vh);
     position: fixed;
     inset: 0;
@@ -1493,7 +1506,7 @@
     display: grid;
     width: 100%;
     height: 100%;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0.25rem;
     padding: clamp(0.35rem, 0.8vmin, 0.65rem) clamp(4.6rem, 9vw, 8rem);
     border: 3px solid transparent;
@@ -1512,7 +1525,7 @@
   .player-seat > header > div { display: flex; align-items: baseline; gap: 0.45rem; }
   .turn-state { padding: 0.2rem 0.55rem; border-radius: 99rem; background: #e9dcc1; }
   .active .turn-state { background: #a6442d; color: white; }
-  .seat-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) clamp(5rem, 10vw, 16rem) clamp(8rem, 14vw, 26rem); align-items: center; gap: 0.5rem; }
+  .seat-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) clamp(5rem, 10vw, 16rem); align-items: center; gap: 0.5rem; }
   .tabletop-hand { display: flex; min-width: 0; height: 100%; align-items: center; }
   .tabletop-hand > .table-hand-card, .market-card {
     position: relative;
@@ -1548,7 +1561,11 @@
   .herd-pile { position: relative; width: clamp(6.8rem, 13vw, 22rem); height: clamp(3.7rem, 9.8vh, 12rem); }
   .herd-pile .table-herd-card { position: absolute; padding: 0; background: none; overflow: hidden; pointer-events: none; left: calc(var(--pile-index) * clamp(0.55rem, 1.1vmin, 1.4rem)); width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); border: 2px solid #a6442d; border-radius: 0.55rem; transform: rotate(calc((var(--pile-index) - 2) * 2deg)); }
   .herd-pile .table-herd-card.selected { transform: rotate(calc((var(--pile-index) - 2) * 2deg)) translateY(-14%); }
-  .seat-tokens { display: grid; min-width: 0; min-height: 2.5rem; place-items: center; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
+  .seat-tokens { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
+  .seat-tokens .earned { width: clamp(1.4rem, 3.2vmin, 3.6rem); height: clamp(1.4rem, 3.2vmin, 3.6rem); flex: 0 0 auto; }
+  .seat-tokens .earned.bonus { filter: saturate(0.7); }
+  .hand-slot { width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); flex: 0 0 auto; border: 2px dashed #b7aa8d; border-radius: 0.55rem; opacity: 0.45; }
+  .tabletop-hand > .hand-slot + .hand-slot, .tabletop-hand > .hand-slot + .table-hand-card { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
   .shared-market {
     --table-market-card-size: clamp(4rem, min(18vh, 10.5vw), 20rem);
     --table-target-height: clamp(2.7rem, 6.5vh, 7rem);
@@ -1754,7 +1771,7 @@
   .scale-gear svg { display: block; }
   .scale-gear b { position: absolute; font-size: 0.34em; font-weight: 800; color: #183a37; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
   .scale-note { margin-left: 0.2rem; font-size: 0.6em; opacity: 0.7; }
-  .herd-count { position: absolute; left: -0.3rem; top: -0.5rem; z-index: 3; min-width: 1.9rem; padding: 0.15rem 0.45rem; border: 2px solid #fffaf0; border-radius: 99rem; background: #a6442d; color: #fffaf0; font-size: clamp(0.85rem, 2vmin, 1.6rem); font-weight: 900; line-height: 1.2; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
+  .herd-count { position: absolute; left: 50%; bottom: -0.6rem; transform: translateX(-50%); z-index: 3; min-width: 1.9rem; padding: 0.15rem 0.45rem; border: 2px solid #fffaf0; border-radius: 99rem; background: #a6442d; color: #fffaf0; font-size: clamp(0.85rem, 2vmin, 1.6rem); font-weight: 900; line-height: 1.2; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
   @keyframes table-flight {
     0% { opacity: 0.96; transform: translate(0, 0) rotate(-3deg); }
     68% { width: var(--end-size); height: var(--end-size); opacity: 1; transform: translate(calc(var(--end-left) - var(--start-left)), calc(var(--end-top) - var(--start-top))) rotate(-2deg) scale(1.05); }

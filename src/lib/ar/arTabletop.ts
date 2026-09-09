@@ -24,6 +24,8 @@ import { ArHost, type ArAction, type ArAsset, type ArNode } from './arHost';
 import type { Card, GameState } from '../jaipur-rules';
 
 export type ArJoinHandler = (seat: string, name: string) => void;
+/** What selling a good would earn the active trader right now. */
+export type SalePreview = { cards: number; base: number; bonus: string | null };
 
 const KIND_COLORS: Record<string, string> = {
   diamond: '#9fd7e8',
@@ -158,6 +160,32 @@ function drawCardArt(kind: string): string {
   return c.toDataURL('image/png');
 }
 
+/** Private AR-only tile: sale preview ("+7", "+4–6 bonus") or a bonus
+ *  token's secret value. */
+function drawTextTile(lines: string[], color: string): string {
+  const c = document.createElement('canvas');
+  c.width = 320;
+  c.height = 160;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = 'rgba(255, 250, 240, 0.92)';
+  ctx.beginPath();
+  ctx.roundRect(4, 4, 312, 152, 28);
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 8;
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold ${lines.length > 1 ? 66 : 84}px system-ui, sans-serif`;
+  ctx.fillText(lines[0], 160, lines.length > 1 ? 62 : 80);
+  if (lines[1]) {
+    ctx.font = 'bold 34px system-ui, sans-serif';
+    ctx.fillText(lines[1], 160, 122);
+  }
+  return c.toDataURL('image/png');
+}
+
 function drawBackArt(): string {
   const c = document.createElement('canvas');
   c.width = 256;
@@ -205,6 +233,9 @@ export class ArTabletop {
   private artGeneration = 0;
   private lastSeatSceneJson = new Map<string, string>();
   onJoin: ArJoinHandler | null = null;
+  /** Page-supplied: what selling `kind` earns the active trader now. */
+  previewFor: ((kind: string) => SalePreview | null) | null = null;
+  private lastSeatAssetsJson = new Map<string, string>();
   viewers = 0;
   onViewersChanged: ((n: number) => void) | null = null;
   private seatNames = new Map<string, string>();
@@ -447,6 +478,44 @@ export class ArTabletop {
           face: `s-${card.kind}`,
           back: 'back-s',
         });
+      }
+      // Private extras, drawn only for this seat: the sale preview over
+      // each sellable good on the player's own token rail while it is their
+      // turn, and the secret values of the bonus tokens they have earned.
+      const seatAssets: Record<string, ArAsset> = {};
+      const tileRot = seatNo === 1 ? Math.PI : 0;
+      if (player && round?.status === 'active' && round.activeUid === player.uid && this.previewFor) {
+        for (const good of ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather']) {
+          const p: SalePreview | null = this.previewFor(good);
+          if (!p) continue;
+          const rect = document
+            .querySelector(`[data-token-view-seat="${seatNo}"] [data-token-kind="${good}"]`)
+            ?.getBoundingClientRect();
+          if (!rect) continue;
+          const id = `prev-${p.base}-${p.bonus ?? 'none'}`;
+          const tw = rect.width * this.mPerPx * 0.9;
+          seatAssets[id] = { img: drawTextTile([`+${p.base}`, p.bonus ? `+${p.bonus} bonus` : ''].filter(Boolean), '#1d7a4a'), wM: tw, hM: tw / 2 };
+          const { xM, zM } = this.toMeters(rect);
+          handNodes.push({ id: `prev:${good}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, face: id });
+        }
+      }
+      if (player && round) {
+        for (const token of round.ownedBonusTokens[player.uid] ?? []) {
+          const rect = document
+            .querySelector(`[data-owned-bonus="${CSS.escape(token.id)}"]`)
+            ?.getBoundingClientRect();
+          if (!rect) continue;
+          const id = `bon-${token.value}`;
+          const tw = rect.width * this.mPerPx * 1.1;
+          seatAssets[id] = { img: drawTextTile([String(token.value)], '#a6442d'), wM: tw, hM: tw / 2 };
+          const { xM, zM } = this.toMeters(rect);
+          handNodes.push({ id: `bonus:${token.id}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, face: id });
+        }
+      }
+      const seatAssetsJson = JSON.stringify(Object.keys(seatAssets).sort());
+      if (this.lastSeatAssetsJson.get(seat) !== seatAssetsJson) {
+        this.lastSeatAssetsJson.set(seat, seatAssetsJson);
+        this.host.publishAssetsFor(seat, seatAssets);
       }
       const name = player?.displayName ?? this.seatNames.get(seat);
       const scene = { nodes: handNodes, ...(name ? { player: { name } } : {}) };
