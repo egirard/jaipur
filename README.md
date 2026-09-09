@@ -58,6 +58,21 @@ order, herds, and bonus-token order—will be readable by both authenticated
 clients. The normal client will enforce legal actions and reveal only the
 information appropriate to its player.
 
+## AR tabletop (this fork)
+
+This fork attaches the [AR Card Viewer](https://github.com/egirard/ARViewer)
+to tabletop mode: phones scan a seat's AR QR, join over the AR relay, and
+see their private cards in AR, while all play happens on the table.
+
+- Public tabletop: **https://egirard.github.io/jaipur/tt/?bot=1** (solitaire
+  against the bot; drop `bot=1` for two seats). Set the screen size once
+  with `?diag=INCHES` (remembered; default 55).
+- This deployment carries no Firebase configuration, so the tabletop keeps
+  the game in the browser's local storage (`?local=1` forces this mode on
+  any build). The AR table is the only writer, so nothing else is needed.
+- The AR viewer and relay are hosted by the ARViewer project; the QR
+  codes on the table embed them.
+
 ## Development
 
 The complete rules loop is implemented: two traders can create and join a
