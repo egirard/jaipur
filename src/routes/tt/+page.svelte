@@ -264,6 +264,7 @@
       ar.attach();
       arDiag = currentDiagInches();
       refreshPhysical();
+      if (pageParams.get('scale') === '1') scalePanelOpen = true; // deep link to the panel
       ar.onGeometryChanged = () => {
         refreshPhysical();
         void tick().then(() => ar?.publishFromState(lobby));
