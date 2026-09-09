@@ -985,7 +985,12 @@
         {:else if promptReturns.length > 0}
           <span>{promptReturns.length} selected · tap a return area or token stack.</span>
         {:else}
-          <span>Tap your face-down cards (see them in AR) to select, then use the market or token supplies.</span>
+          {@const last = lobby.activity.findLast((a) => a.type.startsWith('cards/'))}
+          {@const activeName = lobby.players.find((p) => p.uid === activeUid)?.displayName ?? 'Trader'}
+          <span>
+            {#if last && last.actorUid !== activeUid}<strong>{playerName(last.actorUid)}</strong> {activityDescription(last)} · {/if}
+            <strong>{activeName}</strong>: tap your face-down cards (see them in AR) to select, then use the market or token supplies.
+          </span>
         {/if}
       </div>
       <div class="market-stage">
