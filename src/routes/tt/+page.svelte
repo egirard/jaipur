@@ -12,6 +12,11 @@
   import TokenChip from '$lib/TokenChip.svelte';
   import { initializeFirebase } from '$lib/firebase';
   import {
+    createLocalGameRepository,
+    localGameRoomExists,
+    localHostUid
+  } from '$lib/local-game-repository';
+  import {
     createGameRepository,
     gameRoomExists,
     type GameRepository
@@ -52,6 +57,7 @@
   // brings its QR back for anyone who wants it, never both per player.
   let legacyPhone = $state(false);
   let arDiag = $state(55);
+  let localStore = $state(false);
   let solitaire = false;
   let scheduledBotKey = '';
   let startingRound = false;
@@ -107,23 +113,30 @@
   onMount(async () => {
     try {
       marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') === 'on';
-      const services = await initializeFirebase();
-      hostUid = services.auth.currentUser?.uid ?? '';
+      const pageParams = new URLSearchParams(location.search);
+      // Local store: the AR table is the only writer, so a game can live
+      // entirely in this browser — no Firebase project needed. Chosen with
+      // ?local=1, or automatically when the build carries no Firebase config
+      // (e.g. the fork's public Pages deployment).
+      localStore = pageParams.get('local') === '1' || !import.meta.env.VITE_FIREBASE_API_KEY;
+      const services = localStore ? null : await initializeFirebase();
+      hostUid = localStore ? localHostUid() : (services!.auth.currentUser?.uid ?? '');
+      const roomExists = async (id: string) =>
+        localStore ? localGameRoomExists(id) : gameRoomExists(services!.db, id);
       // Test hook: ?game=ABCDE pins the room code (reusing it across
       // reloads) so scripted runs know the ids up front.
-      const pageParams = new URLSearchParams(location.search);
       const forcedGame = pageParams.get('game');
       let freshGame = true;
       if (forcedGame && isRoomCode(forcedGame.toUpperCase())) {
         gameId = forcedGame.toUpperCase();
-        freshGame = !(await gameRoomExists(services.db, gameId));
+        freshGame = !(await roomExists(gameId));
       } else {
         let attempts = 0;
         do {
           gameId = generateRoomCode();
           attempts += 1;
-        } while (attempts < 8 && (await gameRoomExists(services.db, gameId)));
-        if (await gameRoomExists(services.db, gameId)) {
+        } while (attempts < 8 && (await roomExists(gameId)));
+        if (await roomExists(gameId)) {
           throw new Error('Could not reserve a tabletop. Reload to try again.');
         }
       }
@@ -144,7 +157,9 @@
         };
       }));
 
-      const attached = createGameRepository(services.db, gameId, hostUid);
+      const attached = localStore
+        ? createLocalGameRepository(gameId, hostUid)
+        : createGameRepository(services!.db, gameId, hostUid);
       repository = attached;
       attached.subscribe(
         (events) => {
@@ -183,7 +198,9 @@
         },
         (nextStatus) => {
           statusKind = nextStatus === 'synced' ? 'synced' : 'syncing';
-          status = nextStatus === 'synced' ? 'Tabletop synced' : 'Synchronizing tabletop…';
+          status = nextStatus === 'synced'
+            ? (localStore ? 'Tabletop (local store)' : 'Tabletop synced')
+            : 'Synchronizing tabletop…';
         }
       );
       if (freshGame) await attached.append('tabletop/created', { gameId });
