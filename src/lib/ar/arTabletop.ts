@@ -160,31 +160,40 @@ function drawCardArt(kind: string): string {
   return c.toDataURL('image/png');
 }
 
-/** Private AR-only tile: sale preview ("+7", "+4–6 bonus") or a bonus
- *  token's secret value. */
-function drawTextTile(lines: string[], color: string): string {
+/** A coin-shaped private tile with a large value, in the table's token
+ *  style (used for the sale preview total and secret bonus values). */
+function drawCoinTile(text: string, fill: string, ring: string): string {
   const c = document.createElement('canvas');
-  c.width = 320;
-  c.height = 160;
+  c.width = c.height = 256;
   const ctx = c.getContext('2d')!;
-  ctx.fillStyle = 'rgba(255, 250, 240, 0.92)';
+  ctx.fillStyle = fill;
   ctx.beginPath();
-  ctx.roundRect(4, 4, 312, 152, 28);
+  ctx.arc(128, 128, 118, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 8;
+  ctx.lineWidth = 12;
+  ctx.strokeStyle = ring;
   ctx.stroke();
-  ctx.fillStyle = color;
+  ctx.setLineDash([8, 8]);
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(128, 128, 100, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#fffbea';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `bold ${lines.length > 1 ? 66 : 84}px system-ui, sans-serif`;
-  ctx.fillText(lines[0], 160, lines.length > 1 ? 62 : 80);
-  if (lines[1]) {
-    ctx.font = 'bold 34px system-ui, sans-serif';
-    ctx.fillText(lines[1], 160, 122);
-  }
+  ctx.font = `bold ${text.length > 2 ? 96 : 120}px system-ui, sans-serif`;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = '#07110f';
+  ctx.strokeText(text, 128, 136);
+  ctx.fillText(text, 128, 136);
   return c.toDataURL('image/png');
 }
+
+/** A fully transparent 1×1 face: a node carrying only its glow halo, used
+ *  to make a physical coin on the table glow in AR. */
+const GLOW_DOT = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
 function drawBackArt(): string {
   const c = document.createElement('canvas');
@@ -488,15 +497,30 @@ export class ArTabletop {
         for (const good of ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather']) {
           const p: SalePreview | null = this.previewFor(good);
           if (!p) continue;
-          const rect = document
-            .querySelector(`[data-token-view-seat="${seatNo}"] [data-token-kind="${good}"]`)
-            ?.getBoundingClientRect();
-          if (!rect) continue;
-          const id = `prev-${p.base}-${p.bonus ?? 'none'}`;
-          const tw = rect.width * this.mPerPx * 0.9;
-          seatAssets[id] = { img: drawTextTile([`+${p.base}`, p.bonus ? `+${p.bonus} bonus` : ''].filter(Boolean), '#1d7a4a'), wM: tw, hM: tw / 2 };
-          const { xM, zM } = this.toMeters(rect);
-          handNodes.push({ id: `prev:${good}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, face: id });
+          const stack = document.querySelector(`[data-token-view-seat="${seatNo}"] [data-token-kind="${good}"]`);
+          if (!stack) continue;
+          // The first n coins (what the sale would take) glow in place…
+          const coins = [...stack.querySelectorAll<HTMLElement>('[data-supply-token-id]')].slice(0, p.cards);
+          let glowM = 0;
+          coins.forEach((coin, i) => {
+            const rect = coin.getBoundingClientRect();
+            glowM = rect.width * this.mPerPx;
+            seatAssets['glow-dot'] = { img: GLOW_DOT, wM: glowM, hM: glowM };
+            const { xM, zM } = this.toMeters(rect);
+            handNodes.push({ id: `prev:${good}:${i}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#66ffcc', face: 'glow-dot' });
+          });
+          // …and a glowing coin beside the stack's name shows the total.
+          const head = stack.querySelector('.rail-head')?.getBoundingClientRect() ?? stack.getBoundingClientRect();
+          const id = `prev-${p.base}`;
+          const cw = Math.max(glowM * 1.4, head.height * this.mPerPx * 1.6);
+          seatAssets[id] = { img: drawCoinTile(`+${p.base}`, '#1d7a4a', '#eafff0'), wM: cw, hM: cw };
+          const { xM, zM } = this.toMeters(head);
+          handNodes.push({ id: `prev:${good}:total`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#66ffcc', face: id });
+          if (p.bonus) {
+            const bid = `prevb-${p.bonus}`;
+            seatAssets[bid] = { img: drawCoinTile(`+${p.bonus}`, '#7a4a1d', '#fff0e0'), wM: cw * 0.8, hM: cw * 0.8 };
+            handNodes.push({ id: `prev:${good}:bonus`, kind: 'tile', xM: xM + (seatNo === 1 ? -cw : cw), zM, rotY: tileRot, faceUp: true, peek: false, glow: '#ffd27a', face: bid });
+          }
         }
       }
       if (player && round) {
@@ -506,10 +530,10 @@ export class ArTabletop {
             ?.getBoundingClientRect();
           if (!rect) continue;
           const id = `bon-${token.value}`;
-          const tw = rect.width * this.mPerPx * 1.1;
-          seatAssets[id] = { img: drawTextTile([String(token.value)], '#a6442d'), wM: tw, hM: tw / 2 };
+          const cw = rect.width * this.mPerPx * 1.5;
+          seatAssets[id] = { img: drawCoinTile(String(token.value), '#a6442d', '#fff0e0'), wM: cw, hM: cw };
           const { xM, zM } = this.toMeters(rect);
-          handNodes.push({ id: `bonus:${token.id}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, face: id });
+          handNodes.push({ id: `bonus:${token.id}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#ffd27a', face: id });
         }
       }
       const seatAssetsJson = JSON.stringify(Object.keys(seatAssets).sort());

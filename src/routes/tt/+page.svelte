@@ -323,6 +323,7 @@
       // the next store change.
       const live = activeSeat();
       if (live && live !== marketFacingSeat && pendingTurnSeat === undefined) applyMarketFacing(live);
+      void tick().then(() => ar?.publishFromState(lobby)); // busy cleared
     }
   }
 
@@ -931,6 +932,8 @@
         while (cardFlights.length > 0 || tokenFlights.length > 0) await wait(25);
       } finally {
         actionAnimating = false;
+        // Not busy any more: the AR sale preview depends on that.
+        void tick().then(() => ar?.publishFromState(lobby));
       }
     }
   }

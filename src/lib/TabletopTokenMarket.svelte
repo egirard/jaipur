@@ -23,10 +23,10 @@
   } = $props();
 
   // Coins overlap slightly (the most valuable, leftmost coin on top) so a
-  // stack of up to six fits on one line; seven or more split into two
+  // stack of up to five fits on one line; six or more split into two
   // lines with the larger line on top. The top of the stack comes first.
   const rows = (tokens: RoundState['goodsTokens'][Good]) => {
-    if (tokens.length <= 6) return [tokens];
+    if (tokens.length <= 5) return [tokens];
     const top = Math.ceil(tokens.length / 2);
     return [tokens.slice(0, top), tokens.slice(top)];
   };
