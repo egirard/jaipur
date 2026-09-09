@@ -64,6 +64,8 @@ This fork attaches the [AR Card Viewer](https://github.com/egirard/ARViewer)
 to tabletop mode: phones scan a seat's AR QR, join over the AR relay, and
 see their private cards in AR, while all play happens on the table.
 
+- Deploy with `scripts/deploy.sh` (pushes `main` and dispatches the
+  workflow — push events alone have not been starting runs on this fork).
 - Public tabletop: **https://egirard.github.io/jaipur/tt/?bot=1** (solitaire
   against the bot; drop `bot=1` for two seats). Set the screen size once
   with `?diag=INCHES` (remembered; default 55).
