@@ -8,7 +8,7 @@
   import PieceArt from '$lib/PieceArt.svelte';
   import GameSummary from '$lib/GameSummary.svelte';
   import StableMarketLayout from '$lib/StableMarketLayout.svelte';
-  import TabletopTokenMarket from '$lib/TabletopTokenMarket.svelte';
+  import TabletopTokenMarket, { type SalePreview } from '$lib/TabletopTokenMarket.svelte';
   import TokenChip from '$lib/TokenChip.svelte';
   import { initializeFirebase } from '$lib/firebase';
   import {
@@ -249,7 +249,8 @@
       ar = new ArTabletop(
         pageParams.get('arsession')?.slice(0, 32) ??
         localStorage.getItem('jaipur:ar:session') ??
-        undefined
+        undefined,
+        base
       );
       localStorage.setItem('jaipur:ar:session', ar.host.session);
       ar.onJoin = (seat, name) => void joinFromAr(seat, name);
@@ -572,11 +573,17 @@
     const returnCardId = selectedReturnIds(uid)[0];
     if (!returnCardId) return;
     startIntentFlight(uid, returnCardId, marketCardId);
-    await publishIntent(
-      uid,
-      selectedReturnIds(uid).filter((id) => id !== returnCardId),
-      { ...loads, [marketCardId]: returnCardId }
-    );
+    let remaining = selectedReturnIds(uid).filter((id) => id !== returnCardId);
+    const nextLoads = { ...loads, [marketCardId]: returnCardId };
+    // Play improvement: placing a camel re-selects the next free camel, so
+    // a multi-camel trade is one tap per market card.
+    const herd = lobby.round.herds[uid] ?? [];
+    if (herd.some((c) => c.id === returnCardId) && remaining.length === 0) {
+      const placed = Object.values(nextLoads);
+      const nextCamel = [...herd].reverse().find((c) => !placed.includes(c.id));
+      if (nextCamel) remaining = [nextCamel.id];
+    }
+    await publishIntent(uid, remaining, nextLoads);
   }
 
   // Why the staged exchange can't be confirmed yet, in the player's terms
@@ -617,6 +624,30 @@
     }
     return lobby.round.hands[uid]?.filter((card) => card.kind === kind).map(({ id }) => id) ?? [];
   }
+
+  // What selling `kind` right now would earn: the top tokens of that stack
+  // for the cards that would be sold, plus the bonus range for 3/4/5+.
+  function salePreview(kind: Good): SalePreview | null {
+    const uid = lobby.round?.activeUid;
+    if (!uid || !lobby.round || !canSell(kind)) return null;
+    const cards = saleIds(uid, kind).length;
+    const base = lobby.round.goodsTokens[kind].slice(0, cards).reduce((sum, token) => sum + token.value, 0);
+    const size = cards >= 5 ? '5' : cards === 4 ? '4' : cards === 3 ? '3' : null;
+    const bonus = size && lobby.round.bonusTokens[size].length > 0
+      ? { '3': '1–3', '4': '4–6', '5': '8–10' }[size]
+      : null;
+    return { cards, base, bonus };
+  }
+
+  // Abandon a partially staged trade: clears placed returns and selection.
+  async function cancelTrade(uid: string) {
+    if (!lobby.round || lobby.round.activeUid !== uid) return;
+    await publishIntent(uid, [], {});
+  }
+
+  // Sale celebration: after the token flights land, a summary rises from
+  // the player's token zone ("4 tokens · +7!") and fades.
+  let saleSummaries = $state<Array<{ key: number; left: number; top: number; inverted: boolean; count: number; goods: number; bonusCount: number }>>([]);
 
   function canSell(kind: Good): boolean {
     const uid = lobby.round?.activeUid;
@@ -869,6 +900,24 @@
       }];
       setTimeout(() => tokenFlights = tokenFlights.filter((flight) => flight.key !== key), 1000 + delay);
     });
+    for (const activity of activities) {
+      if (activity.type !== 'cards/sold' || tokenMovements.length === 0) continue;
+      const uid = activity.actorUid;
+      const target = box(`[data-table-tokens="${CSS.escape(uid)}"]`);
+      if (!target) continue;
+      const goods = tokenMovements.filter((m) => !m.token.kind.startsWith('bonus-')).reduce((sum, m) => sum + m.token.value, 0);
+      const bonusCount = tokenMovements.filter((m) => m.token.kind.startsWith('bonus-')).length;
+      const seat = lobby.players.find((p) => p.uid === uid)?.seat;
+      const key = ++flightSequence;
+      const lastDelay = Math.max(...tokenMovements.map((m) => m.delay));
+      setTimeout(() => {
+        saleSummaries = [...saleSummaries, {
+          key, left: target.left + target.width / 2, top: target.top + target.height / 2,
+          inverted: seat === 1, count: tokenMovements.length, goods, bonusCount
+        }];
+        setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600);
+      }, 900 + lastDelay);
+    }
     if (hasAnimation) {
       try {
         while (cardFlights.length > 0 || tokenFlights.length > 0) await wait(25);
@@ -994,7 +1043,8 @@
               style={`--pile-index:${index}`}
             />
           {/each}
-          {#if herdSelectedCount(player.uid) > 0}<span class="herd-badge">{herdSelectedCount(player.uid)}</span>{/if}
+          <span class="herd-count" data-herd-count={player.uid} aria-hidden="true">{lobby.round?.herds[player.uid]?.length ?? 0}</span>
+          {#if herdSelectedCount(player.uid) > 0}<span class="herd-badge">{herdSelectedCount(player.uid)} staged</span>{/if}
         </button>
         <span>Herd</span>
       </div>
@@ -1051,7 +1101,13 @@
         aria-label="AR screen scale settings"
         data-ar-diag={arDiag}
         onclick={() => { scalePanelOpen = !scalePanelOpen; refreshPhysical(); }}
-      >AR scale {arDiag}″{physical && !physical.fullscreen ? ' · windowed' : ''}</button>
+      ><span class="scale-gear" aria-hidden="true">
+          <svg viewBox="0 0 48 48" width="1em" height="1em">
+            <path fill="currentColor" d="M24 4l3 4.5 5.3-1.4 1.4 5.3L38.5 15 36 20l4 3.6-4 3.6 2.5 5-4.8 2.6-1.4 5.3-5.3-1.4L24 44l-3-4.5-5.3 1.4-1.4-5.3L9.5 33 12 28l-4-3.6 4-3.6-2.5-5 4.8-2.6 1.4-5.3 5.3 1.4z" opacity="0.28"/>
+            <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M15 33L33 15M15 33h5m-5 0v-5M33 15h-5m5 0v5"/>
+          </svg>
+          <b>{arDiag}″</b>
+        </span>{#if physical && !physical.fullscreen}<small class="scale-note">win</small>{/if}</button>
       {#if lobby.round}
         <span>Round {lobby.round.number}</span>
         <button
@@ -1087,20 +1143,25 @@
         {:else if turnTransitioning}
           <span>Passing turn…</span>
         {:else if pendingDraw}
-          <span>{pendingDraw.kind === 'camels' ? `Take all ${pendingDraw.cardIds.length} camels?` : 'Take this card?'}</span>
+          <span>{pendingDraw.kind === 'camels' ? `Take all ${pendingDraw.cardIds.length} camels? Tap a ✓ camel to confirm.` : 'Take this card? Tap it again to confirm.'}</span>
           <button type="button" disabled={busy} data-confirm-draw onclick={confirmPendingDraw}>Confirm</button>
           <button type="button" disabled={busy} data-abandon-draw onclick={abandonPendingDraw}>Undo</button>
         {:else if Object.keys(promptLoads).length >= 2}
           {@const problem = exchangeProblem(activeUid)}
-          <span>{problem ?? `${Object.keys(promptLoads).length} face-down returns placed.`}</span>
+          <span>{problem ?? `${Object.keys(promptLoads).length} returns placed · tap a ✓ card or Trade.`}</span>
           <button
             type="button"
             disabled={!isLegalExchange(lobby.round, activeUid, Object.keys(promptLoads), Object.values(promptLoads))}
             data-confirm-exchange
             onclick={() => confirmExchange(activeUid)}
           >Trade {Object.keys(promptLoads).length} for {Object.values(promptLoads).length}</button>
+          <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Cancel</button>
+        {:else if Object.keys(promptLoads).length === 1}
+          <span>1 return placed · place another, or cancel.</span>
+          <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Cancel</button>
         {:else if promptReturns.length > 0}
           <span>{promptReturns.length} selected · tap a return area or token stack.</span>
+          <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Clear</button>
         {:else}
           {@const last = lobby.activity.findLast((a) => a.type.startsWith('cards/'))}
           {@const activeName = lobby.players.find((p) => p.uid === activeUid)?.displayName ?? 'Trader'}
@@ -1127,6 +1188,8 @@
           {@const card = round.market[marketIndex]}
           {@const activeUid = round.activeUid}
           {@const loadedReturnId = exchangeLoads(activeUid)[card.id]}
+          {@const exchangeReady = Boolean(loadedReturnId) && !pendingDraw &&
+            isLegalExchange(round, activeUid, Object.keys(exchangeLoads(activeUid)), Object.values(exchangeLoads(activeUid)))}
           <div
             class="table-market-slot"
             data-market-slot-index={marketIndex}
@@ -1135,17 +1198,29 @@
             {#if isPendingDrawCard(card.id)}
               <button
                 type="button"
-                class="market-card pending-draw-card"
+                class="market-card confirm-ready"
+                class:camel={card.kind === 'camel'}
                 disabled={busy}
-                aria-label="Confirm draw"
+                aria-label={pendingDraw?.kind === 'camels' ? 'Confirm: take all camels' : 'Confirm: take this card'}
                 data-market-card-id={card.id}
                 data-pending-draw-card={card.id}
                 onclick={confirmPendingDraw}
               >
-                <PieceArt
-                  kind="card-back"
-                  label={pendingDraw?.kind === 'camels' ? 'Draw Camels' : 'Draw Single'}
-                />
+                <PieceArt kind={card.kind} label={label(card.kind)} detail={card.id} />
+                <span class="confirm-mark" aria-hidden="true">✓</span>
+              </button>
+            {:else if exchangeReady}
+              <button
+                type="button"
+                class="market-card confirm-ready"
+                disabled={busy}
+                aria-label={`Confirm the trade (taking ${label(card.kind)})`}
+                data-market-card-id={card.id}
+                data-confirm-exchange-card={card.id}
+                onclick={() => confirmExchange(activeUid)}
+              >
+                <PieceArt kind={card.kind} label={label(card.kind)} detail={card.id} />
+                <span class="confirm-mark" aria-hidden="true">✓</span>
               </button>
             {:else}
             <button
@@ -1289,6 +1364,7 @@
       {label}
       {canSell}
       onSell={(kind) => sell(kind, 1)}
+      preview={salePreview}
     />
   </div>
   <div class="token-view bottom-token-view">
@@ -1299,6 +1375,7 @@
       {label}
       {canSell}
       onSell={(kind) => sell(kind, 2)}
+      preview={salePreview}
     />
   </div>
 
@@ -1327,8 +1404,19 @@
     <span
       class="table-token-flight"
       aria-hidden="true"
-      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms`}
+      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.28)}px`}
     ><TokenChip token={flight.token} hidden={flight.token.kind.startsWith('bonus-')} /></span>
+  {/each}
+  {#each saleSummaries as summary (summary.key)}
+    <span
+      class="sale-summary"
+      class:inverted={summary.inverted}
+      aria-hidden="true"
+      style={`--left:${summary.left}px;--top:${summary.top}px`}
+    >
+      <span class="sale-coins">{#each Array(summary.count) as _, i}<i style={`--i:${i}`}></i>{/each}</span>
+      <strong>+{summary.goods}{summary.bonusCount > 0 ? ` +bonus` : ''}!</strong>
+    </span>
   {/each}
 </main>
 
@@ -1444,7 +1532,7 @@
   .table-hand-card > img { display: block; width: 100%; height: 100%; object-fit: cover; }
   .table-hand-card:disabled, .herd-pile:disabled { cursor: default; }
   .herd-pile { display: block; padding: 0; border: none; background: none; cursor: pointer; }
-  .herd-badge { position: absolute; right: -0.2rem; top: -0.4rem; z-index: 2; min-width: 1.6rem; padding: 0.15rem 0.4rem; border-radius: 99rem; background: #66ffcc; color: #0d2622; font-weight: 800; font-size: 0.9rem; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
+  .herd-badge { position: absolute; right: -0.2rem; bottom: -0.4rem; z-index: 3; min-width: 1.6rem; padding: 0.15rem 0.4rem; border-radius: 99rem; background: #66ffcc; color: #0d2622; font-weight: 800; font-size: 0.9rem; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
   .table-hand-card.selected, .table-herd-card.selected { transform: translateY(-14%); box-shadow: 0 0 0 3px #66ffcc, 0 0.5rem 1rem rgb(10 32 30 / 35%); z-index: 1; }
   .table-hand-card.loaded, .table-herd-card.loaded { opacity: 0.45; }
   .market-card :global(.piece-image) { width: 100%; height: 100%; object-fit: cover; }
@@ -1587,7 +1675,6 @@
   .market-prompt.rotating { opacity: 0; }
   .market-prompt button { min-height: 36px; padding: 0.3rem 0.65rem; border-radius: 99rem; }
   .draw-pending .table-exchange-target { visibility: hidden; }
-  .pending-draw-card :global(.piece-image) { animation: pending-draw-turn 220ms ease-out both; transform-origin: center; }
   @keyframes pending-draw-turn {
     from { opacity: 0.45; transform: rotateY(80deg); }
     to { opacity: 1; transform: rotateY(0); }
@@ -1627,7 +1714,47 @@
   .table-card-flight.flips .table-card-flight-inner { animation: table-card-flip 860ms ease-in-out var(--flight-delay) both; }
   .table-card-flight img { position: absolute; width: 100%; height: 100%; inset: 0; backface-visibility: hidden; border: 2px solid #315f58; border-radius: 0.55rem; box-shadow: 0 0.7rem 1rem rgb(0 0 0 / 28%); object-fit: cover; }
   .table-card-flight-front { transform: rotateY(180deg); }
+  /* Tokens fly on an arc: `translate` carries them across, `transform`
+     lifts them mid-way; the two animate independently. */
+  .table-token-flight { animation: token-flight-across 1000ms cubic-bezier(0.3, 0.6, 0.35, 1) var(--flight-delay) both, token-flight-lift 1000ms ease-in-out var(--flight-delay) both; }
   .table-token-flight :global(.token-chip) { width: 100%; height: 100%; filter: drop-shadow(0 0.5rem 0.5rem rgb(0 0 0 / 28%)); }
+  @keyframes token-flight-across {
+    0% { translate: 0 0; opacity: 1; }
+    80% { translate: calc(var(--end-left) - var(--start-left)) calc(var(--end-top) - var(--start-top)); opacity: 1; width: var(--start-size); height: var(--start-size); }
+    100% { translate: calc(var(--end-left) - var(--start-left)) calc(var(--end-top) - var(--start-top)); opacity: 0; width: var(--end-size); height: var(--end-size); }
+  }
+  @keyframes token-flight-lift {
+    0% { transform: translateY(0) scale(1); }
+    45% { transform: translateY(calc(var(--arc-lift) * -1)) scale(1.25); }
+    100% { transform: translateY(0) scale(0.9); }
+  }
+  .sale-summary { position: fixed; z-index: 45; left: var(--left); top: var(--top); display: grid; justify-items: center; gap: 0.2rem; pointer-events: none; transform: translate(-50%, -50%); animation: sale-summary 2600ms ease-out both; }
+  .sale-summary.inverted { animation-name: sale-summary-inverted; }
+  .sale-summary strong { color: #c8281e; font-size: clamp(1.6rem, 5vmin, 4rem); font-weight: 900; line-height: 1; text-shadow: 0 2px 0 #fff, 0 0 12px #fff; }
+  .sale-coins { display: flex; gap: 0.15rem; }
+  .sale-coins i { display: block; width: clamp(0.9rem, 2.2vmin, 1.8rem); height: clamp(0.9rem, 2.2vmin, 1.8rem); border: 2px solid #c8281e; border-radius: 50%; opacity: 0.7; animation: sale-coin 1400ms ease-out both; animation-delay: calc(var(--i) * 60ms); }
+  @keyframes sale-coin { 0% { transform: scale(1); opacity: 0.9; } 100% { transform: scale(0.6); opacity: 0; } }
+  @keyframes sale-summary {
+    0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
+    15% { transform: translate(-50%, -60%) scale(1.1); opacity: 1; }
+    70% { transform: translate(-50%, -90%) scale(1); opacity: 1; }
+    100% { transform: translate(-50%, -120%) scale(0.95); opacity: 0; }
+  }
+  @keyframes sale-summary-inverted {
+    0% { transform: translate(-50%, -50%) rotate(180deg) scale(0.6); opacity: 0; }
+    15% { transform: translate(-50%, -40%) rotate(180deg) scale(1.1); opacity: 1; }
+    70% { transform: translate(-50%, -10%) rotate(180deg) scale(1); opacity: 1; }
+    100% { transform: translate(-50%, 20%) rotate(180deg) scale(0.95); opacity: 0; }
+  }
+  .market-card.confirm-ready { border: 3px solid #1d7a4a; box-shadow: 0 0 0 4px rgb(29 122 74 / 30%), 0 0.4rem 1rem rgb(10 32 30 / 30%); animation: confirm-pulse 1.1s ease-in-out infinite; }
+  .confirm-mark { position: absolute; right: 0.15rem; top: 0.15rem; z-index: 3; display: grid; width: 1.8em; height: 1.8em; place-items: center; border-radius: 50%; background: #1d7a4a; color: #eafff0; font-size: clamp(0.9rem, 2.4vmin, 2rem); font-weight: 900; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); }
+  @keyframes confirm-pulse { 0%, 100% { box-shadow: 0 0 0 4px rgb(29 122 74 / 30%); } 50% { box-shadow: 0 0 0 9px rgb(29 122 74 / 12%); } }
+  .market-prompt button.cancel { border-color: #a6442d; color: #a6442d; background: #fff4f0; }
+  .scale-gear { position: relative; display: inline-grid; place-items: center; font-size: 2.2em; line-height: 1; }
+  .scale-gear svg { display: block; }
+  .scale-gear b { position: absolute; font-size: 0.34em; font-weight: 800; color: #183a37; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+  .scale-note { margin-left: 0.2rem; font-size: 0.6em; opacity: 0.7; }
+  .herd-count { position: absolute; left: -0.3rem; top: -0.5rem; z-index: 3; min-width: 1.9rem; padding: 0.15rem 0.45rem; border: 2px solid #fffaf0; border-radius: 99rem; background: #a6442d; color: #fffaf0; font-size: clamp(0.85rem, 2vmin, 1.6rem); font-weight: 900; line-height: 1.2; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
   @keyframes table-flight {
     0% { opacity: 0.96; transform: translate(0, 0) rotate(-3deg); }
     68% { width: var(--end-size); height: var(--end-size); opacity: 1; transform: translate(calc(var(--end-left) - var(--start-left)), calc(var(--end-top) - var(--start-top))) rotate(-2deg) scale(1.05); }

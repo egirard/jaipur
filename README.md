@@ -81,6 +81,31 @@ see their private cards in AR, while all play happens on the table.
 - The AR viewer and relay are hosted by the ARViewer project; the QR
   codes on the table embed them.
 
+### Play improvements (this fork)
+
+Tabletop-play changes layered on upstream, all in `src/routes/tt/`:
+
+- **Camel pile is one tap target**: each tap stages the next free camel; a
+  count badge (total) and a "staged" badge sit on the pile. Placing a camel
+  beside a market card re-selects the next camel, so multi-camel trades are
+  one tap per market card.
+- **In-place confirmation**: the card(s) about to be taken — all camels, a
+  single good, or the market cards of a staged trade — get a green ✓ and a
+  pulse; tapping one confirms. The prompt keeps explaining, and its
+  Confirm/Undo/Trade buttons remain. **Cancel** / **Clear** abandon a
+  partly staged trade.
+- **Token supplies**: each good shows its art behind larger chips (two rows
+  of five when there are more than five), and — when the active trader can
+  sell it — a green **+N** preview (top tokens for the cards in hand, plus
+  the bonus range for 3/4/5 cards), with the chips that would be earned
+  outlined.
+- **Sale celebration**: tokens arc to the seller's zone, then coin outlines
+  and a large red "+N!" rise and fade from it (bonus values stay hidden:
+  "+bonus").
+- **AR card faces** use the game's card icons with a large outlined label;
+  hand cards are published at the table's smaller hand-card size.
+- **AR scale** control is a gear icon with the diagonal and arrows.
+
 ## Development
 
 The complete rules loop is implemented: two traders can create and join a

@@ -89,8 +89,32 @@ export function physicalInfo(diagIn = currentDiagInches()): PhysicalInfo {
   };
 }
 
-/** Simple bold artwork for the test loop: colored card with the goods name.
- *  (Matching jaipur's DOM art pixel-for-pixel is a later polish pass.) */
+/** The game's own card art (static/components/*.webp), loaded once; until
+ *  it arrives the art falls back to a plain colored card. */
+const cardImages = new Map<string, HTMLImageElement>();
+let cardImagesReady: Promise<void> | null = null;
+function loadCardImages(base: string): Promise<void> {
+  if (cardImagesReady) return cardImagesReady;
+  const kinds = ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather', 'camel', 'card-back'];
+  cardImagesReady = Promise.all(
+    kinds.map(
+      (kind) =>
+        new Promise<void>((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            cardImages.set(kind, img);
+            resolve();
+          };
+          img.onerror = () => resolve();
+          img.src = `${base}/components/${kind}.webp`;
+        })
+    )
+  ).then(() => undefined);
+  return cardImagesReady;
+}
+
+/** Card face: the real card icon with the goods name overlaid large and
+ *  outlined, so it reads at a glance against the artwork in AR. */
 function drawCardArt(kind: string): string {
   const c = document.createElement('canvas');
   c.width = 256;
@@ -98,15 +122,39 @@ function drawCardArt(kind: string): string {
   const ctx = c.getContext('2d')!;
   ctx.fillStyle = '#fffaf0';
   ctx.fillRect(0, 0, 256, 358);
-  ctx.fillStyle = KIND_COLORS[kind] ?? '#888';
-  ctx.fillRect(12, 12, 232, 334);
-  ctx.fillStyle = '#183a37';
-  ctx.font = 'bold 34px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(kind.toUpperCase(), 128, 190);
+  const img = cardImages.get(kind);
+  if (img) {
+    // cover-fit the icon inside the border
+    const iw = img.naturalWidth || 1;
+    const ih = img.naturalHeight || 1;
+    const scale = Math.max(232 / iw, 334 / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(12, 12, 232, 334);
+    ctx.clip();
+    ctx.drawImage(img, 128 - dw / 2, 179 - dh / 2, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = KIND_COLORS[kind] ?? '#888';
+    ctx.fillRect(12, 12, 232, 334);
+  }
   ctx.strokeStyle = '#183a37';
   ctx.lineWidth = 6;
   ctx.strokeRect(12, 12, 232, 334);
+  // Label band: big, outlined text on a translucent strip.
+  ctx.fillStyle = 'rgba(24, 58, 55, 0.55)';
+  ctx.fillRect(12, 280, 232, 66);
+  ctx.font = 'bold 44px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#07110f';
+  ctx.strokeText(kind.toUpperCase(), 128, 314);
+  ctx.fillStyle = '#fffbea';
+  ctx.fillText(kind.toUpperCase(), 128, 314);
   return c.toDataURL('image/png');
 }
 
@@ -115,6 +163,14 @@ function drawBackArt(): string {
   c.width = 256;
   c.height = 358;
   const ctx = c.getContext('2d')!;
+  const img = cardImages.get('card-back');
+  if (img) {
+    const scale = Math.max(256 / (img.naturalWidth || 1), 358 / (img.naturalHeight || 1));
+    const dw = (img.naturalWidth || 1) * scale;
+    const dh = (img.naturalHeight || 1) * scale;
+    ctx.drawImage(img, 128 - dw / 2, 179 - dh / 2, dw, dh);
+    return c.toDataURL('image/png');
+  }
   ctx.fillStyle = '#183a37';
   ctx.fillRect(0, 0, 256, 358);
   ctx.strokeStyle = '#2e5a55';
@@ -146,13 +202,20 @@ export class ArTabletop {
   private captureAgain = false;
   private lastTrackingJpeg = '';
   private assetsKey = '';
+  private artGeneration = 0;
   private lastSeatSceneJson = new Map<string, string>();
   onJoin: ArJoinHandler | null = null;
   viewers = 0;
   onViewersChanged: ((n: number) => void) | null = null;
   private seatNames = new Map<string, string>();
 
-  constructor(session?: string) {
+  constructor(session?: string, assetBase = '') {
+    // Real card art arrives asynchronously; once it has, re-render the
+    // assets (the key changes with the art generation) and republish.
+    void loadCardImages(assetBase).then(() => {
+      this.artGeneration += 1;
+      this.onGeometryChanged?.();
+    });
     this.host = new ArHost({
       session,
       onAction: (a: ArAction) => {
@@ -313,7 +376,7 @@ export class ArTabletop {
     // Artwork: card kinds + back at both sizes (content-addressed; only
     // re-sent when a physical card size changes).
     const kinds = ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather', 'camel'];
-    const key = `${wM.toFixed(4)}x${hM.toFixed(4)}|${hwM.toFixed(4)}x${hhM.toFixed(4)}`;
+    const key = `${wM.toFixed(4)}x${hM.toFixed(4)}|${hwM.toFixed(4)}x${hhM.toFixed(4)}|art${this.artGeneration}`;
     if (key !== this.assetsKey) {
       this.assetsKey = key;
       const back = drawBackArt();
