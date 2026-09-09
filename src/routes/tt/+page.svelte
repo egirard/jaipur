@@ -231,6 +231,10 @@
       ar.onViewersChanged = (n) => (arViewers = n);
       ar.attach();
       arDiag = currentDiagInches();
+      // Publish what the store already holds: with the local store the
+      // last notification fired before the AR bridge existed.
+      await tick();
+      ar.publishFromState(lobby);
       arQrs = await Promise.all(([1, 2] as const).map(async (seat) => ({
         seat,
         url: ar!.arViewerUrl(seat),
