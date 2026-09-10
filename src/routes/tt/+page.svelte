@@ -97,8 +97,8 @@
     image: string;
     revealImage?: string;
     concealsDestination: boolean;
-    /** Sale flight: flips in the hand first, then arcs and shrinks to the token stack. */
-    sale?: boolean;
+    /** Arc flight: flips where it lies first (if it has a reveal image), then arcs and resizes. */
+    arc?: boolean;
     startLeft: number;
     startTop: number;
     startSize: number;
@@ -712,7 +712,7 @@
     cardId?: string,
     revealImage?: string,
     concealsDestination = false,
-    sale = false
+    arc = false
   ) {
     if (!source || !destination) {
       if (cardId) arrivingCardIds = arrivingCardIds.filter((id) => id !== cardId);
@@ -727,7 +727,7 @@
       image,
       revealImage,
       concealsDestination,
-      sale,
+      arc,
       startLeft: source.left + (source.width - startSize) / 2,
       startTop: source.top + (source.height - startSize) / 2,
       startSize,
@@ -736,7 +736,7 @@
       endSize,
       delay
     }];
-    setTimeout(() => finishCardFlight(key), (sale ? 1900 : 1400) + delay);
+    setTimeout(() => finishCardFlight(key), (arc ? 1900 : 1400) + delay);
   }
 
   function finishCardFlight(key: number) {
@@ -760,9 +760,63 @@
       componentImage('card-back'),
       0,
       returnCardId,
-      undefined,
+      componentImage('card-back'), // flips (stays face-down: private), then arcs below the market card
+      true,
       true
     );
+  }
+
+  // ---- Development: animation demos ------------------------------------
+  // Each side of the table gets buttons that play the sale animation from
+  // that side with faked card positions (no game state involved), then tidy
+  // up after a 3 s pause.
+  const devMode = import.meta.env.DEV || new URLSearchParams(location.search).get('dev') === '1';
+  const DEMO_VALUES: Record<string, number[]> = { diamond: [7, 7, 5, 5, 5], silver: [5, 5, 5, 5, 5], leather: [4, 3, 2, 1, 1, 1, 1, 1, 1] };
+
+  function demoSale(seat: Seat, kind: Good, count: number) {
+    const panel = box(`[data-seat="${seat}"]`);
+    if (!panel) return;
+    const view = `[data-token-view-seat="${seat}"]`;
+    const stack = box(`${view} [data-token-kind="${kind}"]`) ?? box(view);
+    if (!stack) return;
+    // Card sources: real hand cards, else empty hand slots, else a fan
+    // laid across the seat panel.
+    const handRects = [...document.querySelectorAll<HTMLElement>(`[data-seat="${seat}"] [data-table-hand-card], [data-seat="${seat}"] .hand-slot`)]
+      .map((el) => el.getBoundingClientRect());
+    const size = Math.min(panel.height * 0.6, panel.width / 9);
+    const sources = Array.from({ length: count }, (_, i) =>
+      handRects[i] ?? new DOMRect(panel.left + panel.width * 0.25 + i * size * 0.8, panel.top + (panel.height - size) / 2, size, size));
+    sources.forEach((src, i) =>
+      cardFlight(src, stack, componentImage('card-back'), i * 90, undefined, componentImage(kind), false, true));
+    // Tokens: the stack's coins if the round is on, else the stack itself.
+    const coins = [...document.querySelectorAll<HTMLElement>(`${view} [data-token-kind="${kind}"] [data-supply-token-id]`)].slice(0, count);
+    const dest = box(`[data-seat="${seat}"] [data-table-tokens]`) ?? new DOMRect(panel.left + panel.width / 2 - 40, panel.bottom - 60, 80, 40);
+    const tokenDelay = 1250 + count * 90;
+    const fly = (source: DOMRect, token: Token, delay: number) => {
+      const startSize = Math.min(source.width, source.height, 64);
+      const endSize = Math.min(dest.width, dest.height, startSize);
+      const key = ++flightSequence;
+      tokenFlights = [...tokenFlights, {
+        key, token,
+        startLeft: source.left + (source.width - startSize) / 2, startTop: source.top + (source.height - startSize) / 2, startSize,
+        endLeft: dest.left + (dest.width - endSize) / 2, endTop: dest.top + (dest.height - endSize) / 2, endSize, delay
+      }];
+      setTimeout(() => tokenFlights = tokenFlights.filter((flight) => flight.key !== key), 1000 + delay);
+    };
+    for (let i = 0; i < count; i += 1) {
+      fly(coins[i]?.getBoundingClientRect() ?? stack, { id: `demo-${kind}-${i}`, kind, value: DEMO_VALUES[kind]?.[i] ?? 1 } as Token, tokenDelay + i * 80);
+    }
+    if (count >= 3) {
+      const bonusSize = count >= 5 ? '5' : count === 4 ? '4' : '3';
+      fly(box(`${view} [data-bonus-size="${bonusSize}"]`) ?? stack, { id: `demo-bonus-${bonusSize}`, kind: `bonus-${bonusSize}`, value: 0 } as Token, tokenDelay + count * 80);
+    }
+    const key = ++flightSequence;
+    setTimeout(() => {
+      saleSummaries = [...saleSummaries, { key, left: dest.left + dest.width / 2, top: dest.top + dest.height / 2, inverted: seat === 1, count: count + (count >= 3 ? 1 : 0), cards: count }];
+      setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600);
+    }, 900 + tokenDelay + count * 80);
+    // Tidy up after the show and a 3 s pause.
+    setTimeout(() => { saleSummaries = []; tokenFlights = []; cardFlights = cardFlights.filter((f) => f.cardId); }, tokenDelay + count * 80 + 1000 + 2600 + 3000);
   }
 
   async function animateActivities(
@@ -778,7 +832,7 @@
       revealImage?: string;
       concealDestination: boolean;
       delay: number;
-      sale?: boolean;
+      arc?: boolean;
     }> = [];
     const tokenMovements: Array<{
       source: DOMRect | undefined;
@@ -787,9 +841,13 @@
       delay: number;
     }> = [];
 
+    let refillDelay = 120;
+    let refillStep = 70;
     for (const activity of activities) {
       const uid = activity.actorUid;
       if (activity.type === 'cards/taken-one' || activity.type === 'cards/taken-camels') {
+        // The taken card(s) flip face-down where they lie, then arc into the
+        // hand (or every camel into the herd), shrinking; deck refills wait.
         activity.cardIds?.forEach((cardId, index) => {
           const kind = activity.cardKinds?.[index] as Good | 'camel' | undefined;
           movements.push({
@@ -799,19 +857,29 @@
               ? `[data-table-herd="${CSS.escape(uid)}"]`
               : `[data-table-hand="${CSS.escape(uid)}"]`,
             image: componentImage(kind ?? 'card-back'),
+            revealImage: componentImage(kind === 'camel' ? 'camel' : 'card-back'),
             concealDestination: true,
-            delay: index * 70
+            delay: index * 90,
+            arc: true
           });
         });
+        refillDelay = 1350 + (activity.cardIds?.length ?? 1) * 90;
+        refillStep = activity.type === 'cards/taken-camels' ? 260 : 70;
       }
       if (activity.type === 'cards/exchanged') {
+        // The chosen market cards flip face-down and arc into the hand;
+        // then the returned cards (already face-down below them) flip face
+        // up and slide into the vacated market slots.
+        const taken = activity.cardIds?.length ?? 0;
         activity.cardIds?.forEach((cardId, index) => movements.push({
           cardId,
           source: box(`[data-market-card-id="${CSS.escape(cardId)}"]`),
           destinationSelector: `[data-table-hand="${CSS.escape(uid)}"]`,
           image: componentImage((activity.cardKinds?.[index] as Good) ?? 'card-back'),
+          revealImage: componentImage('card-back'),
           concealDestination: true,
-          delay: index * 70
+          delay: index * 90,
+          arc: true
         }));
         const previousLoads = previous.tabletopIntents[uid]?.exchangeLoads ?? {};
         activity.returnedCardIds?.forEach((cardId, index) => {
@@ -825,7 +893,8 @@
               (activity.returnedCardKinds?.[index] as Good | 'camel' | undefined) ?? 'card-back'
             ),
             concealDestination: true,
-            delay: index * 70
+            delay: 1350 + taken * 90 + index * 120,
+            arc: true
           });
         });
       }
@@ -846,7 +915,7 @@
           revealImage: componentImage((activity.cardKinds?.[index] as Good | undefined) ?? 'leather'),
           concealDestination: false,
           delay: index * 90,
-          sale: true
+          arc: true
         }));
         const oldTokens = new Set([
           ...(previous.round?.ownedGoodsTokens[uid] ?? []),
@@ -869,6 +938,7 @@
     }
 
     const previousMarketIds = new Set(previous.round?.market.map(({ id }) => id) ?? []);
+    // (refillDelay/refillStep are set by the take/camel cases above)
     const returnedIds = new Set(activities.flatMap(({ returnedCardIds }) => returnedCardIds ?? []));
     const refills = next.round?.market.filter(
       ({ id }) => !previousMarketIds.has(id) && !returnedIds.has(id)
@@ -880,7 +950,8 @@
       image: componentImage('card-back'),
       revealImage: componentImage(card.kind),
       concealDestination: true,
-      delay: 120 + index * 70
+      delay: refillDelay + index * refillStep,
+      arc: true
     }));
 
     const hasAnimation = movements.length > 0 || tokenMovements.length > 0;
@@ -890,7 +961,7 @@
       ...movements.filter(({ concealDestination }) => concealDestination).map(({ cardId }) => cardId)
     ])];
     await tick();
-    movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay, sale }) =>
+    movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay, arc }) =>
       cardFlight(
         source,
         box(destinationSelector),
@@ -899,7 +970,7 @@
         cardId,
         revealImage,
         concealDestination,
-        sale
+        arc
       )
     );
     tokenMovements.forEach(({ source, destinationSelector, token, delay }) => {
@@ -1378,6 +1449,21 @@
     </section>
   {/if}
 
+  {#if devMode}
+    <div class="dev-anim top" aria-label="Animation demos, top side">
+      <span>Initiate animation</span>
+      <button type="button" onclick={() => demoSale(1, 'diamond', 3)}>3 diamonds</button>
+      <button type="button" onclick={() => demoSale(1, 'silver', 2)}>2 silver</button>
+      <button type="button" onclick={() => demoSale(1, 'leather', 5)}>5 leather</button>
+    </div>
+    <div class="dev-anim bottom" aria-label="Animation demos, bottom side">
+      <span>Initiate animation</span>
+      <button type="button" onclick={() => demoSale(2, 'diamond', 3)}>3 diamonds</button>
+      <button type="button" onclick={() => demoSale(2, 'silver', 2)}>2 silver</button>
+      <button type="button" onclick={() => demoSale(2, 'leather', 5)}>5 leather</button>
+    </div>
+  {/if}
+
   <div class="bottom-edge edge">
     {#if playerForSeat(2)}
       {@render playerSeat(2, playerForSeat(2)!)}
@@ -1415,7 +1501,7 @@
     <span
       class="table-card-flight"
       class:flips={Boolean(flight.revealImage)}
-      class:sale={Boolean(flight.sale)}
+      class:arc={Boolean(flight.arc)}
       aria-hidden="true"
       style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
       onanimationend={(event) => {
@@ -1787,6 +1873,11 @@
   .confirm-mark { position: absolute; right: 0.15rem; top: 0.15rem; z-index: 3; display: grid; width: 1.8em; height: 1.8em; place-items: center; border-radius: 50%; background: #1d7a4a; color: #eafff0; font-size: clamp(0.9rem, 2.4vmin, 2rem); font-weight: 900; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); }
   @keyframes confirm-pulse { 0%, 100% { box-shadow: 0 0 0 4px rgb(29 122 74 / 30%); } 50% { box-shadow: 0 0 0 9px rgb(29 122 74 / 12%); } }
   .market-prompt button.cancel { border-color: #a6442d; color: #a6442d; background: #fff4f0; }
+  .dev-anim { position: fixed; z-index: 25; display: flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.5rem; border: 1px dashed #a6442d; border-radius: 0.6rem; background: rgb(255 244 240 / 92%); font-size: 0.7rem; }
+  .dev-anim span { font-weight: 700; color: #a6442d; text-transform: uppercase; letter-spacing: 0.06em; }
+  .dev-anim button { min-height: 36px; padding: 0.2rem 0.55rem; border: 1px solid #a6442d; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #a6442d; }
+  .dev-anim.bottom { left: calc(var(--rail-width) + 1rem); bottom: 0.4rem; }
+  .dev-anim.top { right: calc(var(--rail-width) + 1rem); top: 0.4rem; transform: rotate(180deg); }
   .scale-gear { position: relative; display: inline-grid; place-items: center; font-size: 2.2em; line-height: 1; }
   .scale-gear svg { display: block; }
   .scale-gear b { position: absolute; font-size: 0.34em; font-weight: 800; color: #183a37; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
@@ -1798,10 +1889,11 @@
     84% { width: var(--end-size); height: var(--end-size); opacity: 1; transform: translate(calc(var(--end-left) - var(--start-left)), calc(var(--end-top) - var(--start-top))) rotate(1deg) scale(0.97); }
     100% { width: var(--end-size); height: var(--end-size); opacity: 1; transform: translate(calc(var(--end-left) - var(--start-left)), calc(var(--end-top) - var(--start-top))) rotate(0) scale(1); }
   }
-  /* Sale flight: the card flips where it lies (first 30%), then arcs to
-     the good's stack, shrinking as it goes. */
-  .table-card-flight.sale { animation: sale-card-across 1500ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, sale-card-lift 1500ms ease-in-out var(--flight-delay) both; }
-  .table-card-flight.sale .table-card-flight-inner { animation: sale-card-flip 1500ms ease-in-out var(--flight-delay) both; }
+  /* Arc flight: the card flips where it lies (first 30%), then rises on an
+     arc to its destination, resizing as it goes. Used for sales, takes,
+     trades, camels and deck refills. */
+  .table-card-flight.arc { animation: sale-card-across 1500ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, sale-card-lift 1500ms ease-in-out var(--flight-delay) both; }
+  .table-card-flight.arc .table-card-flight-inner { animation: sale-card-flip 1500ms ease-in-out var(--flight-delay) both; }
   @keyframes sale-card-across {
     0%, 30% { translate: 0 0; width: var(--start-size); height: var(--start-size); opacity: 1; }
     100% { translate: calc(var(--end-left) - var(--start-left)) calc(var(--end-top) - var(--start-top)); width: var(--end-size); height: var(--end-size); opacity: 0.85; }
