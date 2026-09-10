@@ -191,9 +191,27 @@ function drawCoinTile(text: string, fill: string, ring: string): string {
   return c.toDataURL('image/png');
 }
 
-/** A fully transparent 1×1 face: a node carrying only its glow halo, used
- *  to make a physical coin on the table glow in AR. */
-const GLOW_DOT = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+/** A translucent ring on a transparent square: laid over a physical coin
+ *  it reads as the coin glowing (the node also carries a glow halo). */
+let glowRing: string | null = null;
+function drawGlowRing(): string {
+  if (glowRing) return glowRing;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d')!;
+  ctx.clearRect(0, 0, 128, 128);
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = 'rgba(102, 255, 204, 0.9)';
+  ctx.beginPath();
+  ctx.arc(64, 64, 54, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(102, 255, 204, 0.18)';
+  ctx.beginPath();
+  ctx.arc(64, 64, 49, 0, Math.PI * 2);
+  ctx.fill();
+  glowRing = c.toDataURL('image/png');
+  return glowRing;
+}
 
 function drawBackArt(): string {
   const c = document.createElement('canvas');
@@ -505,9 +523,9 @@ export class ArTabletop {
           coins.forEach((coin, i) => {
             const rect = coin.getBoundingClientRect();
             glowM = rect.width * this.mPerPx;
-            seatAssets['glow-dot'] = { img: GLOW_DOT, wM: glowM, hM: glowM };
+            seatAssets['glow-ring'] = { img: drawGlowRing(), wM: glowM, hM: glowM };
             const { xM, zM } = this.toMeters(rect);
-            handNodes.push({ id: `prev:${good}:${i}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#66ffcc', face: 'glow-dot' });
+            handNodes.push({ id: `prev:${good}:${i}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#66ffcc', face: 'glow-ring' });
           });
           // …and a glowing coin beside the stack's name shows the total.
           const head = stack.querySelector('.rail-head')?.getBoundingClientRect() ?? stack.getBoundingClientRect();

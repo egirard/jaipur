@@ -410,10 +410,13 @@
     const round = lobby.round;
     if (!botUid || !repository || round?.status !== 'active' || round.activeUid !== botUid) return;
     if (`${lobby.epoch}:${round.number}:${round.turnNumber}` !== expectedKey) return;
-    if (cardFlights.length > 0 || tokenFlights.length > 0) {
+    if (cardFlights.length > 0 || tokenFlights.length > 0 || busy) {
       setTimeout(() => void playBotTurn(expectedKey), 120);
       return;
     }
+    // A beat before the bot moves, so its turn reads as a turn.
+    await wait(500);
+    if (`${lobby.epoch}:${lobby.round?.number}:${lobby.round?.turnNumber}` !== expectedKey) return;
     const observation = createBotObservation(lobby);
     const action = observation ? chooseBotAction(observation) : null;
     if (!observation || !action) return;
@@ -815,8 +818,9 @@
       saleSummaries = [...saleSummaries, { key, left: dest.left + dest.width / 2, top: dest.top + dest.height / 2, inverted: seat === 1, count: count + (count >= 3 ? 1 : 0), cards: count }];
       setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600);
     }, 900 + tokenDelay + count * 80);
-    // Tidy up after the show and a 3 s pause.
-    setTimeout(() => { saleSummaries = []; tokenFlights = []; cardFlights = cardFlights.filter((f) => f.cardId); }, tokenDelay + count * 80 + 1000 + 2600 + 3000);
+    // Flights and the summary remove themselves; nothing else to reset
+    // (a blanket clear here wiped the next run when buttons were pressed
+    // in quick succession).
   }
 
   async function animateActivities(
@@ -857,7 +861,8 @@
               ? `[data-table-herd="${CSS.escape(uid)}"]`
               : `[data-table-hand="${CSS.escape(uid)}"]`,
             image: componentImage(kind ?? 'card-back'),
-            revealImage: componentImage(kind === 'camel' ? 'camel' : 'card-back'),
+            // Camels stay camels: no flip, straight into the arc.
+            revealImage: kind === 'camel' ? undefined : componentImage('card-back'),
             concealDestination: true,
             delay: index * 90,
             arc: true
@@ -1502,6 +1507,7 @@
       class="table-card-flight"
       class:flips={Boolean(flight.revealImage)}
       class:arc={Boolean(flight.arc)}
+      class:noflip={Boolean(flight.arc) && !flight.revealImage}
       aria-hidden="true"
       style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
       onanimationend={(event) => {
@@ -1894,6 +1900,17 @@
      trades, camels and deck refills. */
   .table-card-flight.arc { animation: sale-card-across 1500ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, sale-card-lift 1500ms ease-in-out var(--flight-delay) both; }
   .table-card-flight.arc .table-card-flight-inner { animation: sale-card-flip 1500ms ease-in-out var(--flight-delay) both; }
+  /* Arc without a flip (camels): no initial hold. */
+  .table-card-flight.arc.noflip { animation: arc-card-across-now 1200ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, arc-card-lift-now 1200ms ease-in-out var(--flight-delay) both; }
+  @keyframes arc-card-across-now {
+    0% { translate: 0 0; width: var(--start-size); height: var(--start-size); opacity: 1; }
+    100% { translate: calc(var(--end-left) - var(--start-left)) calc(var(--end-top) - var(--start-top)); width: var(--end-size); height: var(--end-size); opacity: 0.85; }
+  }
+  @keyframes arc-card-lift-now {
+    0% { transform: translateY(0) scale(1); }
+    50% { transform: translateY(calc(var(--arc-lift) * -1)) scale(1.08); }
+    100% { transform: translateY(0) scale(0.7); }
+  }
   @keyframes sale-card-across {
     0%, 30% { translate: 0 0; width: var(--start-size); height: var(--start-size); opacity: 1; }
     100% { translate: calc(var(--end-left) - var(--start-left)) calc(var(--end-top) - var(--start-top)); width: var(--end-size); height: var(--end-size); opacity: 0.85; }
