@@ -189,8 +189,8 @@
   }
   #round-result small { display: block; font-size: 0.6em; font-weight: 600; opacity: 0.75; }
   .result-seal {
-    width: clamp(3.2rem, 9vmin, 5.5rem);
-    height: clamp(3.2rem, 9vmin, 5.5rem);
+    width: clamp(4.2rem, 12vmin, 7.5rem);
+    height: clamp(4.2rem, 12vmin, 7.5rem);
     grid-row: 1 / 4;
     border-radius: 50%;
     object-fit: cover;

@@ -4,6 +4,7 @@
   import '@fontsource/cormorant-garamond/700.css';
   import { base } from '$app/paths';
   import { onMount, tick } from 'svelte';
+  import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
   import PieceArt from '$lib/PieceArt.svelte';
   import GameSummary from '$lib/GameSummary.svelte';
@@ -680,7 +681,7 @@
 
   // Sale celebration: after the token flights land, a summary rises from
   // the player's token zone ("4 tokens · +7!") and fades.
-  let saleSummaries = $state<Array<{ key: number; left: number; top: number; inverted: boolean; count: number; cards: number }>>([]);
+  let saleSummaries = $state<Array<{ key: number; left: number; top: number; inverted: boolean; count: number; cards: number; label?: string }>>([]);
 
   function canSell(kind: Good): boolean {
     const uid = lobby.round?.activeUid;
@@ -759,8 +760,15 @@
     });
   }
 
+  // Comma-separated selectors are tried in the order given (querySelector
+  // alone would return whichever matches first in DOCUMENT order, which made
+  // "the card's own slot, else the hand" resolve to the hand container).
   function box(selector: string): DOMRect | undefined {
-    return document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+    for (const part of selector.split(/,(?![^\[]*\])/)) {
+      const rect = document.querySelector<HTMLElement>(part.trim())?.getBoundingClientRect();
+      if (rect) return rect;
+    }
+    return undefined;
   }
 
   const invertedFor = (uid: string) => lobby.players.find((p) => p.uid === uid)?.seat === 1;
@@ -771,29 +779,64 @@
   // remaining cards slide over.
   let handGhosts = $state<Record<string, { order: string[]; collapsing: boolean }>>({});
 
+  // The hand is drawn newest-first: a drawn card takes the open slot next to
+  // the cards (the left end) and stays there. While a move animates, cards
+  // that just left keep their place as ghosts; on release the ghosts move to
+  // the slot side so only the cards left of a gap slide over to close it.
   function handLayout(uid: string): Array<{ card?: Card; ghost?: string }> {
-    const hand = lobby.round?.hands[uid] ?? [];
+    const display = [...(lobby.round?.hands[uid] ?? [])].reverse();
     const ghosts = handGhosts[uid];
-    if (!ghosts) return hand.map((card) => ({ card }));
-    const byId = new Map(hand.map((card) => [card.id, card]));
-    const out: Array<{ card?: Card; ghost?: string }> = ghosts.order.map((id) =>
+    if (!ghosts) return display.map((card) => ({ card }));
+    const byId = new Map(display.map((card) => [card.id, card]));
+    const ordered: Array<{ card?: Card; ghost?: string }> = ghosts.order.map((id) =>
       byId.has(id) ? { card: byId.get(id) } : { ghost: id });
-    for (const card of hand) if (!ghosts.order.includes(card.id)) out.push({ card });
-    return out;
+    const fresh = display.filter(({ id }) => !ghosts.order.includes(id)).map((card) => ({ card }));
+    if (ghosts.collapsing) {
+      return [...ordered.filter((entry) => entry.ghost), ...fresh, ...ordered.filter((entry) => entry.card)];
+    }
+    return [...fresh, ...ordered];
   }
 
-  function holdHandSpaces(uid: string, order: string[]) {
-    handGhosts = { ...handGhosts, [uid]: { order, collapsing: false } };
+  // Slots, ghosts and cards are ONE keyed list so a slot appearing or
+  // disappearing never shifts the cards between FLIP measurements.
+  function handCells(uid: string): Array<{ key: string; slot?: number; card?: Card; ghost?: string }> {
+    const layout = handLayout(uid);
+    const slots = Array.from({ length: Math.max(0, 7 - layout.length) }, (_, slot) => ({ key: `slot:${slot}`, slot }));
+    return [...slots, ...layout.map((entry) => ({ ...entry, key: entry.card?.id ?? `ghost:${entry.ghost}` }))];
+  }
+
+  // FLIP for hand cells. Seat 1's panel is rotated 180°, so a screen-space
+  // offset has to be negated to move the element the right way.
+  function handFlip(
+    _node: Element,
+    { from, to }: { from: DOMRect; to: DOMRect },
+    params: { duration?: number; inverted?: boolean } = {}
+  ) {
+    const sign = params.inverted ? -1 : 1;
+    const dx = (from.left - to.left) * sign;
+    const dy = (from.top - to.top) * sign;
+    return {
+      duration: dx === 0 && dy === 0 ? 0 : params.duration ?? 420,
+      easing: cubicOut,
+      css: (_t: number, u: number) => `transform: translate(${u * dx}px, ${u * dy}px)`
+    };
+  }
+
+  function holdHandSpaces(uid: string, handOrder: string[]) {
+    handGhosts = { ...handGhosts, [uid]: { order: [...handOrder].reverse(), collapsing: false } };
   }
 
   function releaseHandSpaces(uid: string) {
     const ghosts = handGhosts[uid];
     if (!ghosts) return;
-    handGhosts = { ...handGhosts, [uid]: { ...ghosts, collapsing: true } };
+    handGhosts = { ...handGhosts, [uid]: { ...ghosts, collapsing: true } }; // ghosts join the slot side; cards slide over
+    // Swap the ghosts for real slots only once the slide is long finished:
+    // another list update mid-slide would restart the FLIP from the layout
+    // position (a visible jump).
     setTimeout(() => {
       const { [uid]: _gone, ...rest } = handGhosts;
       handGhosts = rest;
-    }, 520);
+    }, 1500);
   }
 
   function cardFlight(
@@ -812,7 +855,11 @@
       return;
     }
     const startSize = Math.min(source.width, source.height);
-    const endSize = Math.min(destination.width, destination.height, startSize);
+    // Into a card slot: match the slot (growing if need be); onto a token
+    // stack: never larger than the card was.
+    const endSize = concealsDestination
+      ? Math.min(destination.width, destination.height)
+      : Math.min(destination.width, destination.height, startSize);
     const key = ++flightSequence;
     cardFlights = [...cardFlights, {
       key,
@@ -869,7 +916,9 @@
   // Dev hook: seat a player without a phone (drives the table from tests).
   if (devMode && typeof window !== 'undefined') {
     (window as unknown as { __jaipurDev?: unknown }).__jaipurDev = {
-      sit: (seat: number, name = 'Tester') => joinFromAr(String(seat), name)
+      sit: (seat: number, name = 'Tester') => joinFromAr(String(seat), name),
+      demo: () => runAnimationDemo(),
+      demoStep: (index: number, seat: Seat) => DEMO_CATEGORIES[index].run(seat)
     };
   }
   const DEMO_VALUES: Record<string, number[]> = { diamond: [7, 7, 5, 5, 5], silver: [5, 5, 5, 5, 5], leather: [4, 3, 2, 1, 1, 1, 1, 1, 1] };
@@ -1159,6 +1208,7 @@
       destinationSelector: string;
       token: Token;
       delay: number;
+      bonus?: boolean;
     }> = [];
 
     let refillDelay = 120;
@@ -1254,14 +1304,25 @@
           ...(next.round?.ownedGoodsTokens[uid] ?? []),
           ...(next.round?.ownedBonusTokens[uid] ?? [])
         ].filter(({ id }) => !oldTokens.has(id));
-        awards.forEach((token, index) => tokenMovements.push({
-          source: token.kind.startsWith('bonus-')
-            ? box(`${tokenView} [data-bonus-size="${token.kind.replace('bonus-', '')}"]`)
-            : box(`${tokenView} [data-token-kind="${CSS.escape(token.kind)}"] .rail-chip`),
+        const goodsAwards = awards.filter(({ kind }) => !kind.startsWith('bonus-'));
+        const bonusAwards = awards.filter(({ kind }) => kind.startsWith('bonus-'));
+        // after the sold cards have landed on the stack
+        const firstTokenDelay = 1250 + (activity.cardIds?.length ?? 1) * 90;
+        goodsAwards.forEach((token, index) => tokenMovements.push({
+          source: box(`${tokenView} [data-token-kind="${CSS.escape(token.kind)}"] .rail-chip`),
           destinationSelector: `[data-table-tokens="${CSS.escape(uid)}"]`,
           token,
-          // after the sold cards have landed on the stack
-          delay: 1250 + (activity.cardIds?.length ?? 1) * 90 + index * 80
+          delay: firstTokenDelay + index * 80
+        }));
+        // The bonus token is its own beat: it flies once the "cards sold"
+        // message has played, and gets a message of its own.
+        const soldMessageAt = 900 + firstTokenDelay + Math.max(0, goodsAwards.length - 1) * 80;
+        bonusAwards.forEach((token, index) => tokenMovements.push({
+          source: box(`${tokenView} [data-bonus-size="${token.kind.replace('bonus-', '')}"]`),
+          destinationSelector: `[data-table-tokens="${CSS.escape(uid)}"]`,
+          token,
+          bonus: true,
+          delay: soldMessageAt + 1400 + index * 80
         }));
       }
     }
@@ -1334,15 +1395,24 @@
       if (!target) continue;
       const cards = activity.cardIds?.length ?? 0;
       const seat = lobby.players.find((p) => p.uid === uid)?.seat;
-      const key = ++flightSequence;
-      const lastDelay = Math.max(...tokenMovements.map((m) => m.delay));
-      setTimeout(() => {
-        saleSummaries = [...saleSummaries, {
-          key, left: target.left + target.width / 2, top: target.top + target.height / 2,
-          inverted: seat === 1, count: tokenMovements.length, cards
-        }];
-        setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600);
-      }, 900 + lastDelay);
+      const goodsMoves = tokenMovements.filter((m) => !m.bonus);
+      const bonusMoves = tokenMovements.filter((m) => m.bonus);
+      const showSummary = (at: number, count: number, label: string) => {
+        const key = ++flightSequence;
+        setTimeout(() => {
+          saleSummaries = [...saleSummaries, {
+            key, left: target.left + target.width / 2, top: target.top + target.height / 2,
+            inverted: seat === 1, count, cards, label
+          }];
+          setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600);
+        }, at);
+      };
+      if (goodsMoves.length > 0) {
+        showSummary(900 + Math.max(...goodsMoves.map((m) => m.delay)), goodsMoves.length, `${cards} card${cards === 1 ? '' : 's'} sold!`);
+      }
+      for (const move of bonusMoves) {
+        showSummary(900 + move.delay, 1, `${move.token.kind.replace('bonus-', '')}-card bonus token!`);
+      }
     }
     if (hasAnimation) {
       try {
@@ -1434,12 +1504,12 @@
         role="group"
         aria-label={`${player.displayName} has ${lobby.round?.hands[player.uid]?.length ?? 0} face-down cards`}
       >
-        {#each Array(Math.max(0, 7 - handLayout(player.uid).length)) as _, slot}
-          <span class="hand-slot" aria-hidden="true" data-hand-slot={slot}></span>
-        {/each}
-        {#each handLayout(player.uid) as entry (entry.card?.id ?? `ghost:${entry.ghost}`)}
-          {#if entry.ghost}
-            <span class="table-hand-card ghost" class:collapsing={handGhosts[player.uid]?.collapsing} aria-hidden="true" data-hand-ghost={entry.ghost}></span>
+        {#each handCells(player.uid) as entry (entry.key)}
+          <span class="hand-cell" animate:handFlip={{ duration: 420, inverted: seat === 1 }}>
+          {#if entry.slot !== undefined}
+            <span class="hand-slot" aria-hidden="true" data-hand-slot={entry.slot}></span>
+          {:else if entry.ghost}
+            <span class="table-hand-card ghost" class:as-slot={handGhosts[player.uid]?.collapsing} aria-hidden="true" data-hand-ghost={entry.ghost}></span>
           {:else if entry.card}
           {@const card = entry.card}
           {@const selected = selectedReturnIds(player.uid).includes(card.id)}
@@ -1460,6 +1530,7 @@
             <img src={componentImage('card-back')} alt="" draggable="false" />
           </button>
           {/if}
+          </span>
         {/each}
       </div>
       <div
@@ -1872,7 +1943,7 @@
       class:arc={Boolean(flight.arc)}
       class:noflip={Boolean(flight.arc) && !flight.revealImage}
       aria-hidden="true"
-      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
+      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--end-scale:${flight.concealsDestination ? 1 : 0.7};--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
       onanimationend={(event) => {
         if (event.currentTarget === event.target) finishCardFlight(flight.key);
       }}
@@ -1906,7 +1977,7 @@
       style={`--left:${summary.left}px;--top:${summary.top}px`}
     >
       <span class="sale-coins">{#each Array(summary.count) as _, i}<i style={`--i:${i}`}></i>{/each}</span>
-      <strong>{summary.cards} card{summary.cards === 1 ? '' : 's'} sold!</strong>
+      <strong>{summary.label ?? `${summary.cards} card${summary.cards === 1 ? '' : 's'} sold!`}</strong>
     </span>
   {/each}
 </main>
@@ -2005,7 +2076,8 @@
   .active .turn-state { background: #a6442d; color: white; }
   .seat-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) clamp(5rem, 10vw, 16rem); align-items: center; gap: 0.5rem; }
   .tabletop-hand { display: flex; min-width: 0; height: 100%; align-items: center; }
-  .tabletop-hand > .table-hand-card, .market-card {
+  .hand-cell { display: block; flex: 0 0 auto; }
+  .hand-cell > .table-hand-card, .market-card {
     position: relative;
     width: clamp(3.7rem, 9.8vh, 12rem);
     height: clamp(3.7rem, 9.8vh, 12rem);
@@ -2018,10 +2090,12 @@
     color: white;
     object-fit: cover;
   }
-  .tabletop-hand > .table-hand-card + .table-hand-card { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
+  .tabletop-hand > .hand-cell + .hand-cell { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
   .table-hand-card, .table-herd-card { cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; }
-  .table-hand-card.ghost { visibility: hidden; border-color: transparent; background: none; transition: width 480ms ease, margin-left 480ms ease, padding 480ms ease; }
-  .table-hand-card.ghost.collapsing { width: 0; padding: 0; margin-left: 0; }
+  .table-hand-card.ghost { display: block; visibility: hidden; border-color: transparent; background: none; }
+  /* Released ghost: it has moved to the slot side and looks exactly like an
+     open slot, so swapping it for a real slot later is invisible. */
+  .table-hand-card.ghost.as-slot { visibility: visible; border: 2px dashed #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0.55rem; opacity: 0.45; }
   .table-hand-card > img { display: block; width: 100%; height: 100%; object-fit: cover; }
   .table-hand-card:disabled, .herd-pile:disabled { cursor: default; }
   .herd-pile { display: block; padding: 0; border: none; background: none; cursor: pointer; }
@@ -2047,8 +2121,7 @@
   /* Empty hand slots sit to the left of the fanned cards; only the edges
      a real card would show are drawn (top, bottom, left — the right edge
      hides under the next card). */
-  .hand-slot { width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); flex: 0 0 auto; border: 2px dashed #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0.55rem; opacity: 0.45; }
-  .tabletop-hand > .hand-slot + .hand-slot, .tabletop-hand > .hand-slot + .table-hand-card { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
+  .hand-slot { display: block; width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); flex: 0 0 auto; border: 2px dashed #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0.55rem; opacity: 0.45; }
   .shared-market {
     --table-market-card-size: clamp(4rem, min(18vh, 10.5vw), 20rem);
     --table-target-height: clamp(2.7rem, 6.5vh, 7rem);
@@ -2229,9 +2302,9 @@
     100% { transform: translateY(0) scale(0.9); }
   }
   .seat-seals { display: inline-flex; align-items: center; gap: 0.2rem; }
-  .seat-seals img { width: clamp(1.1rem, 2.6vmin, 1.7rem); height: clamp(1.1rem, 2.6vmin, 1.7rem); border-radius: 50%; object-fit: cover; filter: grayscale(1); opacity: 0.25; transition: filter 300ms, opacity 300ms; }
+  .seat-seals img { width: clamp(2rem, 5vmin, 3.6rem); height: clamp(2rem, 5vmin, 3.6rem); border-radius: 50%; object-fit: cover; filter: grayscale(1); opacity: 0.25; transition: filter 300ms, opacity 300ms; }
   .seat-seals img.earned { filter: none; opacity: 1; }
-  .seat-seals img.earned.arriving { opacity: 0; transition: none; }
+  .seat-seals img.earned.arriving { filter: grayscale(1); opacity: 0.25; transition: none; }
   .table-seal-flight { position: fixed; z-index: 45; top: var(--start-top); left: var(--start-left); width: var(--start-size); height: var(--start-size); pointer-events: none; --flight-delay: 0ms; animation: seal-flight-across 1200ms cubic-bezier(0.3, 0.6, 0.35, 1) both, seal-flight-lift 1200ms ease-in-out both; }
   .table-seal-flight img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; filter: drop-shadow(0 0.5rem 0.6rem rgb(0 0 0 / 32%)); }
   @keyframes seal-flight-across {
@@ -2302,7 +2375,7 @@
   @keyframes arc-card-lift-now {
     0% { transform: translateY(0) scale(1); }
     50% { transform: translateY(calc(var(--arc-lift) * -1)) scale(1.08); }
-    100% { transform: translateY(0) scale(0.7); }
+    100% { transform: translateY(0) scale(var(--end-scale, 0.7)); }
   }
   @keyframes sale-card-across {
     0%, 30% { translate: 0 0; width: var(--start-size); height: var(--start-size); opacity: 1; }
@@ -2311,7 +2384,7 @@
   @keyframes sale-card-lift {
     0%, 30% { transform: translateY(0) scale(1); }
     65% { transform: translateY(calc(var(--arc-lift) * -1)) scale(1.08); }
-    100% { transform: translateY(0) scale(0.7); }
+    100% { transform: translateY(0) scale(var(--end-scale, 0.7)); }
   }
   @keyframes sale-card-flip {
     0% { transform: rotateY(0deg); }
