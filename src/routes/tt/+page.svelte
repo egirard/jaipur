@@ -99,6 +99,8 @@
     concealsDestination: boolean;
     /** Arc flight: flips where it lies first (if it has a reveal image), then arcs and resizes. */
     arc?: boolean;
+    /** Seat 1 acts from the far (inverted) side: arcs lift toward that side. */
+    inverted?: boolean;
     startLeft: number;
     startTop: number;
     startSize: number;
@@ -110,6 +112,7 @@
   let flightSequence = 0;
   let arrivingCardIds = $state<string[]>([]);
   let tokenFlights = $state<Array<{
+    inverted?: boolean;
     key: number;
     token: Token;
     startLeft: number;
@@ -707,6 +710,8 @@
     return document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
   }
 
+  const invertedFor = (uid: string) => lobby.players.find((p) => p.uid === uid)?.seat === 1;
+
   function cardFlight(
     source: DOMRect | undefined,
     destination: DOMRect | undefined,
@@ -715,7 +720,8 @@
     cardId?: string,
     revealImage?: string,
     concealsDestination = false,
-    arc = false
+    arc = false,
+    inverted = false
   ) {
     if (!source || !destination) {
       if (cardId) arrivingCardIds = arrivingCardIds.filter((id) => id !== cardId);
@@ -731,6 +737,7 @@
       revealImage,
       concealsDestination,
       arc,
+      inverted,
       startLeft: source.left + (source.width - startSize) / 2,
       startTop: source.top + (source.height - startSize) / 2,
       startSize,
@@ -765,7 +772,8 @@
       returnCardId,
       componentImage('card-back'), // flips (stays face-down: private), then arcs below the market card
       true,
-      true
+      true,
+      invertedFor(uid)
     );
   }
 
@@ -790,7 +798,7 @@
     const sources = Array.from({ length: count }, (_, i) =>
       handRects[i] ?? new DOMRect(panel.left + panel.width * 0.25 + i * size * 0.8, panel.top + (panel.height - size) / 2, size, size));
     sources.forEach((src, i) =>
-      cardFlight(src, stack, componentImage('card-back'), i * 90, undefined, componentImage(kind), false, true));
+      cardFlight(src, stack, componentImage('card-back'), i * 90, undefined, componentImage(kind), false, true, seat === 1));
     // Tokens: the stack's coins if the round is on, else the stack itself.
     const coins = [...document.querySelectorAll<HTMLElement>(`${view} [data-token-kind="${kind}"] [data-supply-token-id]`)].slice(0, count);
     const dest = box(`[data-seat="${seat}"] [data-table-tokens]`) ?? new DOMRect(panel.left + panel.width / 2 - 40, panel.bottom - 60, 80, 40);
@@ -800,7 +808,7 @@
       const endSize = Math.min(dest.width, dest.height, startSize);
       const key = ++flightSequence;
       tokenFlights = [...tokenFlights, {
-        key, token,
+        key, token, inverted: seat === 1,
         startLeft: source.left + (source.width - startSize) / 2, startTop: source.top + (source.height - startSize) / 2, startSize,
         endLeft: dest.left + (dest.width - endSize) / 2, endTop: dest.top + (dest.height - endSize) / 2, endSize, delay
       }];
@@ -837,6 +845,7 @@
       concealDestination: boolean;
       delay: number;
       arc?: boolean;
+      inverted?: boolean;
     }> = [];
     const tokenMovements: Array<{
       source: DOMRect | undefined;
@@ -847,6 +856,9 @@
 
     let refillDelay = 120;
     let refillStep = 70;
+    // Everything in this batch animates for the acting player; seat 1 sits
+    // on the far side, so their arcs lift the other way.
+    const actorInverted = invertedFor(activities[0]?.actorUid ?? '');
     for (const activity of activities) {
       const uid = activity.actorUid;
       if (activity.type === 'cards/taken-one' || activity.type === 'cards/taken-camels') {
@@ -966,7 +978,7 @@
       ...movements.filter(({ concealDestination }) => concealDestination).map(({ cardId }) => cardId)
     ])];
     await tick();
-    movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay, arc }) =>
+    movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay, arc, inverted }) =>
       cardFlight(
         source,
         box(destinationSelector),
@@ -975,7 +987,8 @@
         cardId,
         revealImage,
         concealDestination,
-        arc
+        arc,
+        inverted ?? actorInverted
       )
     );
     tokenMovements.forEach(({ source, destinationSelector, token, delay }) => {
@@ -987,6 +1000,7 @@
       tokenFlights = [...tokenFlights, {
         key,
         token,
+        inverted: actorInverted,
         startLeft: source.left + (source.width - startSize) / 2,
         startTop: source.top + (source.height - startSize) / 2,
         startSize,
@@ -1509,7 +1523,7 @@
       class:arc={Boolean(flight.arc)}
       class:noflip={Boolean(flight.arc) && !flight.revealImage}
       aria-hidden="true"
-      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
+      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
       onanimationend={(event) => {
         if (event.currentTarget === event.target) finishCardFlight(flight.key);
       }}
@@ -1526,7 +1540,7 @@
     <span
       class="table-token-flight"
       aria-hidden="true"
-      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.28)}px`}
+      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.28)}px`}
     ><TokenChip token={flight.token} hidden={flight.token.kind.startsWith('bonus-')} /></span>
   {/each}
   {#each saleSummaries as summary (summary.key)}
