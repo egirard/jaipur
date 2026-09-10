@@ -712,6 +712,37 @@
 
   const invertedFor = (uid: string) => lobby.players.find((p) => p.uid === uid)?.seat === 1;
 
+  // Continuity: while a sale or trade animates, cards that just left the
+  // hand keep their space as invisible ghosts (so the rest of the hand
+  // doesn't jump); when the flights are done the ghosts collapse and the
+  // remaining cards slide over.
+  let handGhosts = $state<Record<string, { order: string[]; collapsing: boolean }>>({});
+
+  function handLayout(uid: string): Array<{ card?: Card; ghost?: string }> {
+    const hand = lobby.round?.hands[uid] ?? [];
+    const ghosts = handGhosts[uid];
+    if (!ghosts) return hand.map((card) => ({ card }));
+    const byId = new Map(hand.map((card) => [card.id, card]));
+    const out: Array<{ card?: Card; ghost?: string }> = ghosts.order.map((id) =>
+      byId.has(id) ? { card: byId.get(id) } : { ghost: id });
+    for (const card of hand) if (!ghosts.order.includes(card.id)) out.push({ card });
+    return out;
+  }
+
+  function holdHandSpaces(uid: string, order: string[]) {
+    handGhosts = { ...handGhosts, [uid]: { order, collapsing: false } };
+  }
+
+  function releaseHandSpaces(uid: string) {
+    const ghosts = handGhosts[uid];
+    if (!ghosts) return;
+    handGhosts = { ...handGhosts, [uid]: { ...ghosts, collapsing: true } };
+    setTimeout(() => {
+      const { [uid]: _gone, ...rest } = handGhosts;
+      handGhosts = rest;
+    }, 520);
+  }
+
   function cardFlight(
     source: DOMRect | undefined,
     destination: DOMRect | undefined,
@@ -869,9 +900,11 @@
           movements.push({
             cardId,
             source: box(`[data-market-card-id="${CSS.escape(cardId)}"]`),
+            // Straight into the slot the card now occupies (rendered hidden
+            // until it lands), not the middle of the hand/herd.
             destinationSelector: kind === 'camel'
-              ? `[data-table-herd="${CSS.escape(uid)}"]`
-              : `[data-table-hand="${CSS.escape(uid)}"]`,
+              ? `[data-table-herd-card="${CSS.escape(cardId)}"], [data-table-herd="${CSS.escape(uid)}"]`
+              : `[data-table-hand-card="${CSS.escape(cardId)}"], [data-table-hand="${CSS.escape(uid)}"]`,
             image: componentImage(kind ?? 'card-back'),
             // Camels stay camels: no flip, straight into the arc.
             revealImage: kind === 'camel' ? undefined : componentImage('card-back'),
@@ -888,10 +921,11 @@
         // then the returned cards (already face-down below them) flip face
         // up and slide into the vacated market slots.
         const taken = activity.cardIds?.length ?? 0;
+        holdHandSpaces(uid, (previous.round?.hands[uid] ?? []).map(({ id }) => id));
         activity.cardIds?.forEach((cardId, index) => movements.push({
           cardId,
           source: box(`[data-market-card-id="${CSS.escape(cardId)}"]`),
-          destinationSelector: `[data-table-hand="${CSS.escape(uid)}"]`,
+          destinationSelector: `[data-table-hand-card="${CSS.escape(cardId)}"], [data-table-hand="${CSS.escape(uid)}"]`,
           image: componentImage((activity.cardKinds?.[index] as Good) ?? 'card-back'),
           revealImage: componentImage('card-back'),
           concealDestination: true,
@@ -922,6 +956,8 @@
         delete saleTokenViewSeats[uid];
         // The sold cards flip face-up in the hand, then arc (shrinking) to
         // that good's stack on the seller's side; the tokens follow after.
+        // Their places in the hand stay open until everything has landed.
+        holdHandSpaces(uid, (previous.round?.hands[uid] ?? []).map(({ id }) => id));
         activity.cardIds?.forEach((cardId, index) => movements.push({
           cardId,
           source: box(`[data-table-hand-card="${CSS.escape(cardId)}"]`),
@@ -1033,9 +1069,12 @@
         while (cardFlights.length > 0 || tokenFlights.length > 0) await wait(25);
       } finally {
         actionAnimating = false;
+        for (const uid of Object.keys(handGhosts)) releaseHandSpaces(uid);
         // Not busy any more: the AR sale preview depends on that.
         void tick().then(() => ar?.publishFromState(lobby));
       }
+    } else {
+      for (const uid of Object.keys(handGhosts)) releaseHandSpaces(uid);
     }
   }
 </script>
@@ -1105,10 +1144,14 @@
         role="group"
         aria-label={`${player.displayName} has ${lobby.round?.hands[player.uid]?.length ?? 0} face-down cards`}
       >
-        {#each Array(Math.max(0, 7 - (lobby.round?.hands[player.uid]?.length ?? 0))) as _, slot}
+        {#each Array(Math.max(0, 7 - handLayout(player.uid).length)) as _, slot}
           <span class="hand-slot" aria-hidden="true" data-hand-slot={slot}></span>
         {/each}
-        {#each lobby.round?.hands[player.uid] ?? [] as card}
+        {#each handLayout(player.uid) as entry (entry.card?.id ?? `ghost:${entry.ghost}`)}
+          {#if entry.ghost}
+            <span class="table-hand-card ghost" class:collapsing={handGhosts[player.uid]?.collapsing} aria-hidden="true" data-hand-ghost={entry.ghost}></span>
+          {:else if entry.card}
+          {@const card = entry.card}
           {@const selected = selectedReturnIds(player.uid).includes(card.id)}
           {@const loaded = Object.values(exchangeLoads(player.uid)).includes(card.id)}
           <button
@@ -1126,6 +1169,7 @@
           >
             <img src={componentImage('card-back')} alt="" draggable="false" />
           </button>
+          {/if}
         {/each}
       </div>
       <div
@@ -1665,6 +1709,8 @@
   }
   .tabletop-hand > .table-hand-card + .table-hand-card { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
   .table-hand-card, .table-herd-card { cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; }
+  .table-hand-card.ghost { visibility: hidden; border-color: transparent; background: none; transition: width 480ms ease, margin-left 480ms ease, padding 480ms ease; }
+  .table-hand-card.ghost.collapsing { width: 0; padding: 0; margin-left: 0; }
   .table-hand-card > img { display: block; width: 100%; height: 100%; object-fit: cover; }
   .table-hand-card:disabled, .herd-pile:disabled { cursor: default; }
   .herd-pile { display: block; padding: 0; border: none; background: none; cursor: pointer; }
