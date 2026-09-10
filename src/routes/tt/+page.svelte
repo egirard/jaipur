@@ -111,6 +111,18 @@
   }>>([]);
   let flightSequence = 0;
   let arrivingCardIds = $state<string[]>([]);
+  /** Seal of Excellence in flight from the round summary to its seat: the seat's new seal stays hidden until it lands. */
+  let sealFlights = $state<Array<{
+    key: number;
+    inverted: boolean;
+    startLeft: number;
+    startTop: number;
+    startSize: number;
+    endLeft: number;
+    endTop: number;
+    endSize: number;
+  }>>([]);
+  let arrivingSealUid = $state<string | null>(null);
   let tokenFlights = $state<Array<{
     inverted?: boolean;
     key: number;
@@ -687,8 +699,44 @@
     ];
   }
 
+  // The newest seal stays hidden in its seat while the round summary shows it
+  // (and while it is flying down); it appears when the flight lands.
+  const sealStillOnSummary = (uid: string) =>
+    arrivingSealUid === uid ||
+    (lobby.round?.status === 'complete' && !lobby.winnerUid && lobby.round.winnerUid === uid);
+
+  // The seal shown on the round summary flies down to the winner's seat
+  // as the next market opens; the seat's new seal appears when it lands.
+  function flySeal(winnerUid: string | null | undefined) {
+    if (!winnerUid) return;
+    const source = box('[data-result-seal]');
+    const earned = lobby.seals[winnerUid] ?? 0;
+    const destination = box(`[data-seat-seals="${CSS.escape(winnerUid)}"] [data-seat-seal-index="${earned - 1}"]`)
+      ?? box(`[data-seat-seals="${CSS.escape(winnerUid)}"]`);
+    if (!source || !destination) return;
+    const startSize = Math.min(source.width, source.height);
+    const endSize = Math.min(destination.width, destination.height, startSize);
+    const key = ++flightSequence;
+    arrivingSealUid = winnerUid;
+    sealFlights = [...sealFlights, {
+      key,
+      inverted: invertedFor(winnerUid),
+      startLeft: source.left + (source.width - startSize) / 2,
+      startTop: source.top + (source.height - startSize) / 2,
+      startSize,
+      endLeft: destination.left + (destination.width - endSize) / 2,
+      endTop: destination.top + (destination.height - endSize) / 2,
+      endSize
+    }];
+    setTimeout(() => {
+      sealFlights = sealFlights.filter((flight) => flight.key !== key);
+      if (arrivingSealUid === winnerUid) arrivingSealUid = null;
+    }, 1300);
+  }
+
   async function nextRound() {
     if (!repository || !lobby.round || lobby.round.status !== 'complete' || lobby.winnerUid) return;
+    flySeal(lobby.round.winnerUid);
     await repository.append('round/started', {
       seed: crypto.randomUUID(),
       starterUid: lobby.round.loserUid,
@@ -1126,7 +1174,17 @@
         <h2>{player.displayName}</h2>
       </div>
       <strong class="turn-state">{isActive ? 'Your turn' : 'Waiting'}</strong>
-      <span>{lobby.seals[player.uid] ?? 0} / 2 seals</span>
+      <span class="seat-seals" data-seat-seals={player.uid} aria-label={`${lobby.seals[player.uid] ?? 0} of 2 Seals of Excellence`}>
+        {#each Array(2) as _, sealIndex}
+          <img
+            class:earned={sealIndex < (lobby.seals[player.uid] ?? 0)}
+            class:arriving={sealIndex === (lobby.seals[player.uid] ?? 0) - 1 && sealStillOnSummary(player.uid)}
+            data-seat-seal-index={sealIndex}
+            src={componentImage('seal')}
+            alt=""
+          />
+        {/each}
+      </span>
       {#if seatDropped(player)}
         {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
         {#if arQr}
@@ -1587,6 +1645,12 @@
       style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.28)}px`}
     ><TokenChip token={flight.token} hidden={flight.token.kind.startsWith('bonus-')} /></span>
   {/each}
+  {#each sealFlights as flight (flight.key)}
+    <span
+      class="table-seal-flight"
+      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.2)}px`}
+    ><img src={componentImage('seal')} alt="" /></span>
+  {/each}
   {#each saleSummaries as summary (summary.key)}
     <span
       class="sale-summary"
@@ -1916,6 +1980,21 @@
     0% { transform: translateY(0) scale(1); }
     45% { transform: translateY(calc(var(--arc-lift) * -1)) scale(1.25); }
     100% { transform: translateY(0) scale(0.9); }
+  }
+  .seat-seals { display: inline-flex; align-items: center; gap: 0.2rem; }
+  .seat-seals img { width: clamp(1.1rem, 2.6vmin, 1.7rem); height: clamp(1.1rem, 2.6vmin, 1.7rem); border-radius: 50%; object-fit: cover; filter: grayscale(1); opacity: 0.25; transition: filter 300ms, opacity 300ms; }
+  .seat-seals img.earned { filter: none; opacity: 1; }
+  .seat-seals img.earned.arriving { opacity: 0; transition: none; }
+  .table-seal-flight { position: fixed; z-index: 45; top: var(--start-top); left: var(--start-left); width: var(--start-size); height: var(--start-size); pointer-events: none; --flight-delay: 0ms; animation: seal-flight-across 1200ms cubic-bezier(0.3, 0.6, 0.35, 1) both, seal-flight-lift 1200ms ease-in-out both; }
+  .table-seal-flight img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; filter: drop-shadow(0 0.5rem 0.6rem rgb(0 0 0 / 32%)); }
+  @keyframes seal-flight-across {
+    0% { translate: 0 0; width: var(--start-size); height: var(--start-size); }
+    100% { translate: calc(var(--end-left) - var(--start-left)) calc(var(--end-top) - var(--start-top)); width: var(--end-size); height: var(--end-size); }
+  }
+  @keyframes seal-flight-lift {
+    0% { transform: translateY(0) rotate(0turn); }
+    45% { transform: translateY(calc(var(--arc-lift) * -1)) rotate(0.5turn); }
+    100% { transform: translateY(0) rotate(1turn); }
   }
   .sale-summary { position: fixed; z-index: 45; left: var(--left); top: var(--top); display: grid; justify-items: center; gap: 0.2rem; pointer-events: none; transform: translate(-50%, -50%); animation: sale-summary 2600ms ease-out both; }
   .sale-summary.inverted { animation-name: sale-summary-inverted; }

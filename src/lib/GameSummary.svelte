@@ -36,14 +36,14 @@
 {#if lobby.round}
   {@const currentTieBreak = describeTieBreak(lobby.round, lobby.players)}
   <section class="score-review" aria-labelledby="round-result">
-    <img class="result-seal" src={componentImage('seal')} alt="" />
+    <img class="result-seal" src={componentImage('seal')} alt="" data-result-seal />
     {#if isMatchComplete()}
       <p class="eyebrow">Match complete</p>
       <h2 id="round-result" class="match-winner">{playerName(lobby.winnerUid!)} wins Jaipur</h2>
       <p>Two Seals of Excellence decide the match.</p>
     {:else}
       <p class="eyebrow">Round {lobby.round.number} complete</p>
-      <h2 id="round-result">{playerName(lobby.round.winnerUid ?? '')} earns a Seal of Excellence</h2>
+      <h2 id="round-result">{playerName(lobby.round.winnerUid ?? '')} received a Seal of Excellence <small>(2 seals to win)</small></h2>
       <p>
         {lobby.round.endReason === 'three-empty-supplies'
           ? 'Three goods supplies are empty.'
@@ -187,6 +187,7 @@
     color: #183a37;
     text-align: left;
   }
+  #round-result small { display: block; font-size: 0.6em; font-weight: 600; opacity: 0.75; }
   .result-seal {
     width: clamp(3.2rem, 9vmin, 5.5rem);
     height: clamp(3.2rem, 9vmin, 5.5rem);
