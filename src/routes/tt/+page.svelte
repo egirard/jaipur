@@ -21,12 +21,16 @@
     gameRoomExists,
     type GameRepository
   } from '$lib/game-repository';
-  import type { GameActivity, GameEventType, Player } from '$lib/game-events';
+  import type { GameActivity, GameEvent, GameEventType, Player } from '$lib/game-events';
   import {
     isLegalExchange,
     isLegalSale,
     reduceGame,
+    applySale,
+    resolveRound,
+    setupRound,
     type Card,
+    type CardKind,
     type GameState,
     type Good,
     type PendingDraw,
@@ -213,6 +217,7 @@
       repository = attached;
       attached.subscribe(
         (events) => {
+          if (demo) { demoDeferred = events; return; } // replayed when the demo ends
           const previous = lobby;
           const next = reduceGame(events);
           const newActivities = repositoryReady
@@ -916,6 +921,223 @@
     // in quick succession).
   }
 
+  // ---- Animation demo (settings panel) ------------------------------------
+  // Walks every animation category from each side of the table using the
+  // REAL move path: each step builds a before/after game state and hands the
+  // synthetic move to animateActivities exactly as a store update would. The
+  // live game is parked meanwhile (store updates are deferred) and restored
+  // when the demo ends or is cancelled.
+  let demo = $state<{ index: number; total: number; title: string; seat: Seat } | null>(null);
+  let demoCancelled = false;
+  let demoDeferred: GameEvent[] | null = null;
+  let demoSavedLobby: GameState | null = null;
+  const DEMO_UIDS: Record<Seat, string> = { 1: 'demo-north', 2: 'demo-south' };
+  let demoCardSeq = 0;
+  const demoCard = (kind: CardKind): Card => ({ id: `demo-${kind}-${++demoCardSeq}`, kind });
+  const demoCards = (kinds: CardKind[]): Card[] => kinds.map(demoCard);
+  const demoOther = (seat: Seat): Seat => (seat === 1 ? 2 : 1);
+
+  function demoBase(actorSeat: Seat): GameState {
+    const actor = DEMO_UIDS[actorSeat];
+    const other = DEMO_UIDS[demoOther(actorSeat)];
+    const round = setupRound([DEMO_UIDS[1], DEMO_UIDS[2]], 'animation-demo', actor);
+    round.hands[actor] = demoCards(['gold', 'cloth', 'spice', 'leather', 'gold']);
+    round.hands[other] = demoCards(['cloth', 'spice', 'leather', 'gold', 'silver']);
+    round.herds[actor] = demoCards(['camel', 'camel']);
+    round.herds[other] = demoCards(['camel', 'camel', 'camel']);
+    round.market = demoCards(['diamond', 'gold', 'silver', 'cloth', 'spice']);
+    round.deck = demoCards(['leather', 'spice', 'cloth', 'gold', 'diamond', 'silver', 'leather', 'cloth', 'spice', 'gold']);
+    return {
+      gameId: lobby.gameId,
+      hostUid: lobby.hostUid,
+      mode: 'tabletop',
+      bot: null,
+      players: [
+        { uid: DEMO_UIDS[1], displayName: playerForSeat(1)?.displayName ?? 'North', ready: true, seat: 1 },
+        { uid: DEMO_UIDS[2], displayName: playerForSeat(2)?.displayName ?? 'South', ready: true, seat: 2 }
+      ],
+      activity: [],
+      diagnostics: [],
+      round,
+      rounds: [round],
+      seals: { [DEMO_UIDS[1]]: 0, [DEMO_UIDS[2]]: 0 },
+      winnerUid: null,
+      epoch: 999, // never matches a live bot-turn key
+      tabletopIntents: {},
+      pendingDraw: null
+    };
+  }
+
+  // Show `previous`, then switch to `next` and animate the move between them.
+  async function demoMove(
+    previous: GameState,
+    next: GameState,
+    activity: Omit<GameActivity, 'id'>
+  ) {
+    lobby = previous;
+    await tick();
+    await wait(700);
+    if (demoCancelled) return;
+    lobby = next;
+    await animateActivities([{ id: `demo-${++flightSequence}`, ...activity }], previous, next);
+  }
+
+  const demoSellStep = (kind: Good, count: number) => async (seat: Seat) => {
+    const previous = demoBase(seat);
+    const actor = DEMO_UIDS[seat];
+    const sold = demoCards(Array<CardKind>(count).fill(kind));
+    previous.round!.hands[actor] = [...sold, ...previous.round!.hands[actor].slice(0, 7 - count)];
+    const next = structuredClone(previous);
+    applySale(next.round!, actor, kind, sold.map(({ id }) => id));
+    await demoMove(previous, next, {
+      type: 'cards/sold',
+      actorUid: actor,
+      cardIds: sold.map(({ id }) => id),
+      cardKinds: sold.map(({ kind }) => kind),
+      tokenCount: count + (count >= 3 ? 1 : 0)
+    });
+  };
+
+  const demoTakeOne = async (seat: Seat) => {
+    const previous = demoBase(seat);
+    const actor = DEMO_UIDS[seat];
+    const next = structuredClone(previous);
+    const taken = next.round!.market[1];
+    next.round!.market[1] = next.round!.deck.shift()!;
+    next.round!.hands[actor].push(taken);
+    await demoMove(previous, next, { type: 'cards/taken-one', actorUid: actor, cardIds: [taken.id], cardKinds: [taken.kind] });
+  };
+
+  const demoTakeCamels = async (seat: Seat) => {
+    const previous = demoBase(seat);
+    const actor = DEMO_UIDS[seat];
+    previous.round!.market = demoCards(['camel', 'gold', 'camel', 'camel', 'silver']);
+    const next = structuredClone(previous);
+    const camels = next.round!.market.filter(({ kind }) => kind === 'camel');
+    next.round!.market = next.round!.market.map((card) => (card.kind === 'camel' ? next.round!.deck.shift()! : card));
+    next.round!.herds[actor].push(...camels);
+    await demoMove(previous, next, {
+      type: 'cards/taken-camels',
+      actorUid: actor,
+      cardIds: camels.map(({ id }) => id),
+      cardKinds: camels.map(({ kind }) => kind)
+    });
+  };
+
+  const demoTrade = async (seat: Seat) => {
+    const previous = demoBase(seat);
+    const actor = DEMO_UIDS[seat];
+    const round = previous.round!;
+    const [h0, h1] = round.hands[actor];
+    const [c0] = round.herds[actor];
+    const [m0, m1, m2] = round.market;
+    // The returns already sit below their targets, as they do after the
+    // player has placed them on the table.
+    previous.tabletopIntents = { [actor]: { selectedReturnIds: [], exchangeLoads: { [m0.id]: h0.id, [m1.id]: h1.id, [m2.id]: c0.id } } };
+    const next = structuredClone(previous);
+    next.tabletopIntents = {};
+    next.round!.hands[actor] = [...next.round!.hands[actor].filter(({ id }) => id !== h0.id && id !== h1.id), m0, m1, m2];
+    next.round!.herds[actor] = next.round!.herds[actor].filter(({ id }) => id !== c0.id);
+    next.round!.market = [h0, h1, c0, ...next.round!.market.slice(3)];
+    await demoMove(previous, next, {
+      type: 'cards/exchanged',
+      actorUid: actor,
+      cardIds: [m0.id, m1.id, m2.id],
+      cardKinds: [m0.kind, m1.kind, m2.kind],
+      returnedCardIds: [h0.id, h1.id, c0.id],
+      returnedCardKinds: [h0.kind, h1.kind, c0.kind]
+    });
+  };
+
+  const demoRoundEnd = async (seat: Seat) => {
+    const previous = demoBase(seat);
+    const actor = DEMO_UIDS[seat];
+    previous.round!.ownedGoodsTokens[actor] = previous.round!.goodsTokens.diamond.splice(0, 3);
+    const complete = structuredClone(previous);
+    const round = complete.round!;
+    const result = resolveRound(round, [DEMO_UIDS[1], DEMO_UIDS[2]]);
+    Object.assign(round, {
+      status: 'complete',
+      endReason: 'three-empty-supplies',
+      camelBonusUid: result.camelBonusUid,
+      scores: result.scores,
+      winnerUid: result.winnerUid,
+      loserUid: result.loserUid,
+      tieBreak: result.tieBreak
+    });
+    complete.seals[result.winnerUid] = 1;
+    lobby = previous;
+    await tick();
+    await wait(600);
+    if (demoCancelled) return;
+    lobby = complete; // round summary shows the seal
+    await tick();
+    await wait(2000);
+    if (demoCancelled) return;
+    flySeal(result.winnerUid); // what "Open round 2" does
+    const fresh = demoBase(seat);
+    fresh.seals = { ...complete.seals };
+    fresh.round!.number = 2;
+    lobby = fresh;
+    await wait(1600);
+  };
+
+  const DEMO_CATEGORIES: Array<{ title: string; run: (seat: Seat) => Promise<void> }> = [
+    { title: 'Sell 2 silver', run: demoSellStep('silver', 2) },
+    { title: 'Sell 3 diamonds (3-card bonus)', run: demoSellStep('diamond', 3) },
+    { title: 'Sell 5 leather (5-card bonus, two coin lines)', run: demoSellStep('leather', 5) },
+    { title: 'Take one card, deck refills', run: demoTakeOne },
+    { title: 'Take 3 camels, deck refills', run: demoTakeCamels },
+    { title: 'Trade 2 cards + 1 camel for 3', run: demoTrade },
+    { title: 'Round end: Seal of Excellence', run: demoRoundEnd }
+  ];
+
+  async function runAnimationDemo() {
+    if (demo) return;
+    scalePanelOpen = false;
+    demoCancelled = false;
+    demoDeferred = null;
+    demoSavedLobby = lobby;
+    const steps = DEMO_CATEGORIES.flatMap((category) => ([2, 1] as Seat[]).map((seat) => ({ ...category, seat })));
+    try {
+      for (const [index, step] of steps.entries()) {
+        if (demoCancelled) break;
+        demo = { index: index + 1, total: steps.length, title: step.title, seat: step.seat };
+        await step.run(step.seat);
+        if (demoCancelled) break;
+        await wait(900);
+      }
+    } finally {
+      endAnimationDemo();
+    }
+  }
+
+  function cancelAnimationDemo() {
+    demoCancelled = true;
+    cardFlights = [];
+    tokenFlights = [];
+    sealFlights = [];
+    saleSummaries = [];
+    arrivingCardIds = [];
+    arrivingSealUid = null;
+    handGhosts = {};
+  }
+
+  function endAnimationDemo() {
+    demo = null;
+    if (demoSavedLobby) lobby = demoSavedLobby;
+    demoSavedLobby = null;
+    if (demoDeferred) {
+      // Moves made while the demo ran: catch up without animating them.
+      lobby = reduceGame(demoDeferred);
+      for (const activity of lobby.activity) knownActivityIds.add(activity.id);
+      demoDeferred = null;
+    }
+    scheduledBotKey = '';
+    maybeBotTurn();
+    void tick().then(() => ar?.publishFromState(lobby));
+  }
+
   async function animateActivities(
     activities: GameActivity[],
     previous: GameState,
@@ -1129,7 +1351,7 @@
         actionAnimating = false;
         for (const uid of Object.keys(handGhosts)) releaseHandSpaces(uid);
         // Not busy any more: the AR sale preview depends on that.
-        void tick().then(() => ar?.publishFromState(lobby));
+        if (!demo) void tick().then(() => ar?.publishFromState(lobby));
       }
     } else {
       for (const uid of Object.keys(handGhosts)) releaseHandSpaces(uid);
@@ -1566,6 +1788,7 @@
       <div class="scale-actions">
         <button type="button" onclick={toggleFullscreen}>{physical.fullscreen ? 'Exit full screen' : 'Full screen'}</button>
         <button type="button" onclick={newTable}>New table</button>
+        <button type="button" onclick={runAnimationDemo} disabled={Boolean(demo) || busy}>Run animation demo</button>
       </div>
       <div class="rejoin-codes" aria-label="AR join codes">
         {#each arQrs as arQr}
@@ -1592,6 +1815,20 @@
       <button type="button" onclick={() => demoSale(2, 'diamond', 3)}>3 diamonds</button>
       <button type="button" onclick={() => demoSale(2, 'silver', 2)}>2 silver</button>
       <button type="button" onclick={() => demoSale(2, 'leather', 5)}>5 leather</button>
+    </div>
+  {/if}
+
+  {#if demo}
+    {@const demoLabel = `${demo.title} · Player ${demo.seat} (${demo.seat === 1 ? 'top' : 'bottom'})`}
+    <div class="demo-banner" role="status" aria-live="polite">
+      <strong>Demo {demo.index}/{demo.total}</strong>
+      <span>{demoLabel}</span>
+      <button type="button" onclick={cancelAnimationDemo}>Cancel demo</button>
+    </div>
+    <div class="demo-banner top" aria-hidden="true">
+      <strong>Demo {demo.index}/{demo.total}</strong>
+      <span>{demoLabel}</span>
+      <button type="button" tabindex="-1" onclick={cancelAnimationDemo}>Cancel demo</button>
     </div>
   {/if}
 
@@ -2006,6 +2243,10 @@
     45% { transform: translateY(calc(var(--arc-lift) * -1)) rotate(0.5turn); }
     100% { transform: translateY(0) rotate(1turn); }
   }
+  .demo-banner { position: fixed; z-index: 35; left: 50%; bottom: 0.45rem; display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0.5rem 0.35rem 0.9rem; border-radius: 99rem; background: #183a37; color: #fffaf0; font-size: clamp(0.75rem, 1.6vmin, 1.05rem); box-shadow: 0 0.3rem 0.9rem rgb(10 32 30 / 40%); transform: translateX(-50%); }
+  .demo-banner strong { color: #ffd88a; letter-spacing: 0.04em; }
+  .demo-banner button { min-height: 36px; padding: 0.2rem 0.7rem; border: 1px solid #ffd88a; border-radius: 99rem; background: transparent; font: inherit; font-weight: 700; color: #ffd88a; }
+  .demo-banner.top { bottom: auto; top: 0.45rem; transform: translateX(-50%) rotate(180deg); }
   .sale-summary { position: fixed; z-index: 45; left: var(--left); top: var(--top); display: grid; justify-items: center; gap: 0.2rem; pointer-events: none; transform: translate(-50%, -50%); animation: sale-summary 2600ms ease-out both; }
   .sale-summary.inverted { animation-name: sale-summary-inverted; }
   .sale-summary strong { color: #c8281e; font-size: clamp(1.6rem, 5vmin, 4rem); font-weight: 900; line-height: 1; text-shadow: 0 2px 0 #fff, 0 0 12px #fff; }
