@@ -861,6 +861,12 @@
   // that side with faked card positions (no game state involved), then tidy
   // up after a 3 s pause.
   const devMode = import.meta.env.DEV || new URLSearchParams(location.search).get('dev') === '1';
+  // Dev hook: seat a player without a phone (drives the table from tests).
+  if (devMode && typeof window !== 'undefined') {
+    (window as unknown as { __jaipurDev?: unknown }).__jaipurDev = {
+      sit: (seat: number, name = 'Tester') => joinFromAr(String(seat), name)
+    };
+  }
   const DEMO_VALUES: Record<string, number[]> = { diamond: [7, 7, 5, 5, 5], silver: [5, 5, 5, 5, 5], leather: [4, 3, 2, 1, 1, 1, 1, 1, 1] };
 
   function demoSale(seat: Seat, kind: Good, count: number) {
@@ -1052,7 +1058,11 @@
       revealImage: componentImage(card.kind),
       concealDestination: true,
       delay: refillDelay + index * refillStep,
-      arc: true
+      arc: true,
+      // The deck belongs to nobody: refills always rise up the screen
+      // (an inherited seat-1 arc dipped them toward the bottom player,
+      // which read as the cards sinking under the market).
+      inverted: false
     }));
 
     const hasAnimation = movements.length > 0 || tokenMovements.length > 0;
@@ -2041,6 +2051,9 @@
   .table-card-flight.arc .table-card-flight-inner { animation: sale-card-flip 1500ms ease-in-out var(--flight-delay) both; }
   /* Arc without a flip (camels): no initial hold. */
   .table-card-flight.arc.noflip { animation: arc-card-across-now 1200ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, arc-card-lift-now 1200ms ease-in-out var(--flight-delay) both; }
+  /* No flip means no back face to turn to: the inner must not rotate, or
+     the card turns edge-on and disappears a third of the way along. */
+  .table-card-flight.arc.noflip .table-card-flight-inner { animation: none; }
   @keyframes arc-card-across-now {
     0% { translate: 0 0; width: var(--start-size); height: var(--start-size); opacity: 1; }
     100% { translate: calc(var(--end-left) - var(--start-left)) calc(var(--end-top) - var(--start-top)); width: var(--end-size); height: var(--end-size); opacity: 0.85; }
