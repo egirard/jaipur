@@ -541,7 +541,13 @@
     if (Object.values(loads).includes(cardId)) return; // already placed beside a market card
     const selected = new Set(selectedReturnIds(uid));
     if (selected.has(cardId)) selected.delete(cardId);
-    else selected.add(cardId);
+    else {
+      // Picking a hand card means "return this one": staged camels would
+      // otherwise be placed first and surprise the player.
+      const herd = lobby.round?.herds[uid] ?? [];
+      for (const id of [...selected]) if (herd.some((c) => c.id === id)) selected.delete(id);
+      selected.add(cardId);
+    }
     await publishIntent(uid, [...selected], loads);
   }
 
@@ -653,7 +659,7 @@
     const fromHand = returned.filter((card) => round.hands[uid]?.some(({ id }) => id === card.id)).length;
     const held = round.hands[uid]?.length ?? 0;
     const after = held - fromHand + taken.length;
-    if (after > 7) return `${held} in hand − ${fromHand} returned + ${taken.length} taken = ${after}, over the limit of 7. Return more cards from your hand, or take fewer.`;
+    if (after > 7) return `Over the 7-card hand limit (${after}).`;
     return isLegalExchange(round, uid, Object.keys(loads), returnedIds) ? null : 'This trade is not allowed.';
   }
 
@@ -917,10 +923,12 @@
     cardFlight(
       source,
       destination,
-      componentImage('card-back'),
+      componentImage(fromHand ? 'card-back' : 'camel'),
       0,
       returnCardId,
-      componentImage('card-back'), // flips (stays face-down: private), then arcs below the market card
+      // A hand card flips (and stays face-down: private) before arcing
+      // below the market card; a camel is public and just arcs face up.
+      fromHand ? componentImage('card-back') : undefined,
       true,
       true,
       invertedFor(uid)
@@ -1280,14 +1288,14 @@
         const previousLoads = previous.tabletopIntents[uid]?.exchangeLoads ?? {};
         activity.returnedCardIds?.forEach((cardId, index) => {
           const targetId = Object.entries(previousLoads).find(([, returnId]) => returnId === cardId)?.[0];
+          const returnedKind = (activity.returnedCardKinds?.[index] as Good | 'camel' | undefined) ?? 'card-back';
           movements.push({
             cardId,
             source: targetId ? box(`[data-table-exchange-target="${CSS.escape(targetId)}"]`) : undefined,
             destinationSelector: `[data-market-card-id="${CSS.escape(cardId)}"]`,
-            image: componentImage('card-back'),
-            revealImage: componentImage(
-              (activity.returnedCardKinds?.[index] as Good | 'camel' | undefined) ?? 'card-back'
-            ),
+            // Camels were already face up on the Return target: no flip.
+            image: componentImage(returnedKind === 'camel' ? 'camel' : 'card-back'),
+            revealImage: returnedKind === 'camel' ? undefined : componentImage(returnedKind),
             concealDestination: true,
             delay: 1350 + taken * 90 + index * 120,
             arc: true
@@ -1799,9 +1807,10 @@
                 onclick={() => chooseExchangeTarget(activeUid, card.id)}
               >
                 {#if loadedReturnId}
+                  {@const loadedCamel = round.herds[activeUid]?.some(({ id }) => id === loadedReturnId)}
                   <img
                     class:arriving={arrivingCardIds.includes(loadedReturnId)}
-                    src={componentImage('card-back')}
+                    src={componentImage(loadedCamel ? 'camel' : 'card-back')}
                     alt=""
                     data-loaded-return={loadedReturnId}
                     data-card-arriving={arrivingCardIds.includes(loadedReturnId) || undefined}
