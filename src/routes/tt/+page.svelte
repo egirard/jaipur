@@ -635,7 +635,8 @@
     const clash = returned.find(({ kind }) => kind !== 'camel' && takenGoods.has(kind));
     if (clash) return `You can't return ${label(clash.kind)} while taking ${label(clash.kind)}.`;
     const fromHand = returned.filter((card) => round.hands[uid]?.some(({ id }) => id === card.id)).length;
-    if ((round.hands[uid]?.length ?? 0) - fromHand + taken.length > 7) return 'That would leave more than 7 cards in your hand.';
+    const after = (round.hands[uid]?.length ?? 0) - fromHand + taken.length;
+    if (after > 7) return `That would leave ${after} goods in your hand (limit 7): return more cards from your hand, or take fewer.`;
     return isLegalExchange(round, uid, Object.keys(loads), returnedIds) ? null : 'This trade is not allowed.';
   }
 
@@ -2139,6 +2140,7 @@
   }
   .shared-market > header { position: absolute; z-index: 3; top: var(--market-edge-inset); left: 50%; display: flex; min-height: 36px; align-items: center; justify-content: center; gap: clamp(0.6rem, 2vw, 3rem); font-size: clamp(0.7rem, 1.5vmin, 1.5rem); transform: translateX(-50%); }
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
+  .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
   .shared-market > header strong { letter-spacing: 0.14em; }
   .scale-panel {
     position: fixed; z-index: 30; left: 50%; top: 50%; transform: translate(-50%, -50%);
