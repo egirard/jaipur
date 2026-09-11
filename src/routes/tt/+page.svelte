@@ -116,6 +116,22 @@
   }>>([]);
   let flightSequence = 0;
   let arrivingCardIds = $state<string[]>([]);
+  // Safety net: a card hidden as "arriving" whose flight never finished
+  // (or never started) would stay invisible in the hand while still
+  // counting toward the 7-card limit. Reveal anything no flight owns.
+  let arrivingWatchdog: ReturnType<typeof setTimeout> | undefined;
+  function scheduleArrivingWatchdog() {
+    clearTimeout(arrivingWatchdog);
+    arrivingWatchdog = setTimeout(() => {
+      const owned = new Set(cardFlights.filter((f) => f.concealsDestination).map((f) => f.cardId));
+      const stuck = arrivingCardIds.filter((id) => !owned.has(id));
+      if (stuck.length > 0) {
+        console.warn('Revealing cards stuck in flight state', stuck);
+        arrivingCardIds = arrivingCardIds.filter((id) => owned.has(id));
+      }
+      if (arrivingCardIds.length > 0) scheduleArrivingWatchdog();
+    }, 6000);
+  }
   /** Seal of Excellence in flight from the round summary to its seat: the seat's new seal stays hidden until it lands. */
   let sealFlights = $state<Array<{
     key: number;
@@ -635,8 +651,9 @@
     const clash = returned.find(({ kind }) => kind !== 'camel' && takenGoods.has(kind));
     if (clash) return `You can't return ${label(clash.kind)} while taking ${label(clash.kind)}.`;
     const fromHand = returned.filter((card) => round.hands[uid]?.some(({ id }) => id === card.id)).length;
-    const after = (round.hands[uid]?.length ?? 0) - fromHand + taken.length;
-    if (after > 7) return `That would leave ${after} goods in your hand (limit 7): return more cards from your hand, or take fewer.`;
+    const held = round.hands[uid]?.length ?? 0;
+    const after = held - fromHand + taken.length;
+    if (after > 7) return `${held} in hand − ${fromHand} returned + ${taken.length} taken = ${after}, over the limit of 7. Return more cards from your hand, or take fewer.`;
     return isLegalExchange(round, uid, Object.keys(loads), returnedIds) ? null : 'This trade is not allowed.';
   }
 
@@ -896,6 +913,7 @@
       : box(`[data-table-herd="${CSS.escape(uid)}"] img:last-of-type`);
     const destination = box(`[data-table-exchange-target="${CSS.escape(marketCardId)}"]`);
     arrivingCardIds = [...new Set([...arrivingCardIds, returnCardId])];
+    scheduleArrivingWatchdog();
     cardFlight(
       source,
       destination,
@@ -1355,6 +1373,7 @@
       ...arrivingCardIds,
       ...movements.filter(({ concealDestination }) => concealDestination).map(({ cardId }) => cardId)
     ])];
+    scheduleArrivingWatchdog();
     await tick();
     movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay, arc, inverted }) =>
       cardFlight(
@@ -1477,6 +1496,7 @@
         <h2>{player.displayName}</h2>
       </div>
       <strong class="turn-state">{isActive ? 'Your turn' : 'Waiting'}</strong>
+      <span class="hand-count" data-hand-count={player.uid}>{lobby.round?.hands[player.uid]?.length ?? 0} / 7 cards</span>
       <span class="seat-seals" data-seat-seals={player.uid} aria-label={`${lobby.seals[player.uid] ?? 0} of 2 Seals of Excellence`}>
         {#each Array(2) as _, sealIndex}
           <img
@@ -2303,6 +2323,7 @@
     45% { transform: translateY(calc(var(--arc-lift) * -1)) scale(1.25); }
     100% { transform: translateY(0) scale(0.9); }
   }
+  .hand-count { font-size: clamp(0.62rem, 1.3vmin, 0.85rem); font-weight: 700; color: #526762; white-space: nowrap; }
   .seat-seals { display: inline-flex; align-items: center; gap: 0.2rem; }
   .seat-seals img { width: clamp(2rem, 5vmin, 3.6rem); height: clamp(2rem, 5vmin, 3.6rem); border-radius: 50%; object-fit: cover; filter: grayscale(1); opacity: 0.25; transition: filter 300ms, opacity 300ms; }
   .seat-seals img.earned { filter: none; opacity: 1; }
