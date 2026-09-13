@@ -1602,7 +1602,12 @@
   >
     {#if botThinking && player.uid === lobby.bot?.uid}
       <div class="bot-thinking" data-bot-thinking={player.uid} role="status" aria-label={`${player.displayName} is thinking`}>
-        <span class="hourglass" aria-hidden="true">⏳</span>
+        <svg class="hourglass" viewBox="0 0 64 96" aria-hidden="true">
+          <path d="M10 6h44v8a24 24 0 0 1-14 21.8v8.4A24 24 0 0 1 54 66v24H10V66a24 24 0 0 1 14-21.8v-8.4A24 24 0 0 1 10 14z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round" />
+          <path d="M18 14h28a16 16 0 0 1-14 16 16 16 0 0 1-14-16z" fill="currentColor" opacity="0.55" />
+          <path d="M22 84h20a10 10 0 0 0-10-14 10 10 0 0 0-10 14z" fill="currentColor" opacity="0.55" />
+          <path d="M32 40v30" stroke="currentColor" stroke-width="3" stroke-dasharray="3 4" />
+        </svg>
       </div>
     {/if}
     <header>
@@ -2208,14 +2213,15 @@
     display: grid;
     place-items: center;
     border-radius: inherit;
-    background: rgba(255, 244, 214, 0.35);
+    background: rgba(255, 244, 214, 0.45);
     pointer-events: none;
   }
   .bot-thinking .hourglass {
-    font-size: clamp(3rem, 9vmin, 7rem);
-    line-height: 1;
-    opacity: 0.55;
-    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25));
+    height: 62%;
+    width: auto;
+    color: #7a3e1d;
+    opacity: 0.6;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3));
     animation: hourglass-turn 1.2s ease-in-out infinite;
   }
   @keyframes hourglass-turn {
