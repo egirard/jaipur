@@ -144,7 +144,7 @@
   .bonus-pile { position: relative; display: block; }
   /* Remaining count: the same red badge as the herd count, bottom right. */
   .bonus-count {
-    position: absolute; right: -0.55em; bottom: -0.35em; z-index: 3;
+    position: absolute; right: -0.6em; bottom: 0.35em; z-index: 3;
     min-width: 1.7em; padding: 0.1em 0.35em; border: 2px solid #fffaf0; border-radius: 99rem;
     background: #a6442d; color: #fffaf0; font-size: clamp(0.7rem, 1.6vmin, 1.4rem); font-weight: 900;
     line-height: 1.2; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%);

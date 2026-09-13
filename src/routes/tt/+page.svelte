@@ -119,17 +119,25 @@
   let revealedCardId = $state<string | null>(null);
   let longPressTimer: ReturnType<typeof setTimeout> | undefined;
   let longPressFired = false;
+  // Every finger currently down on the card: the peek starts with the first
+  // and ends only when the last lifts, so a shielding hand (or a second
+  // finger) touching the card never cuts it short.
+  const pressPointers = new Set<number>();
   function startLongPress(event: PointerEvent, cardId: string) {
-    if (event.button !== undefined && event.button !== 0) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    pressPointers.add(event.pointerId);
+    (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
+    if (pressPointers.size > 1) return; // already pressing
     clearTimeout(longPressTimer);
     longPressFired = false;
-    (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
     longPressTimer = setTimeout(() => {
       longPressFired = true;
       revealedCardId = cardId;
     }, 380);
   }
-  function endLongPress() {
+  function endLongPress(event: PointerEvent) {
+    pressPointers.delete(event.pointerId);
+    if (pressPointers.size > 0) return; // another finger still holds the card
     clearTimeout(longPressTimer);
     longPressTimer = undefined;
     revealedCardId = null;
@@ -1901,6 +1909,7 @@
             onpointerup={endLongPress}
             onpointercancel={endLongPress}
             onpointerleave={endLongPress}
+            onlostpointercapture={endLongPress}
             oncontextmenu={(e) => e.preventDefault()}
           >
             <span class="peek-card" aria-hidden="true">
@@ -2401,9 +2410,9 @@
   button:focus-visible, summary:focus-visible { outline: 3px solid #d38b21; outline-offset: 2px; }
   .tabletop {
     --rail-width: clamp(8.5rem, 14vw, 24rem);
-    /* Player mats are ~35% shorter than before (25vh) and narrower than
-       their column: the market pattern shows on either side of them. */
-    --edge-size: minmax(0, 19vh);
+    /* Player mats keep their 25vh height but are 78% of the column wide,
+       so the market pattern shows on either side of them. */
+    --edge-size: minmax(0, 25vh);
     --hand-card-size: clamp(3.4rem, 8.4vh, 10rem);
     --mat-width: 78%;
     position: fixed;
@@ -2560,7 +2569,7 @@
   .shared-market {
     --table-market-card-size: clamp(4rem, min(18vh, 10.5vw), 20rem);
     --table-target-height: clamp(2.7rem, 6.5vh, 7rem);
-    --stable-market-gap: clamp(0.25rem, 0.8vw, 1.5rem);
+    --stable-market-gap: clamp(0.2rem, 0.5vw, 0.9rem);
     --market-edge-inset: clamp(0.9rem, 1.6vmin, 2.5rem);
     position: relative;
     grid-column: 2;
@@ -2574,8 +2583,9 @@
   .shared-market > header { position: absolute; z-index: 3; top: var(--market-edge-inset); left: 50%; display: flex; min-height: 36px; align-items: center; justify-content: center; gap: clamp(0.6rem, 2vw, 3rem); font-size: clamp(0.7rem, 1.5vmin, 1.5rem); transform: translateX(-50%); }
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
-  .options-gear { position: absolute; z-index: 3; top: var(--market-edge-inset); left: var(--market-edge-inset); }
-  .options-gear.for-top { top: auto; left: auto; right: var(--market-edge-inset); bottom: var(--market-edge-inset); transform: rotate(180deg); }
+  /* Each player's gear sits at their own edge of the market, on their left. */
+  .options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); }
+  .options-gear.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: var(--market-edge-inset); transform: rotate(180deg); }
   .scale-panel .table-id { letter-spacing: 0.14em; }
   .scale-panel .facing-option { display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; }
   .scale-panel .facing-option small { flex: 1; line-height: 1.25; color: #5d5240; }
@@ -2602,7 +2612,7 @@
   .bot-seat-button small { display: block; font-weight: 400; font-size: 0.75em; opacity: 0.75; }
   .bot-seat-button { min-height: 44px; padding: 0.4rem 0.9rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
   .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
-  .rejoin img { width: clamp(2.4rem, 4.6vh, 4rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
+  .rejoin img { width: clamp(3.4rem, 8vh, 7rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
   .rejoin small { max-width: 8rem; color: #a6442d; font-weight: 700; line-height: 1.15; }
   .orientation-toggle {
     min-width: 44px;
@@ -2718,7 +2728,7 @@
   .corner-log summary { display: flex; min-width: 7rem; min-height: 44px; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.55rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fffaf0; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 24%); cursor: pointer; font-size: 0.75rem; font-weight: 700; list-style: none; }
   .corner-log summary::-webkit-details-marker { display: none; }
   .corner-log summary span { display: grid; min-width: 1.4rem; min-height: 1.4rem; place-items: center; border-radius: 99rem; background: #315f58; color: white; }
-  .corner-log ol { position: absolute; right: 0; bottom: calc(100% + 0.35rem); width: min(25rem, 42vw); margin: 0; padding: 0.55rem; border: 1px solid #8e826b; border-radius: 0.7rem; background: #fffaf0; box-shadow: 0 0.7rem 1.2rem rgb(10 32 30 / 24%); list-style: none; }
+  .corner-log ol { position: absolute; right: 0; bottom: calc(100% + 0.35rem); width: min(25rem, 42vw); max-height: min(60vh, 32rem); overflow-y: auto; overscroll-behavior: contain; margin: 0; padding: 0.55rem; border: 1px solid #8e826b; border-radius: 0.7rem; background: #fffaf0; box-shadow: 0 0.7rem 1.2rem rgb(10 32 30 / 24%); list-style: none; }
   .corner-log.inverted ol { top: calc(100% + 0.35rem); right: auto; bottom: auto; left: 0; }
   .corner-log li { padding: 0.22rem 0.3rem; border-radius: 0.25rem; background: #f2e8d3; font-size: 0.68rem; }
   .corner-log li + li { margin-top: 0.18rem; }
