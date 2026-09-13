@@ -37,7 +37,14 @@ export type ArNode = {
 /** A scene; a seat's private scene may also carry who holds the seat, so
  *  the viewer can show "seated as NAME" (and a reconnecting phone knows it
  *  is already in). */
-export type ArScene = { nodes: ArNode[]; player?: { name: string } };
+export type ArScene = {
+  nodes: ArNode[];
+  player?: { name: string };
+  /** What the phone may ask the table for right now: `bot` lists the
+   *  computer-opponent levels it can seat across from this seat (empty or
+   *  absent when the other seat is taken). */
+  offers?: { bot?: { id: string; name: string; blurb: string }[] };
+};
 
 /** An action forwarded by the relay; viewerId/seat are relay-stamped. */
 export type ArAction = {

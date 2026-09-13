@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Start the local jaipur-AR test stack: Firebase emulators (auth+firestore)
-# and the vite dev server. Needs Java 21+ on PATH for the Firestore emulator
-# (JAVA_HOME=~/jdk21 works on this machine) and `bun install` done once.
+# and the vite dev server. The emulators are optional (JAIPUR_FIREBASE=1)
+# and need Java 21+ on PATH (JAVA_HOME=~/jdk21 works on this machine);
+# `bun install` once.
 #
 # Then open (on this machine):
 #   http://127.0.0.1:5185/tt/?bot=1&diag=27     <- tabletop, solitaire mode
@@ -17,8 +18,13 @@ export PATH="$JAVA_HOME/bin:$PATH"
 # gone stale for a single port more than once, and http://<WSL-IP>:5185
 # keeps working when 127.0.0.1 does not. The emulators stay on 127.0.0.1
 # (the page reaches them through Windows' localhost forwarding).
-node_modules/.bin/firebase emulators:start --project demo-jaipur --only auth,firestore &
-EMU=$!
-trap 'kill $EMU 2>/dev/null' EXIT
-sleep 6
+# The tabletop plays on the browser-local store and needs no Firestore.
+# The emulators only start when asked (JAIPUR_FIREBASE=1), for the
+# ordinary "/" route or a table opened with ?firebase=1.
+if [ "${JAIPUR_FIREBASE:-0}" = "1" ]; then
+  node_modules/.bin/firebase emulators:start --project demo-jaipur --only auth,firestore &
+  EMU=$!
+  trap 'kill $EMU 2>/dev/null' EXIT
+  sleep 6
+fi
 node_modules/.bin/vite dev --host 0.0.0.0 --port 5185 --strictPort

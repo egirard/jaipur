@@ -20,10 +20,14 @@
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
 import html2canvas from 'html2canvas';
-import { ArHost, type ArAction, type ArAsset, type ArNode } from './arHost';
+import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene } from './arHost';
 import type { Card, GameState } from '../jaipur-rules';
 
 export type ArJoinHandler = (seat: string, name: string) => void;
+/** A seated phone asks for a computer opponent of the given level. */
+export type ArBotRequestHandler = (seat: string, difficulty: string) => void;
+/** The bot levels the table offers to phones (id = BotDifficulty). */
+export type ArBotOffer = { id: string; name: string; blurb: string };
 /** What selling a good would earn the active trader right now. */
 export type SalePreview = { cards: number; base: number; bonus: string | null };
 
@@ -260,6 +264,9 @@ export class ArTabletop {
   private artGeneration = 0;
   private lastSeatSceneJson = new Map<string, string>();
   onJoin: ArJoinHandler | null = null;
+  onBotRequest: ArBotRequestHandler | null = null;
+  /** Set by the page; published to a seat while a bot may still be seated opposite it. */
+  botOffers: ArBotOffer[] = [];
   /** Page-supplied: what selling `kind` earns the active trader now. */
   previewFor: ((kind: string) => SalePreview | null) | null = null;
   private lastSeatAssetsJson = new Map<string, string>();
@@ -282,6 +289,12 @@ export class ArTabletop {
         if (a.action === 'join' && a.seat) {
           const name = (a.data as { name?: unknown } | undefined)?.name;
           if (typeof name === 'string' && name.trim()) this.onJoin?.(a.seat, name.trim().slice(0, 32));
+        }
+        // A seated phone asking for a computer opponent (the table checks
+        // the seat is free and the level exists).
+        if (a.action === 'bot' && a.seat) {
+          const difficulty = (a.data as { difficulty?: unknown } | undefined)?.difficulty;
+          if (typeof difficulty === 'string' && this.botOffers.some((o) => o.id === difficulty)) this.onBotRequest?.(a.seat, difficulty);
         }
       },
       onViewers: (n) => {
@@ -560,7 +573,13 @@ export class ArTabletop {
         this.host.publishAssetsFor(seat, seatAssets);
       }
       const name = player?.displayName ?? this.seatNames.get(seat);
-      const scene = { nodes: handNodes, ...(name ? { player: { name } } : {}) };
+      const otherSeat = seatNo === 1 ? 2 : 1;
+      const canSeatBot = !lobby.bot && !lobby.players.some((p) => p.seat === otherSeat) && this.botOffers.length > 0;
+      const scene: ArScene = {
+        nodes: handNodes,
+        ...(name ? { player: { name } } : {}),
+        ...(canSeatBot ? { offers: { bot: this.botOffers } } : {})
+      };
       const json = JSON.stringify(scene);
       if (this.lastSeatSceneJson.get(seat) !== json) {
         this.lastSeatSceneJson.set(seat, json);

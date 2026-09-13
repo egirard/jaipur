@@ -11,18 +11,13 @@
   import StableMarketLayout from '$lib/StableMarketLayout.svelte';
   import TabletopTokenMarket from '$lib/TabletopTokenMarket.svelte';
   import TokenChip from '$lib/TokenChip.svelte';
-  import { initializeFirebase } from '$lib/firebase';
   import {
     createLocalGameRepository,
     localGameRoomExists,
     localHostUid
   } from '$lib/local-game-repository';
-  import {
-    createGameRepository,
-    gameRoomExists,
-    type GameRepository
-  } from '$lib/game-repository';
-  import type { GameActivity, GameEvent, GameEventType, Player } from '$lib/game-events';
+  import type { GameRepository } from '$lib/game-repository';
+  import type { BotDifficulty, GameActivity, GameEvent, GameEventType, Player } from '$lib/game-events';
   import {
     isLegalExchange,
     isLegalSale,
@@ -40,7 +35,9 @@
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
   import { ArTabletop, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type SalePreview } from '$lib/ar/arTabletop';
-  import { botActionEvent, chooseBotAction, createBotObservation } from '$lib/jaipur-bot';
+  import { botActionEvent, botEngineVersion, chooseBotAction, createBotObservation, type BotObservation, type JaipurAction } from '$lib/jaipur-bot';
+  import StrongBotWorker from '$lib/jaipur-bot.worker?worker';
+  import type { StrongBotRequest, StrongBotResponse } from '$lib/jaipur-bot.worker';
 
   type Seat = 1 | 2;
   type SeatQr = { seat: Seat; url: string; image: string };
@@ -115,6 +112,16 @@
     delay: number;
   }>>([]);
   let flightSequence = 0;
+  let botThinking = $state(false);
+  // AR phones must never see a card before the table shows it: while move
+  // animations run, scene publishes are held and sent once every flight has
+  // landed (stale beats early).
+  let arPublishHeld = false;
+  function publishAr() {
+    if (actionAnimating) { arPublishHeld = true; return; }
+    arPublishHeld = false;
+    void tick().then(() => ar?.publishFromState(lobby));
+  }
   let arrivingCardIds = $state<string[]>([]);
   // Safety net: a card hidden as "arriving" whose flight never finished
   // (or never started) would stay invisible in the hand while still
@@ -186,10 +193,21 @@
       // The Firebase repository stays in the code base; ?firebase=1 opts a
       // build with Firebase config back into it.
       localStore = !(pageParams.get('firebase') === '1' && import.meta.env.VITE_FIREBASE_API_KEY);
-      const services = localStore ? null : await initializeFirebase();
-      hostUid = localStore ? localHostUid() : (services!.auth.currentUser?.uid ?? '');
+      // Firebase is optional: its SDK is only loaded (dynamically) when the
+      // page opts in, so a table with no Firestore around never touches it.
+      const remote = localStore
+        ? null
+        : await (async () => {
+            const [{ initializeFirebase }, { createGameRepository, gameRoomExists }] = await Promise.all([
+              import('$lib/firebase'),
+              import('$lib/game-repository')
+            ]);
+            const services = await initializeFirebase();
+            return { services, createGameRepository, gameRoomExists };
+          })();
+      hostUid = localStore ? localHostUid() : (remote!.services.auth.currentUser?.uid ?? '');
       const roomExists = async (id: string) =>
-        localStore ? localGameRoomExists(id) : gameRoomExists(services!.db, id);
+        localStore ? localGameRoomExists(id) : remote!.gameRoomExists(remote!.services.db, id);
       // ?game=ABCDE pins the room code. Otherwise a local table resumes the
       // game it was last running (reload/restart safe); ?new=1 or the
       // "New table" control starts another.
@@ -230,7 +248,7 @@
       if (localStore) localStorage.setItem(currentKey, gameId);
       const attached = localStore
         ? createLocalGameRepository(gameId, hostUid)
-        : createGameRepository(services!.db, gameId, hostUid);
+        : remote!.createGameRepository(remote!.services.db, gameId, hostUid);
       repository = attached;
       attached.subscribe(
         (events) => {
@@ -261,7 +279,7 @@
             }
           }
           void maybeOpenFirstRound();
-          void tick().then(() => ar?.publishFromState(lobby));
+          publishAr();
           maybeBotTurn();
         },
         (error) => {
@@ -293,7 +311,15 @@
         base
       );
       localStorage.setItem('jaipur:ar:session', ar.host.session);
+      ar.botOffers = botLevels.map(({ difficulty, name, blurb }) => ({ id: difficulty, name, blurb }));
       ar.onJoin = (seat, name) => void joinFromAr(seat, name);
+      ar.onBotRequest = (seat, difficulty) => {
+        // The phone asks for a computer opponent: it sits across from the
+        // phone's own seat.
+        const other: Seat = seat === '1' ? 2 : 1;
+        const level = botLevels.find((l) => l.difficulty === difficulty);
+        if (level) void addBot(other, level.difficulty);
+      };
       ar.previewFor = (kind) => (isGood(kind) ? salePreview(kind) : null); // AR-only sale preview
       ar.onViewersChanged = (n) => (arViewers = n);
       ar.attach();
@@ -302,12 +328,11 @@
       if (pageParams.get('scale') === '1') scalePanelOpen = true; // deep link to the panel
       ar.onGeometryChanged = () => {
         refreshPhysical();
-        void tick().then(() => ar?.publishFromState(lobby));
+        publishAr();
       };
       // Publish what the store already holds: with the local store the
       // last notification fired before the AR bridge existed.
-      await tick();
-      ar.publishFromState(lobby);
+      publishAr();
       arQrs = await Promise.all(([1, 2] as const).map(async (seat) => ({
         seat,
         url: ar!.arViewerUrl(seat),
@@ -362,7 +387,7 @@
       // the next store change.
       const live = activeSeat();
       if (live && live !== marketFacingSeat && pendingTurnSeat === undefined) applyMarketFacing(live);
-      void tick().then(() => ar?.publishFromState(lobby)); // busy cleared
+      publishAr(); // busy cleared
     }
   }
 
@@ -451,28 +476,68 @@
       setTimeout(() => void playBotTurn(expectedKey), 120);
       return;
     }
-    // A beat before the bot moves, so its turn reads as a turn.
-    await wait(500);
-    if (`${lobby.epoch}:${lobby.round?.number}:${lobby.round?.turnNumber}` !== expectedKey) return;
+    // The bot visibly "thinks" for a random 500–1500 ms (hourglass in its
+    // seat) so the players' eyes are on it when the move plays out. The
+    // Maharaja search runs during that pause rather than after it.
     const observation = createBotObservation(lobby);
-    const action = observation ? chooseBotAction(observation) : null;
-    if (!observation || !action) return;
-    const event = botActionEvent(observation, action);
+    if (!observation) return;
+    botThinking = true;
     try {
-      await repository.append(event.type, event.payload);
-    } catch {
-      scheduledBotKey = '';
+      const [action] = await Promise.all([
+        lobby.bot?.difficulty === 'maharaja'
+          ? chooseStrongBotAction(expectedKey, observation)
+          : Promise.resolve(chooseBotAction(observation)),
+        wait(500 + Math.random() * 1000)
+      ]);
+      if (`${lobby.epoch}:${lobby.round?.number}:${lobby.round?.turnNumber}` !== expectedKey) return;
+      if (!action) return;
+      const event = botActionEvent(observation, action);
+      try {
+        await repository.append(event.type, event.payload);
+      } catch {
+        scheduledBotKey = '';
+      }
+    } finally {
+      botThinking = false;
     }
   }
 
-  // Seat the shipped apprentice bot on an empty seat (one bot per table).
-  async function addBot(seat: Seat) {
+  // The Maharaja bot searches in a Web Worker; on error or after 5 s it
+  // falls back to the apprentice's instant heuristic move.
+  function chooseStrongBotAction(key: string, observation: BotObservation): Promise<JaipurAction | null> {
+    const worker = new StrongBotWorker();
+    return new Promise((resolve) => {
+      const finish = (action: JaipurAction | null) => {
+        clearTimeout(timeout);
+        worker.terminate();
+        resolve(action ?? chooseBotAction(observation));
+      };
+      const timeout = setTimeout(() => finish(null), 5000);
+      worker.onmessage = (event: MessageEvent<StrongBotResponse>) => {
+        if (event.data.key === key) finish(event.data.action);
+      };
+      worker.onerror = () => finish(null);
+      worker.postMessage({ key, observation } satisfies StrongBotRequest);
+    });
+  }
+
+  // Every shipped bot level, in strength order, as offered on the table and
+  // on the phones.
+  const botLevels: { difficulty: BotDifficulty; name: string; blurb: string }[] = [
+    { difficulty: 'apprentice', name: 'Apprentice', blurb: 'quick learner' },
+    { difficulty: 'maharaja', name: 'Maharaja', blurb: 'strongest' }
+  ];
+
+  // Seat a bot of the chosen level on an empty seat (one bot per table).
+  async function addBot(seat: Seat, difficulty: BotDifficulty = 'apprentice') {
     if (!repository || lobby.bot || playerForSeat(seat) || busy) return;
+    const level = botLevels.find((l) => l.difficulty === difficulty);
+    if (!level) return;
     await repository.append('bot/added', {
       botUid: `bot-${hostUid}`,
-      displayName: 'Boring Bot',
-      difficulty: 'apprentice',
-      engineVersion: 1,
+      displayName: `${level.name} Bot`,
+      difficulty,
+      engineVersion: botEngineVersion(difficulty),
       seat
     });
   }
@@ -944,6 +1009,31 @@
   if (devMode && typeof window !== 'undefined') {
     (window as unknown as { __jaipurDev?: unknown }).__jaipurDev = {
       sit: (seat: number, name = 'Tester') => joinFromAr(String(seat), name),
+      // Play one move for whoever is active (the apprentice heuristic
+      // stands in for a human), or run the whole game to its summary —
+      // used to capture screens for the progress log.
+      play: async () => {
+        const round = lobby.round;
+        if (!repository || round?.status !== 'active') return false;
+        const observation = createBotObservation(lobby, round.activeUid);
+        const action = observation ? chooseBotAction(observation) : null;
+        if (!observation || !action) return false;
+        const event = botActionEvent(observation, action);
+        await repository.append(event.type, event.payload);
+        return true;
+      },
+      finishGame: async () => {
+        const deadline = Date.now() + 20 * 60_000;
+        while (Date.now() < deadline && !lobby.winnerUid) {
+          const round = lobby.round;
+          if (round?.status === 'complete') { await nextRound(); await wait(60); continue; }
+          if (round?.status !== 'active') { await wait(60); continue; }
+          if (round.activeUid === lobby.bot?.uid) { await wait(60); continue; }
+          const hook = (window as unknown as { __jaipurDev: { play: () => Promise<boolean> } }).__jaipurDev;
+          if (!(await hook.play())) await wait(60);
+        }
+        return Boolean(lobby.winnerUid);
+      },
       demo: () => runAnimationDemo(),
       demoStep: (index: number, seat: Seat) => DEMO_CATEGORIES[index].run(seat)
     };
@@ -1211,7 +1301,7 @@
     }
     scheduledBotKey = '';
     maybeBotTurn();
-    void tick().then(() => ar?.publishFromState(lobby));
+    publishAr();
   }
 
   async function animateActivities(
@@ -1448,8 +1538,9 @@
       } finally {
         actionAnimating = false;
         for (const uid of Object.keys(handGhosts)) releaseHandSpaces(uid);
-        // Not busy any more: the AR sale preview depends on that.
-        if (!demo) void tick().then(() => ar?.publishFromState(lobby));
+        // Every flight has landed: the AR phones may now see the result
+        // (also needed for the sale preview, which depends on !busy).
+        if (!demo || arPublishHeld) publishAr();
       }
     } else {
       for (const uid of Object.keys(handGhosts)) releaseHandSpaces(uid);
@@ -1482,9 +1573,20 @@
       </a>
     {/if}
     {#if !lobby.bot}
-      <button type="button" class="bot-seat-button" data-bot-seat={seat} disabled={!repository || busy} onclick={() => addBot(seat)}>
-        Play as a bot
-      </button>
+      <div class="bot-seat-buttons" role="group" aria-label="Seat a computer opponent here">
+        {#each botLevels as level (level.difficulty)}
+          <button
+            type="button"
+            class="bot-seat-button"
+            data-bot-seat={seat}
+            data-bot-level={level.difficulty}
+            disabled={!repository || busy}
+            onclick={() => addBot(seat, level.difficulty)}
+          >
+            Play vs {level.name} <small>{level.blurb}</small>
+          </button>
+        {/each}
+      </div>
     {/if}
   </section>
 {/snippet}
@@ -1498,6 +1600,11 @@
     data-player-uid={player.uid}
     aria-label={`Player ${seat}, ${player.displayName}`}
   >
+    {#if botThinking && player.uid === lobby.bot?.uid}
+      <div class="bot-thinking" data-bot-thinking={player.uid} role="status" aria-label={`${player.displayName} is thinking`}>
+        <span class="hourglass" aria-hidden="true">⏳</span>
+      </div>
+    {/if}
     <header>
       <div>
         <span class="seat-kicker">Player {seat}</span>
@@ -2093,6 +2200,29 @@
     transition: border-color 180ms ease, background 180ms ease;
   }
   .player-seat.active { border-color: #d38b21; background: #fff4d6; }
+  .player-seat { position: relative; }
+  .bot-thinking {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    display: grid;
+    place-items: center;
+    border-radius: inherit;
+    background: rgba(255, 244, 214, 0.35);
+    pointer-events: none;
+  }
+  .bot-thinking .hourglass {
+    font-size: clamp(3rem, 9vmin, 7rem);
+    line-height: 1;
+    opacity: 0.55;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25));
+    animation: hourglass-turn 1.2s ease-in-out infinite;
+  }
+  @keyframes hourglass-turn {
+    0%, 35% { transform: rotate(0deg); }
+    65%, 100% { transform: rotate(180deg); }
+  }
+  @media (prefers-reduced-motion: reduce) { .bot-thinking .hourglass { animation: none; } }
   .player-seat > header {
     display: grid;
     grid-template-columns: 1fr;
@@ -2190,6 +2320,8 @@
   .rejoin-codes figure { margin: 0; text-align: center; }
   .rejoin-codes img { width: min(9rem, 24vw); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.5rem; }
   .rejoin-codes p { flex-basis: 100%; margin: 0; }
+  .bot-seat-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; }
+  .bot-seat-button small { display: block; font-weight: 400; font-size: 0.75em; opacity: 0.75; }
   .bot-seat-button { min-height: 44px; padding: 0.4rem 0.9rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
   .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
   .rejoin img { width: clamp(3rem, 7vh, 6rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }

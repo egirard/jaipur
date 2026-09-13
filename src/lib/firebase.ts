@@ -1,16 +1,8 @@
-import { initializeApp } from 'firebase/app';
-import {
-  connectAuthEmulator,
-  getAuth,
-  signInAnonymously,
-  type Auth
-} from 'firebase/auth';
-import {
-  connectFirestoreEmulator,
-  initializeFirestore,
-  type Firestore,
-  type FirestoreSettings
-} from 'firebase/firestore';
+// The Firebase SDK is loaded on demand inside initializeFirebase(): pages
+// that run on the browser-local store (the AR tabletop by default) must not
+// pull it into their bundle or need an emulator to be running.
+import type { Auth } from 'firebase/auth';
+import type { Firestore, FirestoreSettings } from 'firebase/firestore';
 import { readFirebaseConfig } from './firebase-config';
 
 export interface FirebaseServices {
@@ -44,6 +36,8 @@ function firestoreSettings(): FirestoreSettings & { useFetchStreams: boolean } {
 export async function initializeFirebase(): Promise<FirebaseServices> {
   if (services) return services;
 
+  const [{ initializeApp }, { connectAuthEmulator, getAuth, signInAnonymously }, { connectFirestoreEmulator, initializeFirestore }] =
+    await Promise.all([import('firebase/app'), import('firebase/auth'), import('firebase/firestore')]);
   const config = readFirebaseConfig(import.meta.env);
   const app = initializeApp(config);
   const auth = getAuth(app);

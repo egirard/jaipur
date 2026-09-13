@@ -72,9 +72,15 @@ see their private cards in AR, while all play happens on the table.
 - The Firebase channel is disabled in this fork: the tabletop keeps the
   game in the browser's local storage and resumes it after a reload or
   restart (the AR table is the only writer). The Firebase repository is
-  still in the code; a build with Firebase config can opt back in with
-  `?firebase=1`. `?new=1` (or **New table** in the AR scale panel) starts
-  a fresh game.
+  still in the code but loaded on demand: a build with Firebase config can
+  opt back in with `?firebase=1`, and nothing else needs an emulator.
+  `scripts/dev-ar.sh` starts only vite; set `JAIPUR_FIREBASE=1` to start
+  the emulators too. `?new=1` (or **New table** in the AR scale panel)
+  starts a fresh game.
+- Computer opponent: each open seat offers **Play vs Apprentice** and
+  **Play vs Maharaja**; a seated phone gets the same buttons in its AR
+  viewer while the seat across from it is empty. The bot "thinks" for a
+  random 0.5–1.5 s under a turning hourglass before it moves.
 - Tap **AR scale** in the market header to set the screen diagonal in-app,
   check it against a bank card outline, see the screen/viewport geometry
   the phones are told about, and go full screen.
