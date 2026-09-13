@@ -93,7 +93,7 @@
       {/each}
     </section>
     {#if onRematch}
-      <button type="button" disabled={actionDisabled()} onclick={onRematch}>Start rematch</button>
+      <button type="button" disabled={actionDisabled()} onclick={onRematch}>Play again</button>
     {:else}
       <p>Match complete.</p>
     {/if}

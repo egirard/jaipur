@@ -8,6 +8,7 @@
   import QRCode from 'qrcode';
   import PieceArt from '$lib/PieceArt.svelte';
   import GameSummary from '$lib/GameSummary.svelte';
+  import { describeTieBreak } from '$lib/score-summary';
   import StableMarketLayout from '$lib/StableMarketLayout.svelte';
   import TabletopTokenMarket from '$lib/TabletopTokenMarket.svelte';
   import TokenChip from '$lib/TokenChip.svelte';
@@ -177,8 +178,171 @@
     endSize: number;
   }>>([]);
   let arrivingSealUid = $state<string | null>(null);
+
+  // ---- Round-end scoring sequence ----------------------------------------
+  // When a round completes in front of the players, the summary is preceded
+  // by a staged animation, both sides at once: a "Game over" disc grows in
+  // the market (why the round ended, facing each player); every goods token
+  // flies up to its owner's running score; the bonus tokens follow, flipping
+  // to show their values; the herds glow with their counts and the larger
+  // one grows a +5 that flies up too; tie-break text if needed, then the
+  // winner's mat glows under a "Round winner" banner; a huge Seal of
+  // Excellence grows in the middle, pauses, and shrinks into the winner's
+  // seat. A second seal makes both grow under "N wins the game!" and hands
+  // over to the summary (Play again); otherwise the next round opens.
+  type ScoringStage = 'pending' | 'gameover' | 'goods' | 'bonus' | 'camels' | 'result' | 'seal';
+  type Scoring = {
+    key: string;
+    stage: ScoringStage;
+    reason: string;
+    label: string;
+    totals: Record<string, number>;
+    revealedBonus: string[];
+    camelBonusUid: string | null;
+    camelToken: boolean;
+    tieText: string | null;
+    winnerUid: string | null;
+    winnerBanner: boolean;
+    bigSeal: boolean;
+    sealsWon: boolean;
+  };
+  let scoring = $state<Scoring | null>(null);
+  // The round whose seal has already reached the winner's seat (so the seat
+  // may show it while the round is still "complete").
+  let deliveredSealKey = $state('');
+  const scoringKey = () => `${lobby.epoch}:${lobby.round?.number}`;
+  const scoringLive = (key: string) => scoring?.key === key && lobby.round?.status === 'complete' && scoringKey() === key;
+
+  function scoreFlight(source: DOMRect, destination: DOMRect, token: Token, delay: number, inverted: boolean, reveal = false) {
+    const startSize = Math.min(source.width, source.height, 84);
+    const endSize = Math.min(destination.width, destination.height, startSize);
+    const key = ++flightSequence;
+    tokenFlights = [...tokenFlights, {
+      key, token, inverted, reveal, delay,
+      startLeft: source.left + (source.width - startSize) / 2,
+      startTop: source.top + (source.height - startSize) / 2,
+      startSize,
+      endLeft: destination.left + (destination.width - endSize) / 2,
+      endTop: destination.top + (destination.height - endSize) / 2,
+      endSize
+    }];
+    setTimeout(() => (tokenFlights = tokenFlights.filter((f) => f.key !== key)), 1000 + delay);
+  }
+
+  // Claimed synchronously when the round completes (the summary and the
+  // next round wait for the sequence); the stages start once the closing
+  // move's flights have landed.
+  function claimRoundScoring(key: string) {
+    if (scoring) return;
+    scoring = { key, stage: 'pending', reason: '', label: '', totals: {}, revealedBonus: [], camelBonusUid: null, camelToken: false, tieText: null, winnerUid: null, winnerBanner: false, bigSeal: false, sealsWon: false };
+  }
+
+  async function runRoundScoring(key: string) {
+    const round = lobby.round;
+    if (!round || round.status !== 'complete' || !round.scores || scoringKey() !== key || (scoring && scoring.key !== key)) { if (scoring?.key === key) scoring = null; return; }
+    const players = lobby.players;
+    const state: Scoring = {
+      key,
+      stage: 'gameover',
+      reason: round.endReason === 'three-empty-supplies' ? 'Three goods supplies are empty' : 'The deck could not refill the market',
+      label: 'Game over',
+      totals: Object.fromEntries(players.map((p) => [p.uid, 0])),
+      revealedBonus: [],
+      camelBonusUid: round.camelBonusUid,
+      camelToken: false,
+      tieText: null,
+      winnerUid: round.winnerUid,
+      winnerBanner: false,
+      bigSeal: false,
+      sealsWon: false
+    };
+    scoring = state;
+    const live = () => scoringLive(key);
+    const step = async (ms: number) => { await wait(ms); return live(); };
+    const scoreBox = (uid: string) => box(`[data-score-total="${CSS.escape(uid)}"]`);
+    const add = (uid: string, value: number, at: number) =>
+      setTimeout(() => { if (live() && scoring) scoring.totals[uid] = (scoring.totals[uid] ?? 0) + value; }, at);
+    try {
+      if (!(await step(4300))) return;
+      // Goods tokens, in sequence, both sides together.
+      scoring.stage = 'goods'; scoring.label = 'Goods tokens';
+      await tick();
+      let longest = 0;
+      for (const p of players) {
+        const dest = scoreBox(p.uid);
+        const tokens = round.ownedGoodsTokens[p.uid] ?? [];
+        tokens.forEach((token, i) => {
+          const src = box(`[data-owned-token-id="${CSS.escape(token.id)}"]`);
+          if (src && dest) scoreFlight(src, dest, token, i * 260, invertedFor(p.uid));
+          add(p.uid, token.value, i * 260 + 850);
+        });
+        longest = Math.max(longest, tokens.length * 260 + 1000);
+      }
+      if (!(await step(longest + 600))) return;
+      // Bonus tokens: flip to their values on the way up.
+      scoring.stage = 'bonus'; scoring.label = 'Bonus tokens';
+      await tick();
+      longest = 0;
+      for (const p of players) {
+        const dest = scoreBox(p.uid);
+        const tokens = round.ownedBonusTokens[p.uid] ?? [];
+        tokens.forEach((token, i) => {
+          const src = box(`[data-owned-token-id="${CSS.escape(token.id)}"]`);
+          if (src && dest) scoreFlight(src, dest, token, i * 420, invertedFor(p.uid), true);
+          setTimeout(() => { if (live() && scoring) scoring.revealedBonus = [...scoring.revealedBonus, token.id]; }, i * 420 + 500);
+          add(p.uid, token.value, i * 420 + 850);
+        });
+        longest = Math.max(longest, tokens.length * 420 + 1000);
+      }
+      if (!(await step(longest + 600))) return;
+      // Camel herds glow with their counts; the larger one earns +5.
+      scoring.stage = 'camels'; scoring.label = 'Camel herds';
+      await tick();
+      if (!(await step(1600))) return;
+      const camelUid = round.camelBonusUid;
+      if (camelUid) {
+        scoring.camelToken = true; // grows from the pile
+        await tick();
+        if (!(await step(1600))) return;
+        const src = box('[data-camel-bonus-token]');
+        const dest = scoreBox(camelUid);
+        if (src && dest) scoreFlight(src, dest, { id: `camel-bonus-${camelUid}`, kind: 'camel', value: 5 }, 0, invertedFor(camelUid));
+        scoring.camelToken = false;
+        add(camelUid, 5, 850);
+        if (!(await step(1400))) return;
+      }
+      // Result: tie-break, then the winner's mat glows.
+      scoring.stage = 'result'; scoring.label = 'Final score';
+      scoring.tieText = describeTieBreak(round, players)?.text ?? null;
+      if (!(await step(scoring.tieText ? 3600 : 1200))) return;
+      scoring.winnerBanner = true;
+      if (!(await step(2600))) return;
+      // The Seal of Excellence.
+      scoring.stage = 'seal'; scoring.label = 'Seal of Excellence';
+      scoring.winnerBanner = false;
+      scoring.bigSeal = true;
+      await tick();
+      if (!(await step(2400))) return;
+      flySeal(round.winnerUid);
+      scoring.bigSeal = false;
+      if (!(await step(1350))) return;
+      deliveredSealKey = key;
+      if (lobby.winnerUid) {
+        scoring.sealsWon = true;
+        if (!(await step(4200))) return;
+        scoring = null; // the summary takes over: Play again
+      } else {
+        if (!(await step(1000))) return;
+        scoring = null;
+        await nextRound(false);
+      }
+    } finally {
+      if (scoring?.key === key) scoring = null;
+    }
+  }
   let tokenFlights = $state<Array<{
     inverted?: boolean;
+    reveal?: boolean; // face-down bonus token flips to its value in flight
     key: number;
     token: Token;
     startLeft: number;
@@ -286,12 +450,18 @@
             : [];
           const previousActiveSeat = activeSeat(previous);
           const nextActiveSeat = activeSeat(next);
+          const roundJustEnded = repositoryReady && previous.round?.status === 'active' && next.round?.status === 'complete';
           lobby = next;
           for (const activity of next.activity) knownActivityIds.add(activity.id);
           repositoryReady = true;
           const actionAnimation = newActivities.length > 0
             ? animateActivities(newActivities, previous, next)
             : Promise.resolve();
+          if (roundJustEnded) {
+            const key = `${next.epoch}:${next.round?.number}`;
+            claimRoundScoring(key);
+            void actionAnimation.then(() => runRoundScoring(key));
+          }
           if (
             nextActiveSeat &&
             nextActiveSeat !== marketFacingSeat &&
@@ -824,7 +994,7 @@
   // (and while it is flying down); it appears when the flight lands.
   const sealStillOnSummary = (uid: string) =>
     arrivingSealUid === uid ||
-    (lobby.round?.status === 'complete' && !lobby.winnerUid && lobby.round.winnerUid === uid);
+    (lobby.round?.status === 'complete' && !lobby.winnerUid && lobby.round.winnerUid === uid && deliveredSealKey !== scoringKey());
 
   // The seal shown on the round summary flies down to the winner's seat
   // as the next market opens; the seat's new seal appears when it lands.
@@ -855,9 +1025,9 @@
     }, 1300);
   }
 
-  async function nextRound() {
-    if (!repository || !lobby.round || lobby.round.status !== 'complete' || lobby.winnerUid) return;
-    flySeal(lobby.round.winnerUid);
+  async function nextRound(flySealFirst = true) {
+    if (!repository || !lobby.round || lobby.round.status !== 'complete' || lobby.winnerUid || scoring) return;
+    if (flySealFirst) flySeal(lobby.round.winnerUid);
     await repository.append('round/started', {
       seed: crypto.randomUUID(),
       starterUid: lobby.round.loserUid,
@@ -1035,6 +1205,7 @@
   if (devMode && typeof window !== 'undefined') {
     (window as unknown as { __jaipurDev?: unknown }).__jaipurDev = {
       sit: (seat: number, name = 'Tester') => joinFromAr(String(seat), name),
+      viewerUrl: (seat: 1 | 2) => ar?.arViewerUrl(seat),
       // Play one move for whoever is active (the apprentice heuristic
       // stands in for a human), or run the whole game to its summary —
       // used to capture screens for the progress log.
@@ -1641,10 +1812,17 @@
   <section
     class="player-seat"
     class:active={isActive}
+    class:round-winner={scoring?.winnerBanner && scoring.winnerUid === player.uid}
     data-seat={seat}
     data-player-uid={player.uid}
     aria-label={`Player ${seat}, ${player.displayName}`}
   >
+    {#if scoring?.winnerBanner && scoring.winnerUid === player.uid}
+      <div class="round-winner-banner" data-round-winner-banner role="status">Round winner</div>
+    {/if}
+    {#if scoring?.sealsWon && lobby.winnerUid === player.uid}
+      <div class="game-winner-banner" data-game-winner-banner role="status">{player.displayName} wins the game!</div>
+    {/if}
     {#if botThinking && player.uid === lobby.bot?.uid}
       <div class="bot-thinking" data-bot-thinking={player.uid} role="status" aria-label={`${player.displayName} is thinking`}>
         <svg class="hourglass" viewBox="0 0 64 96" aria-hidden="true">
@@ -1662,7 +1840,12 @@
       </div>
       <strong class="turn-state">{isActive ? 'Your turn' : 'Waiting'}</strong>
       <span class="hand-count" data-hand-count={player.uid}>{lobby.round?.hands[player.uid]?.length ?? 0} / 7 cards</span>
-      <span class="seat-seals" data-seat-seals={player.uid} aria-label={`${lobby.seals[player.uid] ?? 0} of 2 Seals of Excellence`}>
+      {#if scoring || lobby.round?.status === 'complete'}
+        <span class="score-total" data-score-total={player.uid} aria-label="Round score">
+          {scoring ? scoring.totals[player.uid] ?? 0 : lobby.round?.scores?.[player.uid]?.total ?? 0}<small>pts</small>
+        </span>
+      {/if}
+      <span class="seat-seals" class:won={scoring?.sealsWon && lobby.winnerUid === player.uid} data-seat-seals={player.uid} aria-label={`${lobby.seals[player.uid] ?? 0} of 2 Seals of Excellence`}>
         {#each Array(2) as _, sealIndex}
           <img
             class:earned={sealIndex < (lobby.seals[player.uid] ?? 0)}
@@ -1732,6 +1915,7 @@
       <div
         class="tabletop-herd"
         data-table-herd={player.uid}
+        class:scoring-glow={scoring?.stage === 'camels'}
         role="img"
         aria-label={`${player.displayName}'s camel herd`}
       >
@@ -1760,6 +1944,9 @@
             />
           {/each}
           <span class="herd-count" data-herd-count={player.uid} aria-hidden="true">{lobby.round?.herds[player.uid]?.length ?? 0}</span>
+          {#if scoring?.camelToken && scoring.camelBonusUid === player.uid}
+            <span class="camel-bonus-token" data-camel-bonus-token aria-label="Camel bonus, 5 points"><TokenChip token={{ id: `camel-bonus-${player.uid}`, kind: 'camel', value: 5 }} /></span>
+          {/if}
           {#if herdSelectedCount(player.uid) > 0}<span class="herd-badge">{herdSelectedCount(player.uid)} staged</span>{/if}
         </button>
         <span>Herd</span>
@@ -1770,7 +1957,7 @@
         <span class="earned" data-owned-token-id={token.id}><TokenChip {token} /></span>
       {/each}
       {#each lobby.round?.ownedBonusTokens[player.uid] ?? [] as token (token.id)}
-        <span class="earned bonus" data-owned-token-id={token.id} data-owned-bonus={token.id}><TokenChip {token} hidden /></span>
+        <span class="earned bonus" data-owned-token-id={token.id} data-owned-bonus={token.id}><TokenChip {token} hidden={!(scoring ? scoring.revealedBonus.includes(token.id) : lobby.round?.status === 'complete')} /></span>
       {/each}
       {#if ownedTokens(player.uid).length === 0}<small>No tokens yet</small>{/if}
     </div>
@@ -1983,6 +2170,22 @@
           </StableMarketLayout>
         </div>
       </div>
+    {:else if lobby.round?.status === 'complete' && scoring?.stage === 'pending'}
+      <!-- the closing move is still animating; the sequence starts when it lands -->
+    {:else if lobby.round?.status === 'complete' && scoring}
+      <div class="scoring-overlay" data-scoring-stage={scoring.stage} aria-live="polite">
+        <div class="scoring-disc-wrap">
+          <div class="scoring-disc" class:compact={scoring.stage !== 'gameover'}>
+            <p class="facing far">{scoring.stage === 'gameover' ? scoring.reason : scoring.tieText ?? ''}</p>
+            <strong class="far">{scoring.label}</strong>
+            <strong>{scoring.label}</strong>
+            <p class="facing near">{scoring.stage === 'gameover' ? scoring.reason : scoring.tieText ?? ''}</p>
+          </div>
+        </div>
+        {#if scoring.bigSeal}
+          <img class="big-seal" data-result-seal src={componentImage('seal')} alt="Seal of Excellence" />
+        {/if}
+      </div>
     {:else if lobby.round?.status === 'complete'}
       <GameSummary
         {lobby}
@@ -2149,7 +2352,11 @@
       class="table-token-flight"
       aria-hidden="true"
       style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.28)}px`}
-    ><TokenChip token={flight.token} hidden={flight.token.kind.startsWith('bonus-')} /></span>
+    >{#if flight.reveal}
+        <span class="token-flip"><span class="token-flip-back"><TokenChip token={flight.token} hidden /></span><span class="token-flip-front"><TokenChip token={flight.token} /></span></span>
+      {:else}
+        <TokenChip token={flight.token} hidden={flight.token.kind.startsWith('bonus-')} />
+      {/if}</span>
   {/each}
   {#each sealFlights as flight (flight.key)}
     <span
@@ -2536,6 +2743,60 @@
     100% { transform: translateY(0) scale(0.9); }
   }
   .hand-count { font-size: clamp(0.62rem, 1.3vmin, 0.85rem); font-weight: 700; color: #526762; white-space: nowrap; }
+  /* ---- Round-end scoring sequence ---- */
+  .scoring-overlay { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; pointer-events: none; }
+  .scoring-disc-wrap { animation: scoring-grow 800ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+  .scoring-disc {
+    display: grid; place-items: center; gap: 0.2rem; box-sizing: border-box;
+    width: min(60vh, 42vw); aspect-ratio: 1; padding: 7%; border-radius: 50%;
+    border: 4px solid #d38b21; background: radial-gradient(circle, #fffaf0 55%, #f2e2bf);
+    box-shadow: 0 1rem 3rem rgb(10 32 30 / 35%), 0 0 0 1rem rgb(255 244 214 / 55%);
+    text-align: center; transition: transform 600ms ease;
+  }
+  .scoring-disc.compact { transform: scale(0.62); }
+  @keyframes scoring-grow { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .scoring-disc strong { font-family: 'Cormorant Garamond', serif; font-size: clamp(1.5rem, 4.6vmin, 4.2rem); line-height: 1; color: #a6442d; letter-spacing: 0.05em; }
+  .scoring-disc .facing { max-width: 88%; margin: 0; font-size: clamp(0.8rem, 1.9vmin, 1.6rem); line-height: 1.25; color: #183a37; font-weight: 700; }
+  .scoring-disc .far { transform: rotate(180deg); }
+  .big-seal {
+    position: absolute; left: 50%; top: 50%; translate: -50% -50%; width: min(34vh, 24vw); z-index: 5;
+    filter: drop-shadow(0 0 2rem #ffd27a) drop-shadow(0 0.8rem 1.6rem rgb(10 32 30 / 45%));
+    animation: big-seal-grow 900ms cubic-bezier(0.2, 0.9, 0.3, 1.25) both, big-seal-glow 1600ms ease-in-out 900ms infinite;
+  }
+  @keyframes big-seal-grow { from { transform: scale(0) rotate(-120deg); opacity: 0; } to { transform: scale(1) rotate(0deg); opacity: 1; } }
+  @keyframes big-seal-glow { 0%, 100% { filter: drop-shadow(0 0 1.2rem #ffd27a) drop-shadow(0 0.8rem 1.6rem rgb(10 32 30 / 45%)); } 50% { filter: drop-shadow(0 0 3rem #ffe9b0) drop-shadow(0 0.8rem 1.6rem rgb(10 32 30 / 45%)); } }
+  .score-total {
+    display: inline-grid; grid-auto-flow: column; align-items: baseline; gap: 0.15em; min-width: 2.6em; padding: 0.12em 0.55em;
+    border-radius: 99rem; background: #183a37; color: #fffaf0; font-weight: 900; font-size: clamp(1rem, 2.6vmin, 2.2rem); line-height: 1.1;
+  }
+  .score-total small { font-size: 0.45em; font-weight: 700; opacity: 0.8; }
+  .tabletop-herd.scoring-glow .herd-pile { animation: herd-glow 1400ms ease-in-out infinite; }
+  @keyframes herd-glow { 0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 #ffd27a); } 50% { transform: scale(1.15); filter: drop-shadow(0 0 1.2rem #ffd27a); } }
+  .tabletop-herd.scoring-glow .herd-count { transform: translateX(-50%) scale(1.7); transition: transform 500ms ease; }
+  .camel-bonus-token {
+    position: absolute; left: 50%; top: 50%; z-index: 5; width: clamp(3rem, 9vmin, 7rem); height: clamp(3rem, 9vmin, 7rem);
+    filter: drop-shadow(0 0 1rem #ffd27a); animation: camel-bonus-grow 800ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+  }
+  .camel-bonus-token :global(.token-chip) { width: 100%; height: 100%; }
+  @keyframes camel-bonus-grow { from { transform: translate(-50%, -50%) scale(0); } to { transform: translate(-50%, -50%) scale(1); } }
+  .player-seat.round-winner { border-color: #ffd27a; animation: seat-glow 1200ms ease-in-out infinite; }
+  @keyframes seat-glow { 0%, 100% { box-shadow: 0 0 0 0 rgb(255 210 122 / 0); } 50% { box-shadow: 0 0 2.5rem 0.6rem rgb(255 210 122 / 85%); } }
+  .round-winner-banner, .game-winner-banner {
+    position: absolute; left: 50%; top: 50%; z-index: 6; padding: 0.25em 1em; border-radius: 99rem;
+    background: #a6442d; color: #fffaf0; font-family: 'Cormorant Garamond', serif; font-size: clamp(1.6rem, 5vmin, 4.5rem); font-weight: 700;
+    white-space: nowrap; box-shadow: 0 0.8rem 2rem rgb(10 32 30 / 40%); pointer-events: none;
+    animation: banner-pop 600ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+  }
+  @keyframes banner-pop { from { transform: translate(-50%, -50%) scale(0); opacity: 0; } to { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
+  .seat-seals.won { position: relative; z-index: 5; transform: scale(2.1); transform-origin: center; transition: transform 900ms cubic-bezier(0.2, 0.9, 0.3, 1.2); filter: drop-shadow(0 0 1rem #ffd27a); }
+  .token-flip { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; animation: token-flip 1000ms ease-in-out var(--flight-delay) both; }
+  .token-flip > span { position: absolute; inset: 0; display: block; backface-visibility: hidden; }
+  .token-flip > span :global(.token-chip) { width: 100%; height: 100%; }
+  .token-flip-front { transform: rotateY(180deg); }
+  @keyframes token-flip { from { transform: rotateY(0deg); } to { transform: rotateY(180deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .scoring-disc-wrap, .big-seal, .camel-bonus-token, .round-winner-banner, .game-winner-banner, .tabletop-herd.scoring-glow .herd-pile, .player-seat.round-winner { animation: none; }
+  }
   .seat-seals { display: inline-flex; align-items: center; gap: 0.2rem; }
   .seat-seals img { width: clamp(2rem, 5vmin, 3.6rem); height: clamp(2rem, 5vmin, 3.6rem); border-radius: 50%; object-fit: cover; filter: grayscale(1); opacity: 0.25; transition: filter 300ms, opacity 300ms; }
   .seat-seals img.earned { filter: none; opacity: 1; }

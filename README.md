@@ -81,9 +81,22 @@ see their private cards in AR, while all play happens on the table.
   **Play vs Maharaja**; a seated phone gets the same buttons in its AR
   viewer while the seat across from it is empty. The bot "thinks" for a
   random 0.5–1.5 s under a turning hourglass before it moves.
-- Tap **AR scale** in the market header to set the screen diagonal in-app,
-  check it against a bank card outline, see the screen/viewport geometry
-  the phones are told about, and go full screen.
+- Hold a face-down hand card to peek at it on the table (shield it with
+  your other hand); the AR phones are not told.
+- The gear in each player's upper-left corner of the market opens **Table
+  options**: the tabletop id, the screen diagonal (check it against a bank
+  card outline), the screen/viewport geometry the phones are told about,
+  full screen, a new table, the animation demo, and **Turn to trader**
+  (rotate the market toward the active player; off by default because a
+  phone in AR locks onto the pre-rotation capture and flips).
+- A phone without WebXR (iPhone) can **Play using phone**: its hand,
+  bonus values and the market as a plain page from the same relay.
+- Round end plays out as a staged sequence: a "Game over" disc with the
+  reason facing each player, goods tokens then bonus tokens (flipping to
+  their values) flying up to each player's running score, glowing herds
+  with a +5 for the larger one, tie-break text, a "Round winner" glow, a
+  huge Seal of Excellence that shrinks into the winner's seat, and either
+  the next round opening by itself or "N wins the game!" and **Play again**.
 - The AR viewer and relay are hosted by the ARViewer project; the QR
   codes on the table embed them.
 
