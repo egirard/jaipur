@@ -113,6 +113,32 @@
   }>>([]);
   let flightSequence = 0;
   let botThinking = $state(false);
+  // Hold a face-down hand card to peek at it on the table (the player's
+  // other hand shields the view). Purely local: the AR phones are not told.
+  let revealedCardId = $state<string | null>(null);
+  let longPressTimer: ReturnType<typeof setTimeout> | undefined;
+  let longPressFired = false;
+  function startLongPress(event: PointerEvent, cardId: string) {
+    if (event.button !== undefined && event.button !== 0) return;
+    clearTimeout(longPressTimer);
+    longPressFired = false;
+    (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
+    longPressTimer = setTimeout(() => {
+      longPressFired = true;
+      revealedCardId = cardId;
+    }, 380);
+  }
+  function endLongPress() {
+    clearTimeout(longPressTimer);
+    longPressTimer = undefined;
+    revealedCardId = null;
+  }
+  // A click that follows a peek must not toggle the card's selection.
+  function consumeLongPress() {
+    const fired = longPressFired;
+    longPressFired = false;
+    return fired;
+  }
   // AR phones must never see a card before the table shows it: while move
   // animations run, scene publishes are held and sent once every flight has
   // landed (stale beats early).
@@ -1591,6 +1617,25 @@
   </section>
 {/snippet}
 
+{#snippet optionsGear(seat: Seat)}
+  <button
+    type="button"
+    class="orientation-toggle options-gear"
+    class:for-top={seat === 1}
+    data-options-seat={seat}
+    aria-expanded={scalePanelOpen}
+    aria-label="Table options and AR screen scale"
+    data-ar-diag={arDiag}
+    onclick={() => { scalePanelOpen = !scalePanelOpen; refreshPhysical(); }}
+  ><span class="scale-gear" aria-hidden="true">
+      <svg viewBox="0 0 48 48" width="1em" height="1em">
+        <path fill="currentColor" d="M24 4l3 4.5 5.3-1.4 1.4 5.3L38.5 15 36 20l4 3.6-4 3.6 2.5 5-4.8 2.6-1.4 5.3-5.3-1.4L24 44l-3-4.5-5.3 1.4-1.4-5.3L9.5 33 12 28l-4-3.6 4-3.6-2.5-5 4.8-2.6 1.4-5.3 5.3 1.4z" opacity="0.28"/>
+        <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M15 33L33 15M15 33h5m-5 0v-5M33 15h-5m5 0v5"/>
+      </svg>
+      <b>{arDiag}″</b>
+    </span>{#if physical && !physical.fullscreen}<small class="scale-note">win</small>{/if}</button>
+{/snippet}
+
 {#snippet playerSeat(seat: Seat, player: Player)}
   {@const isActive = lobby.round?.status === 'active' && seat === marketFacingSeat}
   <section
@@ -1661,14 +1706,24 @@
             class:arriving={arrivingCardIds.includes(card.id)}
             class:selected
             class:loaded
-            disabled={!canSelectReturns(player.uid) || loaded}
+            class:revealed={revealedCardId === card.id}
+            aria-disabled={!canSelectReturns(player.uid) || loaded}
             aria-pressed={selected}
-            aria-label={`${selected ? 'Deselect' : 'Select'} face-down card for a trade`}
+            aria-label={`${selected ? 'Deselect' : 'Select'} face-down card for a trade; hold to peek at it`}
             data-table-hand-card={card.id}
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
-            onclick={() => toggleReturn(player.uid, card.id)}
+            data-card-revealed={revealedCardId === card.id || undefined}
+            onclick={() => { if (consumeLongPress()) return; if (canSelectReturns(player.uid) && !loaded) toggleReturn(player.uid, card.id); }}
+            onpointerdown={(e) => startLongPress(e, card.id)}
+            onpointerup={endLongPress}
+            onpointercancel={endLongPress}
+            onpointerleave={endLongPress}
+            oncontextmenu={(e) => e.preventDefault()}
           >
-            <img src={componentImage('card-back')} alt="" draggable="false" />
+            <span class="peek-card" aria-hidden="true">
+              <img class="peek-back" src={componentImage('card-back')} alt="" draggable="false" />
+              <img class="peek-face" src={componentImage(card.kind)} alt="" draggable="false" />
+            </span>
           </button>
           {/if}
           </span>
@@ -1738,7 +1793,7 @@
   <meta name="description" content="A shared two-player Jaipur tabletop." />
 </svelte:head>
 
-<main class="tabletop" data-e2e-tabletop data-e2e-layout>
+<main class="tabletop" data-e2e-tabletop data-e2e-layout style={`--market-art: url("${componentImage('card-back')}")`}>
   <div class="top-edge edge">
     <div class="inverted-content">
       {#if playerForSeat(1)}
@@ -1757,33 +1812,14 @@
     data-market-facing-seat={marketFacingSeat}
     data-turn-facing-enabled={marketFacingEnabled}
     data-turn-phase={actionAnimating ? 'action' : turnPause ? 'pause' : turnTransitioning ? 'rotation' : 'ready'}
-    style={`--market-art: url("${componentImage('card-back')}")`}
   >
+    <!-- Options (gear) in each player's upper-left corner of the market. -->
+    {#each [2, 1] as const as gearSeat}
+      {@render optionsGear(gearSeat)}
+    {/each}
     <header>
-      <span>Tabletop <strong>{gameId || '•••••'}</strong></span>
-      <button
-        type="button"
-        class="orientation-toggle"
-        aria-expanded={scalePanelOpen}
-        aria-label="AR screen scale settings"
-        data-ar-diag={arDiag}
-        onclick={() => { scalePanelOpen = !scalePanelOpen; refreshPhysical(); }}
-      ><span class="scale-gear" aria-hidden="true">
-          <svg viewBox="0 0 48 48" width="1em" height="1em">
-            <path fill="currentColor" d="M24 4l3 4.5 5.3-1.4 1.4 5.3L38.5 15 36 20l4 3.6-4 3.6 2.5 5-4.8 2.6-1.4 5.3-5.3-1.4L24 44l-3-4.5-5.3 1.4-1.4-5.3L9.5 33 12 28l-4-3.6 4-3.6-2.5-5 4.8-2.6 1.4-5.3 5.3 1.4z" opacity="0.28"/>
-            <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M15 33L33 15M15 33h5m-5 0v-5M33 15h-5m5 0v5"/>
-          </svg>
-          <b>{arDiag}″</b>
-        </span>{#if physical && !physical.fullscreen}<small class="scale-note">win</small>{/if}</button>
       {#if lobby.round}
         <span>Round {lobby.round.number}</span>
-        <button
-          type="button"
-          class="orientation-toggle"
-          aria-pressed={marketFacingEnabled}
-          aria-label="Face market cards toward the active trader"
-          onclick={toggleMarketFacing}
-        >Facing {marketFacingEnabled ? 'on' : 'off'}</button>
       {:else}
         <span>Waiting for both traders</span>
       {/if}
@@ -1968,9 +2004,19 @@
     {@const cardH = 0.05398 / physical.mPerCssPx}
     <section class="scale-panel" aria-label="AR screen scale">
       <header>
-        <strong>AR screen scale</strong>
+        <strong>Table options · Tabletop <span class="table-id">{gameId || '•••••'}</span></strong>
         <button type="button" onclick={() => (scalePanelOpen = false)} aria-label="Close">✕</button>
       </header>
+      <div class="facing-option">
+        <button
+          type="button"
+          class="orientation-toggle"
+          aria-pressed={marketFacingEnabled}
+          aria-label="Face market cards toward the active trader"
+          onclick={toggleMarketFacing}
+        >Turn to trader {marketFacingEnabled ? 'on' : 'off'}</button>
+        <small>Rotates the market 180° so its cards and prompt face whoever's turn it is. Off by default: the market reads fine from both sides, and a phone in AR locks onto the pre-rotation capture and flips.</small>
+      </div>
       <div class="scale-row">
         <span>Screen diagonal</span>
         <button type="button" onclick={() => setDiag(arDiag - 5)} aria-label="5 inches smaller">−5</button>
@@ -2148,7 +2194,11 @@
   button:focus-visible, summary:focus-visible { outline: 3px solid #d38b21; outline-offset: 2px; }
   .tabletop {
     --rail-width: clamp(8.5rem, 14vw, 24rem);
-    --edge-size: minmax(0, 25vh);
+    /* Player mats are ~35% shorter than before (25vh) and narrower than
+       their column: the market pattern shows on either side of them. */
+    --edge-size: minmax(0, 19vh);
+    --hand-card-size: clamp(3.4rem, 8.4vh, 10rem);
+    --mat-width: 78%;
     position: fixed;
     inset: 0;
     display: grid;
@@ -2157,9 +2207,13 @@
     gap: clamp(0.25rem, 0.7vmin, 0.55rem);
     padding: clamp(0.3rem, 0.8vmin, 0.65rem);
     overflow: hidden;
-    background:
-      radial-gradient(circle at center, rgb(255 250 238 / 94%), rgb(233 220 193 / 98%)),
-      #e9dcc1;
+    /* The market pattern is the whole table's background (the mats, rails
+       and market float on it). Lighter wash than upstream: AR phones
+       image-track this pattern. */
+    background-image: linear-gradient(rgb(255 250 238 / 62%), rgb(255 250 238 / 62%)), var(--market-art);
+    background-position: center;
+    background-size: auto, min(40vh, 28rem);
+    background-color: #e9dcc1;
   }
   .edge, .shared-market {
     min-width: 0;
@@ -2171,6 +2225,7 @@
   }
   .top-edge { grid-column: 2; grid-row: 1; }
   .bottom-edge { grid-column: 2; grid-row: 3; }
+  .edge { width: var(--mat-width); justify-self: center; }
   .inverted-content { width: 100%; height: 100%; transform: rotate(180deg); }
   .join-seat {
     display: grid;
@@ -2199,7 +2254,7 @@
     height: 100%;
     grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0.25rem;
-    padding: clamp(0.35rem, 0.8vmin, 0.65rem) clamp(4.6rem, 9vw, 8rem);
+    padding: clamp(0.3rem, 0.7vmin, 0.55rem) clamp(1.2rem, 2.6vw, 2.6rem);
     border: 3px solid transparent;
     border-radius: inherit;
     transition: border-color 180ms ease, background 180ms ease;
@@ -2240,13 +2295,13 @@
   .player-seat > header > div { display: flex; align-items: baseline; gap: 0.45rem; }
   .turn-state { padding: 0.2rem 0.55rem; border-radius: 99rem; background: #e9dcc1; }
   .active .turn-state { background: #a6442d; color: white; }
-  .seat-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) clamp(5rem, 10vw, 16rem); align-items: center; gap: 0.5rem; }
+  .seat-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) clamp(5rem, 9vw, 14rem); align-items: center; gap: 0.5rem; }
   .tabletop-hand { display: flex; min-width: 0; height: 100%; align-items: center; }
   .hand-cell { display: block; flex: 0 0 auto; }
   .hand-cell > .table-hand-card, .market-card {
     position: relative;
-    width: clamp(3.7rem, 9.8vh, 12rem);
-    height: clamp(3.7rem, 9.8vh, 12rem);
+    width: var(--hand-card-size, var(--hand-card-size));
+    height: var(--hand-card-size, var(--hand-card-size));
     flex: 0 0 auto;
     padding: 0.18rem;
     overflow: hidden;
@@ -2262,8 +2317,15 @@
   /* Released ghost: it has moved to the slot side and looks exactly like an
      open slot, so swapping it for a real slot later is invisible. */
   .table-hand-card.ghost.as-slot { visibility: visible; border: 2px dashed #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0.55rem; opacity: 0.45; }
-  .table-hand-card > img { display: block; width: 100%; height: 100%; object-fit: cover; }
-  .table-hand-card:disabled, .herd-pile:disabled { cursor: default; }
+  /* Hold to peek: the back flips to the face for as long as the finger stays
+     down (the other hand shields it); nothing is sent to the AR phones. */
+  .table-hand-card { perspective: 600px; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .table-hand-card[aria-disabled='true'], .herd-pile:disabled { cursor: default; }
+  .peek-card { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform 260ms ease; }
+  .peek-card > img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; backface-visibility: hidden; border-radius: 0.35rem; }
+  .peek-face { transform: rotateY(180deg); }
+  .table-hand-card.revealed .peek-card { transform: rotateY(180deg); }
+  .table-hand-card.revealed { z-index: 2; box-shadow: 0 0 0 3px #ffd27a, 0 0.5rem 1rem rgb(10 32 30 / 35%); }
   .herd-pile { display: block; padding: 0; border: none; background: none; cursor: pointer; }
   .herd-badge { position: absolute; right: -0.2rem; bottom: -0.4rem; z-index: 3; min-width: 1.6rem; padding: 0.15rem 0.4rem; border-radius: 99rem; background: #66ffcc; color: #0d2622; font-weight: 800; font-size: 0.9rem; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
   .table-hand-card.selected, .table-herd-card.selected { transform: translateY(-14%); box-shadow: 0 0 0 3px #66ffcc, 0 0.5rem 1rem rgb(10 32 30 / 35%); z-index: 1; }
@@ -2278,8 +2340,8 @@
     padding: 0.15rem;
     border-radius: 0.55rem;
   }
-  .herd-pile { position: relative; width: clamp(6.8rem, 13vw, 22rem); height: clamp(3.7rem, 9.8vh, 12rem); }
-  .herd-pile .table-herd-card { position: absolute; padding: 0; background: none; overflow: hidden; pointer-events: none; left: calc(var(--pile-index) * clamp(0.55rem, 1.1vmin, 1.4rem)); width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); border: 2px solid #a6442d; border-radius: 0.55rem; transform: rotate(calc((var(--pile-index) - 2) * 2deg)); }
+  .herd-pile { position: relative; width: clamp(5rem, 9vw, 14rem); height: var(--hand-card-size); }
+  .herd-pile .table-herd-card { position: absolute; padding: 0; background: none; overflow: hidden; pointer-events: none; left: calc(var(--pile-index) * clamp(0.55rem, 1.1vmin, 1.4rem)); width: var(--hand-card-size); height: var(--hand-card-size); border: 2px solid #a6442d; border-radius: 0.55rem; transform: rotate(calc((var(--pile-index) - 2) * 2deg)); }
   .herd-pile .table-herd-card.selected { transform: rotate(calc((var(--pile-index) - 2) * 2deg)) translateY(-14%); }
   .seat-tokens { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .seat-tokens .earned { width: clamp(1.4rem, 3.2vmin, 3.6rem); height: clamp(1.4rem, 3.2vmin, 3.6rem); flex: 0 0 auto; }
@@ -2287,7 +2349,7 @@
   /* Empty hand slots sit to the left of the fanned cards; only the edges
      a real card would show are drawn (top, bottom, left — the right edge
      hides under the next card). */
-  .hand-slot { display: block; width: clamp(3.7rem, 9.8vh, 12rem); height: clamp(3.7rem, 9.8vh, 12rem); flex: 0 0 auto; border: 2px dashed #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0.55rem; opacity: 0.45; }
+  .hand-slot { display: block; width: var(--hand-card-size); height: var(--hand-card-size); flex: 0 0 auto; border: 2px dashed #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0.55rem; opacity: 0.45; }
   .shared-market {
     --table-market-card-size: clamp(4rem, min(18vh, 10.5vw), 20rem);
     --table-target-height: clamp(2.7rem, 6.5vh, 7rem);
@@ -2298,15 +2360,18 @@
     grid-row: 2;
     min-height: 0;
     padding: clamp(0.4rem, 1vmin, 0.75rem) clamp(0.65rem, 1.5vw, 1.25rem);
-    /* Lighter wash than upstream (84%): the pattern is a large part of what AR phones image-track. */
-    background-image: linear-gradient(rgb(255 250 238 / 62%), rgb(255 250 238 / 62%)), var(--market-art);
-    background-position: center;
-    background-size: auto, min(40vh, 28rem);
+    border: none;
+    background: none;
+    box-shadow: none;
   }
   .shared-market > header { position: absolute; z-index: 3; top: var(--market-edge-inset); left: 50%; display: flex; min-height: 36px; align-items: center; justify-content: center; gap: clamp(0.6rem, 2vw, 3rem); font-size: clamp(0.7rem, 1.5vmin, 1.5rem); transform: translateX(-50%); }
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
-  .shared-market > header strong { letter-spacing: 0.14em; }
+  .options-gear { position: absolute; z-index: 3; top: var(--market-edge-inset); left: var(--market-edge-inset); }
+  .options-gear.for-top { top: auto; left: auto; right: var(--market-edge-inset); bottom: var(--market-edge-inset); transform: rotate(180deg); }
+  .scale-panel .table-id { letter-spacing: 0.14em; }
+  .scale-panel .facing-option { display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; }
+  .scale-panel .facing-option small { flex: 1; line-height: 1.25; color: #5d5240; }
   .scale-panel {
     position: fixed; z-index: 30; left: 50%; top: 50%; transform: translate(-50%, -50%);
     width: min(34rem, 92vw); padding: 0.9rem 1.1rem; border: 1px solid #8e826b; border-radius: 0.9rem;
@@ -2330,7 +2395,7 @@
   .bot-seat-button small { display: block; font-weight: 400; font-size: 0.75em; opacity: 0.75; }
   .bot-seat-button { min-height: 44px; padding: 0.4rem 0.9rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
   .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
-  .rejoin img { width: clamp(3rem, 7vh, 6rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
+  .rejoin img { width: clamp(2.4rem, 4.6vh, 4rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
   .rejoin small { max-width: 8rem; color: #a6442d; font-weight: 700; line-height: 1.15; }
   .orientation-toggle {
     min-width: 44px;

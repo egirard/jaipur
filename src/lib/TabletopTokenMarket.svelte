@@ -2,7 +2,7 @@
   import { assets as assetBase } from '$app/paths';
   import TokenChip from '$lib/TokenChip.svelte';
   import TokenStack from '$lib/TokenStack.svelte';
-  import type { Good, RoundState } from '$lib/jaipur-rules';
+  import { bonusValueRange, type Good, type RoundState } from '$lib/jaipur-rules';
 
   let {
     seat,
@@ -39,17 +39,22 @@
   aria-label={`Player ${seat} token supplies`}
 >
   <div class="token-market-content">
-    <h2>Tokens</h2>
+    <h2>Bonus tokens</h2>
     {#if round}
       <div class="bonus-row" aria-label="Bonus supplies">
         {#each ['3', '4', '5'] as size}
-          <span class="bonus-stack" data-bonus-size={size} aria-label={`${size}-card bonus tokens, ${round.bonusTokens[size as '3' | '4' | '5'].length} left`}>
-            {#if round.bonusTokens[size as '3' | '4' | '5'].length > 0}
-              <TokenStack tokens={round.bonusTokens[size as '3' | '4' | '5']} direction="vertical" hidden usage="supply" />
-            {:else}
-              <span class="empty-stack">—</span>
-            {/if}
-            <small>{size}{size === '5' ? '+' : ''} cards · {round.bonusTokens[size as '3' | '4' | '5'].length}</small>
+          {@const stack = round.bonusTokens[size as '3' | '4' | '5']}
+          {@const range = bonusValueRange(size as '3' | '4' | '5')}
+          <span class="bonus-stack" data-bonus-size={size} aria-label={`${size}${size === '5' ? '+' : ''}-card bonus tokens worth ${range.min} to ${range.max}, ${stack.length} left`}>
+            <span class="bonus-pile">
+              {#if stack.length > 0}
+                <TokenStack tokens={stack} direction="vertical" hidden usage="supply" />
+              {:else}
+                <span class="empty-stack">—</span>
+              {/if}
+              <span class="bonus-count" data-bonus-count={size} aria-hidden="true">{stack.length}</span>
+            </span>
+            <small>+{range.min} to +{range.max}</small>
           </span>
         {/each}
       </div>
@@ -128,7 +133,7 @@
     align-items: flex-start;
     gap: 0.3rem;
     padding: 0.2rem 0;
-    font-size: clamp(0.5rem, 0.9vmin, 1.2rem);
+    font-size: clamp(0.6rem, 1.25vmin, 1.5rem);
   }
   .bonus-stack { display: grid; justify-items: center; gap: 0.15rem; }
   .bonus-stack :global(.token-stack) {
@@ -136,6 +141,14 @@
     --token-stack-step: calc(var(--chip) * 0.12);
   }
   .bonus-stack small { font-weight: 700; white-space: nowrap; }
+  .bonus-pile { position: relative; display: block; }
+  /* Remaining count: the same red badge as the herd count, bottom right. */
+  .bonus-count {
+    position: absolute; right: -0.55em; bottom: -0.35em; z-index: 3;
+    min-width: 1.7em; padding: 0.1em 0.35em; border: 2px solid #fffaf0; border-radius: 99rem;
+    background: #a6442d; color: #fffaf0; font-size: clamp(0.7rem, 1.6vmin, 1.4rem); font-weight: 900;
+    line-height: 1.2; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%);
+  }
   /* One good per row: name + remaining count over the chips (rows of
      four), the good's own art behind. */
   .rail-token {

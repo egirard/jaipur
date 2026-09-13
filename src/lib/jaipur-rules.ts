@@ -111,6 +111,13 @@ const BONUS_VALUES = {
   '5': [8, 8, 9, 10, 10]
 } as const;
 
+/** The printed values a bonus stack can hold (what a sale of that many
+ *  cards may earn), for labelling the face-down supplies. */
+export function bonusValueRange(size: '3' | '4' | '5'): { min: number; max: number } {
+  const values = BONUS_VALUES[size];
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
 export function createDeck(): Card[] {
   return (Object.entries(CARD_COUNTS) as [CardKind, number][]).flatMap(([kind, count]) =>
     Array.from({ length: count }, (_, index) => ({
