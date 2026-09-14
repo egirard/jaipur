@@ -524,6 +524,17 @@
         const level = botLevels.find((l) => l.difficulty === difficulty);
         if (level) void addBot(other, level.difficulty);
       };
+      // The phone view doubles as the seat's hand controller (upstream
+      // /hand): its taps and Clear go through the same intent path as taps
+      // on the table, for whoever holds that seat (never a bot).
+      ar.onToggleReturn = (seat, cardId) => {
+        const player = playerForSeat(Number(seat) as Seat);
+        if (player && player.uid !== lobby.bot?.uid) void toggleFromPhone(player.uid, cardId);
+      };
+      ar.onClear = (seat) => {
+        const player = playerForSeat(Number(seat) as Seat);
+        if (player && player.uid !== lobby.bot?.uid && canSelectReturns(player.uid)) void publishIntent(player.uid, [], exchangeLoads(player.uid));
+      };
       ar.previewFor = (kind) => (isGood(kind) ? salePreview(kind) : null); // AR-only sale preview
       ar.onViewersChanged = (n) => (arViewers = n);
       ar.attach();
@@ -818,6 +829,19 @@
       selected.add(cardId);
     }
     await publishIntent(uid, [...selected], loads);
+  }
+
+  // The phone's hand controller toggles a specific piece: hand cards take
+  // the table's path (which unstages camels first); a named camel is a
+  // plain toggle, as on the upstream /hand page.
+  async function toggleFromPhone(uid: string, cardId: string) {
+    if (!canSelectReturns(uid)) return;
+    const herd = lobby.round?.herds[uid] ?? [];
+    if (!herd.some((c) => c.id === cardId)) return toggleReturn(uid, cardId);
+    const loads = exchangeLoads(uid);
+    if (Object.values(loads).includes(cardId)) return;
+    const selected = selectedReturnIds(uid);
+    await publishIntent(uid, selected.includes(cardId) ? selected.filter((id) => id !== cardId) : [...selected, cardId], loads);
   }
 
   async function appendFor(

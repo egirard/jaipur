@@ -32,6 +32,11 @@ export type ArNode = {
   /** Asset ids. */
   face: string;
   back?: string;
+  /** Short caption the phone view prints on the piece (e.g. "On table"). */
+  tag?: string;
+  /** false = the host will not act on a tap right now; the phone view
+   *  shows the piece inert (default true). */
+  tap?: boolean;
 };
 
 /** A scene; a seat's private scene may also carry who holds the seat, so
@@ -44,6 +49,13 @@ export type ArScene = {
    *  computer-opponent levels it can seat across from this seat (empty or
    *  absent when the other seat is taken). */
   offers?: { bot?: { id: string; name: string; blurb: string }[] };
+  /** It is this seat's turn to act (the phone view shows "Your turn"). */
+  turn?: boolean;
+  /** Status lines for the phone view ("3 / 7 cards", token totals…). */
+  notes?: string[];
+  /** Host-defined buttons the phone view offers; pressing one sends
+   *  `{action:'control', data:{id}}`. */
+  controls?: { id: string; label: string }[];
 };
 
 /** An action forwarded by the relay; viewerId/seat are relay-stamped. */

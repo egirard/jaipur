@@ -45,13 +45,19 @@ stays GPLv3, ARViewer stays separate).
    laid out along that player's table edge. Card faces that are private go
    through `publishAssetsFor`; backs reuse the shared asset id.
 
-6. **AR taps → game intents.** `onAction` receives
-   `{action:'tap', nodeId, seat}` (seat is relay-stamped, not
-   viewer-claimed). Map nodeId → the same handler the on-screen tap uses;
-   validate by rules as usual. For hand cards: toggle the card's
-   "ready to trade" selection in the game UX **and** republish that seat's
-   scene with `glow: true` on the node — the glow in AR is always
-   host-driven state, so AR and the tabletop can never disagree.
+6. **Phone taps → game intents.** `onAction` receives
+   `{action:'select', nodeId, seat}` (seat is relay-stamped, not
+   viewer-claimed; AR `tap` stays a local peek). `arTabletop.ts` maps
+   `hand:<id>` / `herd:<id>` selects to
+   `onToggleReturn(seat, cardId)` and the `control` action `{id:'clear'}`
+   to `onClear(seat)`; the page routes both into the same
+   `tabletop/intent` path a tap on the table uses, so the ARViewer
+   "Play using phone" view is a full replacement for the upstream `/hand`
+   controller. The seat scene carries what `/hand` shows: `turn`, `notes`
+   (hand count, staging summary, token tally), `controls` (Clear
+   unplaced), herd nodes, and `tag:'On table'` / `tap:false` on placed
+   pieces. Selection glow is always host-driven state, so the phone and
+   the tabletop can never disagree.
 
 ## Testing without phones
 

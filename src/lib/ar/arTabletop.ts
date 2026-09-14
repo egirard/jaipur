@@ -265,6 +265,10 @@ export class ArTabletop {
   private lastSeatSceneJson = new Map<string, string>();
   onJoin: ArJoinHandler | null = null;
   onBotRequest: ArBotRequestHandler | null = null;
+  /** A seat's phone toggled one of its own cards/camels for a trade. */
+  onToggleReturn: ((seat: string, cardId: string) => void) | null = null;
+  /** A seat's phone asked to unstage everything not yet placed. */
+  onClear: ((seat: string) => void) | null = null;
   /** Set by the page; published to a seat while a bot may still be seated opposite it. */
   botOffers: ArBotOffer[] = [];
   /** Page-supplied: what selling `kind` earns the active trader now. */
@@ -284,8 +288,7 @@ export class ArTabletop {
     this.host = new ArHost({
       session,
       onAction: (a: ArAction) => {
-        // The only action the table honours: a seated phone asking to join
-        // with a trader name. Taps stay viewer-local (peek at hidden sides).
+        // A seated phone asking to join with a trader name.
         if (a.action === 'join' && a.seat) {
           const name = (a.data as { name?: unknown } | undefined)?.name;
           if (typeof name === 'string' && name.trim()) this.onJoin?.(a.seat, name.trim().slice(0, 32));
@@ -295,6 +298,20 @@ export class ArTabletop {
         if (a.action === 'bot' && a.seat) {
           const difficulty = (a.data as { difficulty?: unknown } | undefined)?.difficulty;
           if (typeof difficulty === 'string' && this.botOffers.some((o) => o.id === difficulty)) this.onBotRequest?.(a.seat, difficulty);
+        }
+        // The phone view is this seat's private hand controller (what the
+        // upstream /hand page does): tapping one of its own cards or camels
+        // toggles the piece in the seat's tabletop intent, exactly like a
+        // tap on the table. Only the seat's own pieces are honoured. (AR
+        // `tap` stays viewer-local: a peek/inspect, never a selection.)
+        if (a.action === 'select' && a.seat && typeof a.nodeId === 'string') {
+          const m = /^(hand|herd):(.+)$/.exec(a.nodeId);
+          if (m) this.onToggleReturn?.(a.seat, m[2]);
+        }
+        // Host-defined phone buttons (scene.controls).
+        if (a.action === 'control' && a.seat) {
+          const id = (a.data as { id?: unknown } | undefined)?.id;
+          if (id === 'clear') this.onClear?.(a.seat);
         }
       },
       onViewers: (n) => {
@@ -499,7 +516,10 @@ export class ArTabletop {
       const seat = String(seatNo);
       const player = lobby.players.find((p) => p.seat === seatNo);
       const hand: Card[] = (player && round?.hands[player.uid]) ?? [];
-      const selected = new Set((player && lobby.tabletopIntents[player.uid]?.selectedReturnIds) ?? []);
+      const intent = player ? lobby.tabletopIntents[player.uid] : undefined;
+      const selected = new Set(intent?.selectedReturnIds ?? []);
+      const loaded = new Set(Object.values(intent?.exchangeLoads ?? {}));
+      const myTurn = Boolean(player && round?.status === 'active' && round.activeUid === player.uid && !lobby.pendingDraw);
       const rotY = seatNo === 1 ? Math.PI : 0;
       const handNodes: ArNode[] = [];
       for (const card of hand) {
@@ -517,6 +537,32 @@ export class ArTabletop {
           glow: selected.has(card.id) ? '#66ffcc' : false,
           face: `s-${card.kind}`,
           back: 'back-s',
+          ...(loaded.has(card.id) ? { tag: 'On table', tap: false } : myTurn ? {} : { tap: false }),
+        });
+      }
+      // The herd, one node per camel (the table only draws the top five,
+      // so the rest share the pile's position): the phone view lists them
+      // like the upstream /hand page does, and taps stage them.
+      const herd: Card[] = (player && round?.herds[player.uid]) ?? [];
+      const pileRect = player
+        ? document.querySelector(`[data-table-herd-pile="${CSS.escape(player.uid)}"]`)?.getBoundingClientRect()
+        : undefined;
+      for (const camel of herd) {
+        const rect = document
+          .querySelector(`[data-table-herd-card="${CSS.escape(camel.id)}"]`)
+          ?.getBoundingClientRect() ?? pileRect;
+        if (!rect) continue;
+        const { xM, zM } = this.toMeters(rect);
+        handNodes.push({
+          id: `herd:${camel.id}`,
+          kind: 'card',
+          xM, zM, rotY,
+          faceUp: true,
+          peek: false,
+          glow: selected.has(camel.id) ? '#66ffcc' : false,
+          face: 's-camel',
+          back: 'back-s',
+          ...(loaded.has(camel.id) ? { tag: 'On table', tap: false } : myTurn ? {} : { tap: false }),
         });
       }
       // Private extras, drawn only for this seat: the sale preview over
@@ -575,10 +621,28 @@ export class ArTabletop {
       const name = player?.displayName ?? this.seatNames.get(seat);
       const otherSeat = seatNo === 1 ? 2 : 1;
       const canSeatBot = !lobby.bot && !lobby.players.some((p) => p.seat === otherSeat) && this.botOffers.length > 0;
+      // What the upstream /hand page prints above its cards: hand count,
+      // staging summary, token tally, and round-over notice.
+      const notes: string[] = [];
+      let controls: { id: string; label: string }[] | undefined;
+      if (player && round) {
+        const unplaced = [...selected].filter((id) => !loaded.has(id)).length;
+        notes.push(`${hand.length} / 7 cards`);
+        notes.push(lobby.pendingDraw
+          ? 'Draw awaiting confirmation on the table'
+          : `${unplaced} selected for the table · ${loaded.size} placed face-down`);
+        const tokens = [...(round.ownedGoodsTokens[player.uid] ?? []), ...(round.ownedBonusTokens[player.uid] ?? [])];
+        const total = tokens.reduce((sum, t) => sum + t.value, 0);
+        notes.push(tokens.length ? `Your tokens: ${tokens.length} worth ${total} points` : 'No tokens yet');
+        if (round.status === 'complete') notes.push('Round complete — open the next round on the table.');
+        if (myTurn && unplaced > 0) controls = [{ id: 'clear', label: 'Clear unplaced' }];
+      }
       const scene: ArScene = {
         nodes: handNodes,
         ...(name ? { player: { name } } : {}),
-        ...(canSeatBot ? { offers: { bot: this.botOffers } } : {})
+        ...(canSeatBot ? { offers: { bot: this.botOffers } } : {}),
+        ...(player && round ? { turn: myTurn, notes } : {}),
+        ...(controls ? { controls } : {})
       };
       const json = JSON.stringify(scene);
       if (this.lastSeatSceneJson.get(seat) !== json) {
