@@ -7,7 +7,6 @@
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
   import PieceArt from '$lib/PieceArt.svelte';
-  import GameSummary from '$lib/GameSummary.svelte';
   import { describeTieBreak } from '$lib/score-summary';
   import StableMarketLayout from '$lib/StableMarketLayout.svelte';
   import TabletopTokenMarket from '$lib/TabletopTokenMarket.svelte';
@@ -196,9 +195,10 @@
   // one grows a +5 that flies up too; tie-break text if needed, then the
   // winner's mat glows under a "Round winner" banner; a huge Seal of
   // Excellence grows in the middle, pauses, and shrinks into the winner's
-  // seat. A second seal makes both grow under "N wins the game!" and hands
-  // over to the summary (Play again); otherwise the next round opens.
-  type ScoringStage = 'pending' | 'gameover' | 'goods' | 'bonus' | 'camels' | 'result' | 'seal';
+  // seat. A second seal makes both grow under "N wins the game!" and the
+  // screen stays put ('final') with Rematch / New game / Quit facing each
+  // player; otherwise the next round opens.
+  type ScoringStage = 'pending' | 'gameover' | 'goods' | 'bonus' | 'camels' | 'result' | 'seal' | 'final';
   type Scoring = {
     key: string;
     stage: ScoringStage;
@@ -220,6 +220,10 @@
   let deliveredSealKey = $state('');
   const scoringKey = () => `${lobby.epoch}:${lobby.round?.number}`;
   const scoringLive = (key: string) => scoring?.key === key && lobby.round?.status === 'complete' && scoringKey() === key;
+  // The match is decided and its closing sequence has finished (or was never
+  // seen: a reload lands here too) — the seats show the winner and the
+  // end-of-game actions.
+  const gameWon = $derived(Boolean(lobby.winnerUid) && lobby.round?.status === 'complete' && (!scoring || scoring.stage === 'final' || scoring.sealsWon));
 
   function scoreFlight(source: DOMRect, destination: DOMRect, token: Token, delay: number, inverted: boolean, reveal = false) {
     const startSize = Math.min(source.width, source.height, 84);
@@ -241,7 +245,7 @@
   // next round wait for the sequence); the stages start once the closing
   // move's flights have landed.
   function claimRoundScoring(key: string) {
-    if (scoring) return;
+    if (scoring && scoring.stage !== 'final') return;
     scoring = { key, stage: 'pending', reason: '', label: '', totals: {}, revealedBonus: [], camelBonusUid: null, camelToken: false, tieText: null, winnerUid: null, winnerBanner: false, bigSeal: false, sealsWon: false };
   }
 
@@ -338,14 +342,15 @@
       if (lobby.winnerUid) {
         scoring.sealsWon = true;
         if (!(await step(4200))) return;
-        scoring = null; // the summary takes over: Play again
+        // Stay on this screen: the actions face each player until one is chosen.
+        scoring.stage = 'final'; scoring.label = '';
       } else {
         if (!(await step(1000))) return;
         scoring = null;
-        await nextRound(false);
+        if (!demo) await nextRound(false); // the demo holds the final state instead
       }
     } finally {
-      if (scoring?.key === key) scoring = null;
+      if (scoring?.key === key && scoring.stage !== 'final') scoring = null;
     }
   }
   let tokenFlights = $state<Array<{
@@ -460,6 +465,8 @@
           const nextActiveSeat = activeSeat(next);
           const roundJustEnded = repositoryReady && previous.round?.status === 'active' && next.round?.status === 'complete';
           lobby = next;
+          // A rematch / new round clears the held end-of-game screen.
+          if (scoring?.stage === 'final' && (next.round?.status !== 'complete' || scoringKey() !== scoring.key)) scoring = null;
           for (const activity of next.activity) knownActivityIds.add(activity.id);
           repositoryReady = true;
           const actionAnimation = newActivities.length > 0
@@ -1067,8 +1074,15 @@
     });
   }
 
+  function quitTable() {
+    // Leave the tabletop: back to the site's front page (a new table can be
+    // opened from there; this one stays resumable from its game id).
+    if (document.fullscreenElement) void document.exitFullscreen();
+    location.href = `${base}/`;
+  }
+
   async function rematch() {
-    if (!repository || !lobby.winnerUid) return;
+    if (!repository || !lobby.winnerUid || demo) return;
     await repository.append('game/rematched', { epoch: lobby.epoch + 1 });
     await repository.append('round/started', {
       seed: crypto.randomUUID(),
@@ -1326,6 +1340,7 @@
   let demoCancelled = false;
   let demoDeferred: GameEvent[] | null = null;
   let demoSavedLobby: GameState | null = null;
+  let demoSavedSealKey = '';
   const DEMO_UIDS: Record<Seat, string> = { 1: 'demo-north', 2: 'demo-south' };
   let demoCardSeq = 0;
   const demoCard = (kind: CardKind): Card => ({ id: `demo-${kind}-${++demoCardSeq}`, kind });
@@ -1369,9 +1384,11 @@
     next: GameState,
     activity: Omit<GameActivity, 'id'>
   ) {
+    // Show the starting position first, so the viewer sees the scope of
+    // the animation before it moves.
     lobby = previous;
     await tick();
-    await wait(700);
+    await wait(500);
     if (demoCancelled) return;
     lobby = next;
     await animateActivities([{ id: `demo-${++flightSequence}`, ...activity }], previous, next);
@@ -1444,14 +1461,25 @@
     });
   };
 
-  const demoRoundEnd = async (seat: Seat) => {
+  // The real round-end sequence (runRoundScoring) over a staged position:
+  // both players hold goods and bonus tokens, the actor holds more and the
+  // larger herd. With `gameOver` the actor already has one seal, so the
+  // round hands over the second and the end-of-game screen stays up.
+  const demoScoring = (gameOver: boolean) => async (seat: Seat) => {
     const previous = demoBase(seat);
     const actor = DEMO_UIDS[seat];
-    previous.round!.ownedGoodsTokens[actor] = previous.round!.goodsTokens.diamond.splice(0, 3);
+    const other = DEMO_UIDS[demoOther(seat)];
+    const round = previous.round!;
+    round.ownedGoodsTokens[actor] = [...round.goodsTokens.diamond.splice(0, 3), ...round.goodsTokens.gold.splice(0, 2)];
+    round.ownedBonusTokens[actor] = [...round.bonusTokens['3'].splice(0, 1), ...round.bonusTokens['5'].splice(0, 1)];
+    round.ownedGoodsTokens[other] = [...round.goodsTokens.silver.splice(0, 2), ...round.goodsTokens.cloth.splice(0, 3)];
+    round.ownedBonusTokens[other] = round.bonusTokens['3'].splice(0, 1);
+    round.herds[actor] = demoCards(['camel', 'camel', 'camel', 'camel']);
+    round.herds[other] = demoCards(['camel']);
+    if (gameOver) previous.seals = { [actor]: 1, [other]: 0 };
     const complete = structuredClone(previous);
-    const round = complete.round!;
-    const result = resolveRound(round, [DEMO_UIDS[1], DEMO_UIDS[2]]);
-    Object.assign(round, {
+    const result = resolveRound(complete.round!, [DEMO_UIDS[1], DEMO_UIDS[2]]);
+    Object.assign(complete.round!, {
       status: 'complete',
       endReason: 'three-empty-supplies',
       camelBonusUid: result.camelBonusUid,
@@ -1460,31 +1488,30 @@
       loserUid: result.loserUid,
       tieBreak: result.tieBreak
     });
-    complete.seals[result.winnerUid] = 1;
+    complete.seals = { ...complete.seals, [result.winnerUid]: (complete.seals[result.winnerUid] ?? 0) + 1 };
+    if (gameOver) complete.winnerUid = result.winnerUid;
     lobby = previous;
     await tick();
-    await wait(600);
+    await wait(500); // the position before the round ends
     if (demoCancelled) return;
-    lobby = complete; // round summary shows the seal
+    lobby = complete;
     await tick();
-    await wait(2000);
+    const key = scoringKey();
+    claimRoundScoring(key);
+    await runRoundScoring(key);
     if (demoCancelled) return;
-    flySeal(result.winnerUid); // what "Open round 2" does
-    const fresh = demoBase(seat);
-    fresh.seals = { ...complete.seals };
-    fresh.round!.number = 2;
-    lobby = fresh;
-    await wait(1600);
+    await wait(2000); // hold the final state
   };
 
-  const DEMO_CATEGORIES: Array<{ title: string; run: (seat: Seat) => Promise<void> }> = [
+  const DEMO_CATEGORIES: Array<{ title: string; run: (seat: Seat) => Promise<void>; once?: boolean }> = [
     { title: 'Sell 2 silver', run: demoSellStep('silver', 2) },
     { title: 'Sell 3 diamonds (3-card bonus)', run: demoSellStep('diamond', 3) },
     { title: 'Sell 5 leather (5-card bonus, two coin lines)', run: demoSellStep('leather', 5) },
     { title: 'Take one card, deck refills', run: demoTakeOne },
     { title: 'Take 3 camels, deck refills', run: demoTakeCamels },
     { title: 'Trade 2 cards + 1 camel for 3', run: demoTrade },
-    { title: 'Round end: Seal of Excellence', run: demoRoundEnd }
+    { title: 'Round end: scoring and the Seal of Excellence', run: demoScoring(false), once: true },
+    { title: 'Game end: second seal, winner, end-of-game actions', run: demoScoring(true), once: true }
   ];
 
   async function runAnimationDemo() {
@@ -1493,7 +1520,10 @@
     demoCancelled = false;
     demoDeferred = null;
     demoSavedLobby = lobby;
-    const steps = DEMO_CATEGORIES.flatMap((category) => ([2, 1] as Seat[]).map((seat) => ({ ...category, seat })));
+    demoSavedSealKey = deliveredSealKey;
+    // Each move is shown from both seats; the scoring sequences once (they
+    // already play to both sides at once).
+    const steps = DEMO_CATEGORIES.flatMap((category) => ((category.once ? [2] : [2, 1]) as Seat[]).map((seat) => ({ ...category, seat })));
     try {
       for (const [index, step] of steps.entries()) {
         if (demoCancelled) break;
@@ -1509,6 +1539,7 @@
 
   function cancelAnimationDemo() {
     demoCancelled = true;
+    scoring = null;
     cardFlights = [];
     tokenFlights = [];
     sealFlights = [];
@@ -1520,6 +1551,8 @@
 
   function endAnimationDemo() {
     demo = null;
+    if (scoring) scoring = null; // a demo scoring sequence never outlives the demo
+    deliveredSealKey = demoSavedSealKey;
     if (demoSavedLobby) lobby = demoSavedLobby;
     demoSavedLobby = null;
     if (demoDeferred) {
@@ -1839,6 +1872,16 @@
     </span>{#if physical && !physical.fullscreen}<small class="scale-note">win</small>{/if}</button>
 {/snippet}
 
+{#snippet endActions()}
+  {#if lobby.winnerUid}
+    <button type="button" class="end-primary" disabled={busy || Boolean(demo)} onclick={rematch}>Rematch</button>
+    <button type="button" disabled={Boolean(demo)} onclick={newTable}>New game</button>
+    <button type="button" disabled={Boolean(demo)} onclick={quitTable}>Quit</button>
+  {:else}
+    <button type="button" class="end-primary" disabled={busy || Boolean(demo)} onclick={() => nextRound()}>Open round {(lobby.round?.number ?? 0) + 1}</button>
+  {/if}
+{/snippet}
+
 {#snippet playerSeat(seat: Seat, player: Player)}
   {@const isActive = lobby.round?.status === 'active' && seat === marketFacingSeat}
   <section
@@ -1852,7 +1895,7 @@
     {#if scoring?.winnerBanner && scoring.winnerUid === player.uid}
       <div class="round-winner-banner" data-round-winner-banner role="status">Round winner</div>
     {/if}
-    {#if scoring?.sealsWon && lobby.winnerUid === player.uid}
+    {#if gameWon && lobby.winnerUid === player.uid}
       <div class="game-winner-banner" data-game-winner-banner role="status">{player.displayName} wins the game!</div>
     {/if}
     {#if botThinking && player.uid === lobby.bot?.uid}
@@ -1877,7 +1920,7 @@
           {scoring ? scoring.totals[player.uid] ?? 0 : lobby.round?.scores?.[player.uid]?.total ?? 0}<small>pts</small>
         </span>
       {/if}
-      <span class="seat-seals" class:won={scoring?.sealsWon && lobby.winnerUid === player.uid} data-seat-seals={player.uid} aria-label={`${lobby.seals[player.uid] ?? 0} of 2 Seals of Excellence`}>
+      <span class="seat-seals" class:won={gameWon && lobby.winnerUid === player.uid} data-seat-seals={player.uid} aria-label={`${lobby.seals[player.uid] ?? 0} of 2 Seals of Excellence`}>
         {#each Array(2) as _, sealIndex}
           <img
             class:earned={sealIndex < (lobby.seals[player.uid] ?? 0)}
@@ -2205,7 +2248,7 @@
       </div>
     {:else if lobby.round?.status === 'complete' && scoring?.stage === 'pending'}
       <!-- the closing move is still animating; the sequence starts when it lands -->
-    {:else if lobby.round?.status === 'complete' && scoring}
+    {:else if lobby.round?.status === 'complete' && scoring && scoring.stage !== 'final'}
       <div class="scoring-overlay" data-scoring-stage={scoring.stage} aria-live="polite">
         <div class="scoring-disc-wrap">
           <div class="scoring-disc" class:compact={scoring.stage !== 'gameover'}>
@@ -2219,13 +2262,14 @@
           <img class="big-seal" data-result-seal src={componentImage('seal')} alt="Seal of Excellence" />
         {/if}
       </div>
-    {:else if lobby.round?.status === 'complete'}
-      <GameSummary
-        {lobby}
-        componentImage={componentImage}
-        onNextRound={lobby.winnerUid ? undefined : nextRound}
-        onRematch={lobby.winnerUid ? rematch : undefined}
-      />
+    {:else if lobby.round?.status === 'complete' && (lobby.winnerUid || !demo)}
+      <!-- End state, held on screen: the game's actions (or, after a reload
+           mid-sequence, "Open round N") printed twice, one copy turned for
+           the far seat. The scores stay on the mats; no summary screen. -->
+      <div class="end-overlay" data-end-state={lobby.winnerUid ? 'game' : 'round'}>
+        <div class="end-actions far">{@render endActions()}</div>
+        <div class="end-actions near">{@render endActions()}</div>
+      </div>
     {:else}
       <div class="tabletop-mark">
         <img src={componentImage('card-back')} alt="" />
@@ -2792,6 +2836,17 @@
   .scoring-disc strong { font-family: 'Cormorant Garamond', serif; font-size: clamp(1.5rem, 4.6vmin, 4.2rem); line-height: 1; color: #a6442d; letter-spacing: 0.05em; }
   .scoring-disc .facing { max-width: 88%; margin: 0; font-size: clamp(0.8rem, 1.9vmin, 1.6rem); line-height: 1.25; color: #183a37; font-weight: 700; }
   .scoring-disc .far { transform: rotate(180deg); }
+  .end-overlay { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; justify-content: space-between; align-items: center; padding: clamp(0.4rem, 2vmin, 1.5rem); pointer-events: none; }
+  .end-actions { display: flex; gap: clamp(0.4rem, 1.5vmin, 1rem); pointer-events: auto; animation: banner-fade 500ms ease both; }
+  .end-actions.far { transform: rotate(180deg); }
+  .end-actions button {
+    min-height: 44px; padding: 0.5em 1.3em; border: 2px solid #a6442d; border-radius: 99rem; background: #fffaf0; color: #a6442d;
+    font-family: 'Cormorant Garamond', serif; font-size: clamp(1rem, 2.6vmin, 2rem); font-weight: 700; letter-spacing: 0.04em;
+    box-shadow: 0 0.5rem 1.4rem rgb(10 32 30 / 30%);
+  }
+  .end-actions button.end-primary { background: #a6442d; color: #fffaf0; }
+  .end-actions button:disabled { opacity: 0.55; }
+  @keyframes banner-fade { from { opacity: 0; } to { opacity: 1; } }
   .big-seal {
     position: absolute; left: 50%; top: 50%; translate: -50% -50%; width: min(34vh, 24vw); z-index: 5;
     filter: drop-shadow(0 0 2rem #ffd27a) drop-shadow(0 0.8rem 1.6rem rgb(10 32 30 / 45%));
