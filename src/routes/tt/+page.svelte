@@ -388,7 +388,7 @@
   const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
   // Pacing multipliers (1 = the base timings). Flights carry theirs as a
   // `--speed` CSS variable so the keyframes stretch with the JS delays.
-  const SALE_SPEED = 2; // selling plays at half speed
+  const SALE_SPEED = 1.5; // selling at two-thirds speed (2 read as too slow)
   const SCORE_SPEED = 1.5; // the round-end / game-end sequence, 50% slower
 
   const componentImage = (kind: Good | 'camel' | 'seal' | 'card-back') =>
