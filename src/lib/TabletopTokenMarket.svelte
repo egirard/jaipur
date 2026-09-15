@@ -174,10 +174,9 @@
     isolation: isolate;
   }
   .rail-token:disabled { opacity: 1; }
-  .rail-token.sellable {
-    border: 3px solid #1d7a4a;
-    box-shadow: 0 0 0 3px rgb(29 122 74 / 22%);
-  }
+  /* Deliberately no `.sellable` styling: a highlight on the stacks the
+     active trader could sell to told the other player what their hand
+     holds. The button is still disabled when a sale is impossible. */
   .rail-head { display: flex; gap: 0.35rem; align-items: baseline; font-weight: 800; text-shadow: 0 0 4px #fffaf0, 0 0 4px #fffaf0; }
   .rail-count { padding: 0 0.4rem; border-radius: 99rem; background: #183a37; color: #fffaf0; text-shadow: none; }
   .rail-chip { display: grid; width: 100%; min-width: 0; justify-items: center; gap: 0.12rem; }

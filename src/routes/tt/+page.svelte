@@ -148,6 +148,29 @@
     press.timer = undefined;
     revealedCardIds = revealedCardIds.filter((id) => id !== cardId);
   }
+  // Holding an earned bonus token on the mat shows its value the same way
+  // (its holder shields it); nothing is sent to the phones.
+  let revealedTokenIds = $state<string[]>([]);
+  function startTokenPress(event: PointerEvent, tokenId: string) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    const press = pressFor(`token:${tokenId}`);
+    press.pointers.add(event.pointerId);
+    (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
+    if (press.pointers.size > 1) return;
+    clearTimeout(press.timer);
+    press.timer = setTimeout(() => {
+      if (!revealedTokenIds.includes(tokenId)) revealedTokenIds = [...revealedTokenIds, tokenId];
+    }, 380);
+  }
+  function endTokenPress(event: PointerEvent, tokenId: string) {
+    const press = presses.get(`token:${tokenId}`);
+    if (!press) return;
+    press.pointers.delete(event.pointerId);
+    if (press.pointers.size > 0) return;
+    clearTimeout(press.timer);
+    press.timer = undefined;
+    revealedTokenIds = revealedTokenIds.filter((id) => id !== tokenId);
+  }
   // A click that follows a peek must not toggle the card's selection.
   function consumeLongPress(cardId: string) {
     const press = presses.get(cardId);
@@ -272,7 +295,8 @@
       key,
       stage: 'gameover',
       reason: round.endReason === 'three-empty-supplies' ? 'Three goods supplies are empty' : 'The deck could not refill the market',
-      label: 'Game over',
+      // The second seal decides the game; any other round end is just that.
+      label: lobby.winnerUid ? 'Game over' : 'Round over',
       totals: Object.fromEntries(players.map((p) => [p.uid, 0])),
       revealedBonus: [],
       camelBonusUid: round.camelBonusUid,
@@ -292,7 +316,7 @@
     const step = async (ms: number) => { await wait(ms * S); return live(); };
     // Tokens fly into the player's zone for their category and stay there
     // (with a subtotal); the total below the zones grows as they land.
-    const zoneBox = (uid: string, zone: ScoreZone) => box(`[data-score-zone="${CSS.escape(uid)}:${zone}"]`);
+    const zoneBox = (uid: string, zone: ScoreZone) => box(`[data-score-zone="${CSS.escape(uid)}:${zone}"] .zone-chips`);
     const land = (uid: string, zone: ScoreZone, token: Token, at: number) =>
       setTimeout(() => {
         if (!live() || !scoring) return;
@@ -1890,7 +1914,7 @@
             disabled={!repository || busy}
             onclick={() => addBot(seat, level.difficulty)}
           >
-            Play vs {level.name} <small>{level.blurb}</small>
+            Play as {level.name} <small>{level.blurb}</small>
           </button>
         {/each}
       </div>
@@ -2095,7 +2119,21 @@
         <span class="earned" data-owned-token-id={token.id}><TokenChip {token} /></span>
       {/each}
       {#each lobby.round?.ownedBonusTokens[player.uid] ?? [] as token (token.id)}
-        <span class="earned bonus" data-owned-token-id={token.id} data-owned-bonus={token.id}><TokenChip {token} hidden={!(scoring ? scoring.revealedBonus.includes(token.id) : lobby.round?.status === 'complete')} /></span>
+        <span
+          class="earned bonus"
+          class:peeking={revealedTokenIds.includes(token.id)}
+          data-owned-token-id={token.id}
+          data-owned-bonus={token.id}
+          role="button"
+          tabindex="-1"
+          aria-label="Bonus token; hold to see its value"
+          onpointerdown={(e) => startTokenPress(e, token.id)}
+          onpointerup={(e) => endTokenPress(e, token.id)}
+          onpointercancel={(e) => endTokenPress(e, token.id)}
+          onpointerleave={(e) => endTokenPress(e, token.id)}
+          onlostpointercapture={(e) => endTokenPress(e, token.id)}
+          oncontextmenu={(e) => e.preventDefault()}
+        ><TokenChip {token} hidden={!(revealedTokenIds.includes(token.id) || (scoring ? scoring.revealedBonus.includes(token.id) : lobby.round?.status === 'complete'))} /></span>
       {/each}
       {#if ownedTokens(player.uid).length === 0}<small>No tokens yet</small>{/if}
     </div>
@@ -2698,7 +2736,8 @@
   .herd-pile .table-herd-card.selected { transform: rotate(calc((var(--pile-index) - 2) * 2deg)) translateY(-14%); }
   .seat-tokens { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .seat-tokens .earned { width: clamp(1.4rem, 3.2vmin, 3.6rem); height: clamp(1.4rem, 3.2vmin, 3.6rem); flex: 0 0 auto; }
-  .seat-tokens .earned.bonus { filter: saturate(0.7); }
+  .seat-tokens .earned.bonus { filter: saturate(0.7); touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer; }
+  .seat-tokens .earned.bonus.peeking { filter: none; z-index: 2; transform: scale(1.35); box-shadow: 0 0 0 3px #ffd27a; border-radius: 50%; transition: transform 160ms ease; }
   /* Empty hand slots sit to the left of the fanned cards; only the edges
      a real card would show are drawn (top, bottom, left — the right edge
      hides under the next card). */
@@ -2947,9 +2986,10 @@
   .score-zone.filled { border-style: solid; border-color: #d38b21; background: #fffaf0; }
   .score-zone small { font-size: clamp(1.1rem, 2.4vmin, 1.7rem); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
   .score-zone b { min-width: 1.6em; padding: 0.05em 0.4em; border-radius: 99rem; background: #183a37; color: #fffaf0; font-size: clamp(1.6rem, 3.8vmin, 3rem); text-align: center; }
-  .zone-chips { display: flex; justify-content: center; }
-  .zone-chip { display: block; width: clamp(2.4rem, 6vmin, 4.4rem); height: clamp(2.4rem, 6vmin, 4.4rem); margin-left: -0.45em; animation: zone-chip-land 350ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
-  .zone-chip:first-child { margin-left: 0; }
+  /* Landed tokens sit in wrapping rows at a fixed round size (like the mat's
+     earned tokens), so a full zone grows taller instead of squashing them. */
+  .zone-chips { display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: 0.2rem; min-width: clamp(2.4rem, 6vmin, 4.4rem); min-height: clamp(2.4rem, 6vmin, 4.4rem); max-width: clamp(8rem, 26vmin, 20rem); }
+  .zone-chip { display: block; flex: 0 0 auto; width: clamp(2.4rem, 6vmin, 4.4rem); height: clamp(2.4rem, 6vmin, 4.4rem); animation: zone-chip-land 350ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
   .zone-chip :global(.token-chip) { width: 100%; height: 100%; }
   @keyframes zone-chip-land { from { transform: scale(1.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   .tabletop-herd.scoring-glow .herd-pile { animation: herd-glow 1400ms ease-in-out infinite; }
