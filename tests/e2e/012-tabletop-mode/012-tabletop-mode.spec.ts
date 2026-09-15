@@ -406,8 +406,14 @@ test('a fresh tabletop seats two QR-joined players around one touch market', asy
   expect(saleKind).toBeTruthy();
   await saleCard.click();
   await expect(firstPhone.locator('.selection-summary strong')).toHaveText('1 selected for the table');
+  // Selling takes two taps: the first stages the sale (✓ on the stack and a
+  // Sell/Cancel prompt), the second on the same stack confirms it.
+  const saleStack = page.locator(`[data-token-view-seat="2"] [data-token-kind="${saleKind}"]`);
+  await saleStack.click();
+  await expect(saleStack).toHaveAttribute('data-sale-pending', 'true');
+  await expect(page.locator('.market-prompt')).toHaveAttribute('data-pending-sale', saleKind!);
   await armFlightCapture(page, '.table-token-flight');
-  await page.locator(`[data-token-view-seat="2"] [data-token-kind="${saleKind}"]`).click();
+  await saleStack.click();
   await waitForFlightCapture(page);
   const saleTokenFlight = page.locator('.table-token-flight').first();
   await expect(saleTokenFlight).toBeVisible();
