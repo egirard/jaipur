@@ -2667,6 +2667,12 @@
   /* Hold to peek: the back flips to the face for as long as the finger stays
      down (the other hand shields it); nothing is sent to the AR phones. */
   .table-hand-card { perspective: 600px; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  /* The touch target reaches 25% below the card (toward the player, in the
+     seat's own frame) so a finger can hold it without covering it. Invisible;
+     the card's own overflow must not clip it (the peek images round their
+     own corners, so nothing else needs the clip). */
+  .hand-cell > .table-hand-card { overflow: visible; }
+  .hand-cell > .table-hand-card::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 25%; }
   .table-hand-card[aria-disabled='true'], .herd-pile:disabled { cursor: default; }
   .peek-card { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform 260ms ease; }
   .peek-card > img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; backface-visibility: hidden; border-radius: 0.35rem; }
@@ -2931,18 +2937,18 @@
   /* Landing zones stack upward from the total (which stays where it is);
      they overhang the mat into the market, above everything on the table. */
   .score-stack { position: relative; display: inline-grid; justify-items: center; }
-  .score-zones { position: absolute; bottom: calc(100% + 0.3rem); left: 50%; z-index: 7; display: flex; flex-direction: column-reverse; gap: 0.25rem; translate: -50% 0; }
+  .score-zones { position: absolute; bottom: calc(100% + 0.4rem); left: 50%; z-index: 7; display: flex; flex-direction: column-reverse; gap: 0.5rem; translate: -50% 0; }
   .score-zone {
-    display: grid; grid-template-columns: auto minmax(2.2rem, 1fr) auto; align-items: center; gap: 0.35rem; box-sizing: border-box;
-    min-width: clamp(9rem, 22vmin, 16rem); min-height: clamp(1.7rem, 4vmin, 3rem); padding: 0.15rem 0.5rem;
+    display: grid; grid-template-columns: auto minmax(4.4rem, 1fr) auto; align-items: center; gap: 0.7rem; box-sizing: border-box;
+    min-width: clamp(18rem, 44vmin, 32rem); min-height: clamp(3.4rem, 8vmin, 6rem); padding: 0.3rem 1rem;
     border: 2px dashed #b7aa8d; border-radius: 99rem; background: rgb(255 250 240 / 88%); color: #315f58; white-space: nowrap;
     transition: border-color 300ms, background 300ms;
   }
   .score-zone.filled { border-style: solid; border-color: #d38b21; background: #fffaf0; }
-  .score-zone small { font-size: clamp(0.55rem, 1.2vmin, 0.85rem); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
-  .score-zone b { min-width: 1.6em; padding: 0.05em 0.4em; border-radius: 99rem; background: #183a37; color: #fffaf0; font-size: clamp(0.8rem, 1.9vmin, 1.5rem); text-align: center; }
+  .score-zone small { font-size: clamp(1.1rem, 2.4vmin, 1.7rem); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+  .score-zone b { min-width: 1.6em; padding: 0.05em 0.4em; border-radius: 99rem; background: #183a37; color: #fffaf0; font-size: clamp(1.6rem, 3.8vmin, 3rem); text-align: center; }
   .zone-chips { display: flex; justify-content: center; }
-  .zone-chip { display: block; width: clamp(1.2rem, 3vmin, 2.2rem); height: clamp(1.2rem, 3vmin, 2.2rem); margin-left: -0.45em; animation: zone-chip-land 350ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
+  .zone-chip { display: block; width: clamp(2.4rem, 6vmin, 4.4rem); height: clamp(2.4rem, 6vmin, 4.4rem); margin-left: -0.45em; animation: zone-chip-land 350ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
   .zone-chip:first-child { margin-left: 0; }
   .zone-chip :global(.token-chip) { width: 100%; height: 100%; }
   @keyframes zone-chip-land { from { transform: scale(1.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
