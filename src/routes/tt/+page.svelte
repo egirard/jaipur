@@ -110,6 +110,7 @@
     endTop: number;
     endSize: number;
     delay: number;
+    speed?: number;
   }>>([]);
   let flightSequence = 0;
   let botThinking = $state(false);
@@ -230,7 +231,7 @@
     const endSize = Math.min(destination.width, destination.height, startSize);
     const key = ++flightSequence;
     tokenFlights = [...tokenFlights, {
-      key, token, inverted, reveal, delay,
+      key, token, inverted, reveal, delay, speed: SCORE_SPEED,
       startLeft: source.left + (source.width - startSize) / 2,
       startTop: source.top + (source.height - startSize) / 2,
       startSize,
@@ -238,7 +239,7 @@
       endTop: destination.top + (destination.height - endSize) / 2,
       endSize
     }];
-    setTimeout(() => (tokenFlights = tokenFlights.filter((f) => f.key !== key)), 1000 + delay);
+    setTimeout(() => (tokenFlights = tokenFlights.filter((f) => f.key !== key)), 1000 * SCORE_SPEED + delay);
   }
 
   // Claimed synchronously when the round completes (the summary and the
@@ -270,10 +271,12 @@
     };
     scoring = state;
     const live = () => scoringLive(key);
-    const step = async (ms: number) => { await wait(ms); return live(); };
+    // Every beat below is in base milliseconds; SCORE_SPEED stretches them.
+    const S = SCORE_SPEED;
+    const step = async (ms: number) => { await wait(ms * S); return live(); };
     const scoreBox = (uid: string) => box(`[data-score-total="${CSS.escape(uid)}"]`);
     const add = (uid: string, value: number, at: number) =>
-      setTimeout(() => { if (live() && scoring) scoring.totals[uid] = (scoring.totals[uid] ?? 0) + value; }, at);
+      setTimeout(() => { if (live() && scoring) scoring.totals[uid] = (scoring.totals[uid] ?? 0) + value; }, at * S);
     try {
       if (!(await step(4300))) return;
       // Goods tokens, in sequence, both sides together.
@@ -285,7 +288,7 @@
         const tokens = round.ownedGoodsTokens[p.uid] ?? [];
         tokens.forEach((token, i) => {
           const src = box(`[data-owned-token-id="${CSS.escape(token.id)}"]`);
-          if (src && dest) scoreFlight(src, dest, token, i * 260, invertedFor(p.uid));
+          if (src && dest) scoreFlight(src, dest, token, i * 260 * S, invertedFor(p.uid));
           add(p.uid, token.value, i * 260 + 850);
         });
         longest = Math.max(longest, tokens.length * 260 + 1000);
@@ -300,8 +303,8 @@
         const tokens = round.ownedBonusTokens[p.uid] ?? [];
         tokens.forEach((token, i) => {
           const src = box(`[data-owned-token-id="${CSS.escape(token.id)}"]`);
-          if (src && dest) scoreFlight(src, dest, token, i * 420, invertedFor(p.uid), true);
-          setTimeout(() => { if (live() && scoring) scoring.revealedBonus = [...scoring.revealedBonus, token.id]; }, i * 420 + 500);
+          if (src && dest) scoreFlight(src, dest, token, i * 420 * S, invertedFor(p.uid), true);
+          setTimeout(() => { if (live() && scoring) scoring.revealedBonus = [...scoring.revealedBonus, token.id]; }, (i * 420 + 500) * S);
           add(p.uid, token.value, i * 420 + 850);
         });
         longest = Math.max(longest, tokens.length * 420 + 1000);
@@ -364,6 +367,7 @@
     endLeft: number;
     endTop: number;
     endSize: number;
+    speed?: number;
     delay: number;
   }>>([]);
   let requestBusy = $state(false);
@@ -382,6 +386,10 @@
   let pendingTurnSeat: Seat | undefined;
   const saleTokenViewSeats: Partial<Record<string, Seat>> = {};
   const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+  // Pacing multipliers (1 = the base timings). Flights carry theirs as a
+  // `--speed` CSS variable so the keyframes stretch with the JS delays.
+  const SALE_SPEED = 2; // selling plays at half speed
+  const SCORE_SPEED = 1.5; // the round-end / game-end sequence, 50% slower
 
   const componentImage = (kind: Good | 'camel' | 'seal' | 'card-back') =>
     `${base}/components/${kind}.webp`;
@@ -1005,7 +1013,7 @@
 
   // Sale celebration: after the token flights land, a summary rises from
   // the player's token zone ("4 tokens · +7!") and fades.
-  let saleSummaries = $state<Array<{ key: number; left: number; top: number; inverted: boolean; count: number; cards: number; label?: string }>>([]);
+  let saleSummaries = $state<Array<{ key: number; left: number; top: number; inverted: boolean; count: number; cards: number; label?: string; speed?: number }>>([]);
 
   function canSell(kind: Good): boolean {
     const uid = lobby.round?.activeUid;
@@ -1061,7 +1069,7 @@
     setTimeout(() => {
       sealFlights = sealFlights.filter((flight) => flight.key !== key);
       if (arrivingSealUid === winnerUid) arrivingSealUid = null;
-    }, 1300);
+    }, 1300 * SCORE_SPEED);
   }
 
   async function nextRound(flySealFirst = true) {
@@ -1179,7 +1187,8 @@
     revealImage?: string,
     concealsDestination = false,
     arc = false,
-    inverted = false
+    inverted = false,
+    speed = 1
   ) {
     if (!source || !destination) {
       if (cardId) arrivingCardIds = arrivingCardIds.filter((id) => id !== cardId);
@@ -1206,9 +1215,10 @@
       endLeft: destination.left + (destination.width - endSize) / 2,
       endTop: destination.top + (destination.height - endSize) / 2,
       endSize,
-      delay
+      delay,
+      speed
     }];
-    setTimeout(() => finishCardFlight(key), (arc ? 1900 : 1400) + delay);
+    setTimeout(() => finishCardFlight(key), (arc ? 1900 : 1400) * speed + delay);
   }
 
   function finishCardFlight(key: number) {
@@ -1297,11 +1307,11 @@
     const sources = Array.from({ length: count }, (_, i) =>
       handRects[i] ?? new DOMRect(panel.left + panel.width * 0.25 + i * size * 0.8, panel.top + (panel.height - size) / 2, size, size));
     sources.forEach((src, i) =>
-      cardFlight(src, stack, componentImage('card-back'), i * 90, undefined, componentImage(kind), false, true, seat === 1));
+      cardFlight(src, stack, componentImage('card-back'), i * 90 * SALE_SPEED, undefined, componentImage(kind), false, true, seat === 1, SALE_SPEED));
     // Tokens: the stack's coins if the round is on, else the stack itself.
     const coins = [...document.querySelectorAll<HTMLElement>(`${view} [data-token-kind="${kind}"] [data-supply-token-id]`)].slice(0, count);
     const dest = box(`[data-seat="${seat}"] [data-table-tokens]`) ?? new DOMRect(panel.left + panel.width / 2 - 40, panel.bottom - 60, 80, 40);
-    const tokenDelay = 1250 + count * 90;
+    const tokenDelay = (1250 + count * 90) * SALE_SPEED;
     const fly = (source: DOMRect, token: Token, delay: number) => {
       const startSize = Math.min(source.width, source.height, 64);
       const endSize = Math.min(dest.width, dest.height, startSize);
@@ -1309,22 +1319,22 @@
       tokenFlights = [...tokenFlights, {
         key, token, inverted: seat === 1,
         startLeft: source.left + (source.width - startSize) / 2, startTop: source.top + (source.height - startSize) / 2, startSize,
-        endLeft: dest.left + (dest.width - endSize) / 2, endTop: dest.top + (dest.height - endSize) / 2, endSize, delay
+        endLeft: dest.left + (dest.width - endSize) / 2, endTop: dest.top + (dest.height - endSize) / 2, endSize, delay, speed: SALE_SPEED
       }];
-      setTimeout(() => tokenFlights = tokenFlights.filter((flight) => flight.key !== key), 1000 + delay);
+      setTimeout(() => tokenFlights = tokenFlights.filter((flight) => flight.key !== key), 1000 * SALE_SPEED + delay);
     };
     for (let i = 0; i < count; i += 1) {
-      fly(coins[i]?.getBoundingClientRect() ?? stack, { id: `demo-${kind}-${i}`, kind, value: DEMO_VALUES[kind]?.[i] ?? 1 } as Token, tokenDelay + i * 80);
+      fly(coins[i]?.getBoundingClientRect() ?? stack, { id: `demo-${kind}-${i}`, kind, value: DEMO_VALUES[kind]?.[i] ?? 1 } as Token, tokenDelay + i * 80 * SALE_SPEED);
     }
     if (count >= 3) {
       const bonusSize = count >= 5 ? '5' : count === 4 ? '4' : '3';
-      fly(box(`${view} [data-bonus-size="${bonusSize}"]`) ?? stack, { id: `demo-bonus-${bonusSize}`, kind: `bonus-${bonusSize}`, value: 0 } as Token, tokenDelay + count * 80);
+      fly(box(`${view} [data-bonus-size="${bonusSize}"]`) ?? stack, { id: `demo-bonus-${bonusSize}`, kind: `bonus-${bonusSize}`, value: 0 } as Token, tokenDelay + count * 80 * SALE_SPEED);
     }
     const key = ++flightSequence;
     setTimeout(() => {
-      saleSummaries = [...saleSummaries, { key, left: dest.left + dest.width / 2, top: dest.top + dest.height / 2, inverted: seat === 1, count: count + (count >= 3 ? 1 : 0), cards: count }];
-      setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600);
-    }, 900 + tokenDelay + count * 80);
+      saleSummaries = [...saleSummaries, { key, left: dest.left + dest.width / 2, top: dest.top + dest.height / 2, inverted: seat === 1, count: count + (count >= 3 ? 1 : 0), cards: count, speed: SALE_SPEED }];
+      setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600 * SALE_SPEED);
+    }, (900 + count * 80) * SALE_SPEED + tokenDelay);
     // Flights and the summary remove themselves; nothing else to reset
     // (a blanket clear here wiped the next run when buttons were pressed
     // in quick succession).
@@ -1581,6 +1591,7 @@
       delay: number;
       arc?: boolean;
       inverted?: boolean;
+      speed?: number;
     }> = [];
     const tokenMovements: Array<{
       source: DOMRect | undefined;
@@ -1588,6 +1599,7 @@
       token: Token;
       delay: number;
       bonus?: boolean;
+      speed?: number;
     }> = [];
 
     let refillDelay = 120;
@@ -1672,8 +1684,9 @@
           image: componentImage('card-back'),
           revealImage: componentImage((activity.cardKinds?.[index] as Good | undefined) ?? 'leather'),
           concealDestination: false,
-          delay: index * 90,
-          arc: true
+          delay: index * 90 * SALE_SPEED,
+          arc: true,
+          speed: SALE_SPEED
         }));
         const oldTokens = new Set([
           ...(previous.round?.ownedGoodsTokens[uid] ?? []),
@@ -1686,22 +1699,24 @@
         const goodsAwards = awards.filter(({ kind }) => !kind.startsWith('bonus-'));
         const bonusAwards = awards.filter(({ kind }) => kind.startsWith('bonus-'));
         // after the sold cards have landed on the stack
-        const firstTokenDelay = 1250 + (activity.cardIds?.length ?? 1) * 90;
+        const firstTokenDelay = (1250 + (activity.cardIds?.length ?? 1) * 90) * SALE_SPEED;
         goodsAwards.forEach((token, index) => tokenMovements.push({
           source: box(`${tokenView} [data-token-kind="${CSS.escape(token.kind)}"] .rail-chip`),
           destinationSelector: `[data-table-tokens="${CSS.escape(uid)}"]`,
           token,
-          delay: firstTokenDelay + index * 80
+          delay: firstTokenDelay + index * 80 * SALE_SPEED,
+          speed: SALE_SPEED
         }));
         // The bonus token is its own beat: it flies once the "cards sold"
         // message has played, and gets a message of its own.
-        const soldMessageAt = 900 + firstTokenDelay + Math.max(0, goodsAwards.length - 1) * 80;
+        const soldMessageAt = 900 * SALE_SPEED + firstTokenDelay + Math.max(0, goodsAwards.length - 1) * 80 * SALE_SPEED;
         bonusAwards.forEach((token, index) => tokenMovements.push({
           source: box(`${tokenView} [data-bonus-size="${token.kind.replace('bonus-', '')}"]`),
           destinationSelector: `[data-table-tokens="${CSS.escape(uid)}"]`,
           token,
           bonus: true,
-          delay: soldMessageAt + 1400 + index * 80
+          delay: soldMessageAt + (1400 + index * 80) * SALE_SPEED,
+          speed: SALE_SPEED
         }));
       }
     }
@@ -1735,7 +1750,7 @@
     ])];
     scheduleArrivingWatchdog();
     await tick();
-    movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay, arc, inverted }) =>
+    movements.forEach(({ cardId, source, destinationSelector, image, revealImage, concealDestination, delay, arc, inverted, speed }) =>
       cardFlight(
         source,
         box(destinationSelector),
@@ -1745,10 +1760,11 @@
         revealImage,
         concealDestination,
         arc,
-        inverted ?? actorInverted
+        inverted ?? actorInverted,
+        speed ?? 1
       )
     );
-    tokenMovements.forEach(({ source, destinationSelector, token, delay }) => {
+    tokenMovements.forEach(({ source, destinationSelector, token, delay, speed = 1 }) => {
       const destination = box(destinationSelector);
       if (!source || !destination) return;
       const startSize = Math.min(source.width, source.height, 64);
@@ -1764,9 +1780,10 @@
         endLeft: destination.left + (destination.width - endSize) / 2,
         endTop: destination.top + (destination.height - endSize) / 2,
         endSize,
-        delay
+        delay,
+        speed
       }];
-      setTimeout(() => tokenFlights = tokenFlights.filter((flight) => flight.key !== key), 1000 + delay);
+      setTimeout(() => tokenFlights = tokenFlights.filter((flight) => flight.key !== key), 1000 * speed + delay);
     });
     for (const activity of activities) {
       if (activity.type !== 'cards/sold' || tokenMovements.length === 0) continue;
@@ -1782,16 +1799,16 @@
         setTimeout(() => {
           saleSummaries = [...saleSummaries, {
             key, left: target.left + target.width / 2, top: target.top + target.height / 2,
-            inverted: seat === 1, count, cards, label
+            inverted: seat === 1, count, cards, label, speed: SALE_SPEED
           }];
-          setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600);
+          setTimeout(() => saleSummaries = saleSummaries.filter((entry) => entry.key !== key), 2600 * SALE_SPEED);
         }, at);
       };
       if (goodsMoves.length > 0) {
-        showSummary(900 + Math.max(...goodsMoves.map((m) => m.delay)), goodsMoves.length, `${cards} card${cards === 1 ? '' : 's'} sold!`);
+        showSummary(900 * SALE_SPEED + Math.max(...goodsMoves.map((m) => m.delay)), goodsMoves.length, `${cards} card${cards === 1 ? '' : 's'} sold!`);
       }
       for (const move of bonusMoves) {
-        showSummary(900 + move.delay, 1, `${move.token.kind.replace('bonus-', '')}-card bonus token!`);
+        showSummary(900 * SALE_SPEED + move.delay, 1, `${move.token.kind.replace('bonus-', '')}-card bonus token!`);
       }
     }
     if (hasAnimation) {
@@ -2411,7 +2428,7 @@
       class:arc={Boolean(flight.arc)}
       class:noflip={Boolean(flight.arc) && !flight.revealImage}
       aria-hidden="true"
-      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--end-scale:${flight.concealsDestination ? 1 : 0.7};--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
+      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--speed:${flight.speed ?? 1};--end-scale:${flight.concealsDestination ? 1 : 0.7};--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.25)}px`}
       onanimationend={(event) => {
         if (event.currentTarget === event.target) finishCardFlight(flight.key);
       }}
@@ -2428,7 +2445,7 @@
     <span
       class="table-token-flight"
       aria-hidden="true"
-      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.28)}px`}
+      style={`--start-left:${flight.startLeft}px;--start-top:${flight.startTop}px;--start-size:${flight.startSize}px;--end-left:${flight.endLeft}px;--end-top:${flight.endTop}px;--end-size:${flight.endSize}px;--flight-delay:${flight.delay}ms;--speed:${flight.speed ?? 1};--arc-lift:${(flight.inverted ? -1 : 1) * Math.max(40, Math.hypot(flight.endLeft - flight.startLeft, flight.endTop - flight.startTop) * 0.28)}px`}
     >{#if flight.reveal}
         <span class="token-flip"><span class="token-flip-back"><TokenChip token={flight.token} hidden /></span><span class="token-flip-front"><TokenChip token={flight.token} /></span></span>
       {:else}
@@ -2446,7 +2463,7 @@
       class="sale-summary"
       class:inverted={summary.inverted}
       aria-hidden="true"
-      style={`--left:${summary.left}px;--top:${summary.top}px`}
+      style={`--left:${summary.left}px;--top:${summary.top}px;--speed:${summary.speed ?? 1}`}
     >
       <span class="sale-coins">{#each Array(summary.count) as _, i}<i style={`--i:${i}`}></i>{/each}</span>
       <strong>{summary.label ?? `${summary.cards} card${summary.cards === 1 ? '' : 's'} sold!`}</strong>
@@ -2800,15 +2817,15 @@
   .corner-log.inverted ol { top: calc(100% + 0.35rem); right: auto; bottom: auto; left: 0; }
   .corner-log li { padding: 0.22rem 0.3rem; border-radius: 0.25rem; background: #f2e8d3; font-size: 0.68rem; }
   .corner-log li + li { margin-top: 0.18rem; }
-  .table-card-flight, .table-token-flight { position: fixed; z-index: 40; top: var(--start-top); left: var(--start-left); width: var(--start-size); height: var(--start-size); pointer-events: none; animation: table-flight 860ms cubic-bezier(0.2, 0.75, 0.22, 1) var(--flight-delay) both; }
+  .table-card-flight, .table-token-flight { position: fixed; z-index: 40; top: var(--start-top); left: var(--start-left); width: var(--start-size); height: var(--start-size); pointer-events: none; animation: table-flight 860ms cubic-bezier(0.2, 0.75, 0.22, 1) var(--flight-delay) both; animation-duration: calc(860ms * var(--speed, 1)); }
   .table-card-flight { perspective: 900px; }
   .table-card-flight-inner { position: absolute; inset: 0; display: block; transform-style: preserve-3d; }
-  .table-card-flight.flips .table-card-flight-inner { animation: table-card-flip 860ms ease-in-out var(--flight-delay) both; }
+  .table-card-flight.flips .table-card-flight-inner { animation: table-card-flip 860ms ease-in-out var(--flight-delay) both; animation-duration: calc(860ms * var(--speed, 1)); }
   .table-card-flight img { position: absolute; width: 100%; height: 100%; inset: 0; backface-visibility: hidden; border: 2px solid #315f58; border-radius: 0.55rem; box-shadow: 0 0.7rem 1rem rgb(0 0 0 / 28%); object-fit: cover; }
   .table-card-flight-front { transform: rotateY(180deg); }
   /* Tokens fly on an arc: `translate` carries them across, `transform`
      lifts them mid-way; the two animate independently. */
-  .table-token-flight { animation: token-flight-across 1000ms cubic-bezier(0.3, 0.6, 0.35, 1) var(--flight-delay) both, token-flight-lift 1000ms ease-in-out var(--flight-delay) both; }
+  .table-token-flight { animation: token-flight-across 1000ms cubic-bezier(0.3, 0.6, 0.35, 1) var(--flight-delay) both, token-flight-lift 1000ms ease-in-out var(--flight-delay) both; animation-duration: calc(1000ms * var(--speed, 1)); }
   .table-token-flight :global(.token-chip) { width: 100%; height: 100%; filter: drop-shadow(0 0.5rem 0.5rem rgb(0 0 0 / 28%)); }
   @keyframes token-flight-across {
     0% { translate: 0 0; opacity: 1; }
@@ -2823,13 +2840,13 @@
   .hand-count { font-size: clamp(0.62rem, 1.3vmin, 0.85rem); font-weight: 700; color: #526762; white-space: nowrap; }
   /* ---- Round-end scoring sequence ---- */
   .scoring-overlay { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; pointer-events: none; }
-  .scoring-disc-wrap { animation: scoring-grow 800ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+  .scoring-disc-wrap { animation: scoring-grow 1200ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
   .scoring-disc {
     display: grid; place-items: center; gap: 0.2rem; box-sizing: border-box;
     width: min(60vh, 42vw); aspect-ratio: 1; padding: 7%; border-radius: 50%;
     border: 4px solid #d38b21; background: radial-gradient(circle, #fffaf0 55%, #f2e2bf);
     box-shadow: 0 1rem 3rem rgb(10 32 30 / 35%), 0 0 0 1rem rgb(255 244 214 / 55%);
-    text-align: center; transition: transform 600ms ease;
+    text-align: center; transition: transform 900ms ease;
   }
   .scoring-disc.compact { transform: scale(0.62); }
   @keyframes scoring-grow { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
@@ -2849,8 +2866,10 @@
   @keyframes banner-fade { from { opacity: 0; } to { opacity: 1; } }
   .big-seal {
     position: absolute; left: 50%; top: 50%; translate: -50% -50%; width: min(34vh, 24vw); z-index: 5;
+    /* The artwork is a square image: clip it to the round seal, like the seat seals. */
+    aspect-ratio: 1; border-radius: 50%; object-fit: cover;
     filter: drop-shadow(0 0 2rem #ffd27a) drop-shadow(0 0.8rem 1.6rem rgb(10 32 30 / 45%));
-    animation: big-seal-grow 900ms cubic-bezier(0.2, 0.9, 0.3, 1.25) both, big-seal-glow 1600ms ease-in-out 900ms infinite;
+    animation: big-seal-grow 1350ms cubic-bezier(0.2, 0.9, 0.3, 1.25) both, big-seal-glow 2400ms ease-in-out 1350ms infinite;
   }
   @keyframes big-seal-grow { from { transform: scale(0) rotate(-120deg); opacity: 0; } to { transform: scale(1) rotate(0deg); opacity: 1; } }
   @keyframes big-seal-glow { 0%, 100% { filter: drop-shadow(0 0 1.2rem #ffd27a) drop-shadow(0 0.8rem 1.6rem rgb(10 32 30 / 45%)); } 50% { filter: drop-shadow(0 0 3rem #ffe9b0) drop-shadow(0 0.8rem 1.6rem rgb(10 32 30 / 45%)); } }
@@ -2861,10 +2880,10 @@
   .score-total small { font-size: 0.45em; font-weight: 700; opacity: 0.8; }
   .tabletop-herd.scoring-glow .herd-pile { animation: herd-glow 1400ms ease-in-out infinite; }
   @keyframes herd-glow { 0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 #ffd27a); } 50% { transform: scale(1.15); filter: drop-shadow(0 0 1.2rem #ffd27a); } }
-  .tabletop-herd.scoring-glow .herd-count { transform: translateX(-50%) scale(1.7); transition: transform 500ms ease; }
+  .tabletop-herd.scoring-glow .herd-count { transform: translateX(-50%) scale(1.7); transition: transform 750ms ease; }
   .camel-bonus-token {
     position: absolute; left: 50%; top: 50%; z-index: 5; width: clamp(3rem, 9vmin, 7rem); height: clamp(3rem, 9vmin, 7rem);
-    filter: drop-shadow(0 0 1rem #ffd27a); animation: camel-bonus-grow 800ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+    filter: drop-shadow(0 0 1rem #ffd27a); animation: camel-bonus-grow 1200ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
   }
   .camel-bonus-token :global(.token-chip) { width: 100%; height: 100%; }
   @keyframes camel-bonus-grow { from { transform: translate(-50%, -50%) scale(0); } to { transform: translate(-50%, -50%) scale(1); } }
@@ -2874,11 +2893,11 @@
     position: absolute; left: 50%; top: 50%; z-index: 6; padding: 0.25em 1em; border-radius: 99rem;
     background: #a6442d; color: #fffaf0; font-family: 'Cormorant Garamond', serif; font-size: clamp(1.6rem, 5vmin, 4.5rem); font-weight: 700;
     white-space: nowrap; box-shadow: 0 0.8rem 2rem rgb(10 32 30 / 40%); pointer-events: none;
-    animation: banner-pop 600ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+    animation: banner-pop 900ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
   }
   @keyframes banner-pop { from { transform: translate(-50%, -50%) scale(0); opacity: 0; } to { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
-  .seat-seals.won { position: relative; z-index: 5; transform: scale(2.1); transform-origin: center; transition: transform 900ms cubic-bezier(0.2, 0.9, 0.3, 1.2); filter: drop-shadow(0 0 1rem #ffd27a); }
-  .token-flip { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; animation: token-flip 1000ms ease-in-out var(--flight-delay) both; }
+  .seat-seals.won { position: relative; z-index: 5; transform: scale(2.1); transform-origin: center; transition: transform 1350ms cubic-bezier(0.2, 0.9, 0.3, 1.2); filter: drop-shadow(0 0 1rem #ffd27a); }
+  .token-flip { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; animation: token-flip 1000ms ease-in-out var(--flight-delay) both; animation-duration: calc(1000ms * var(--speed, 1)); }
   .token-flip > span { position: absolute; inset: 0; display: block; backface-visibility: hidden; }
   .token-flip > span :global(.token-chip) { width: 100%; height: 100%; }
   .token-flip-front { transform: rotateY(180deg); }
@@ -2890,7 +2909,7 @@
   .seat-seals img { width: clamp(2rem, 5vmin, 3.6rem); height: clamp(2rem, 5vmin, 3.6rem); border-radius: 50%; object-fit: cover; filter: grayscale(1); opacity: 0.25; transition: filter 300ms, opacity 300ms; }
   .seat-seals img.earned { filter: none; opacity: 1; }
   .seat-seals img.earned.arriving { filter: grayscale(1); opacity: 0.25; transition: none; }
-  .table-seal-flight { position: fixed; z-index: 45; top: var(--start-top); left: var(--start-left); width: var(--start-size); height: var(--start-size); pointer-events: none; --flight-delay: 0ms; animation: seal-flight-across 1200ms cubic-bezier(0.3, 0.6, 0.35, 1) both, seal-flight-lift 1200ms ease-in-out both; }
+  .table-seal-flight { position: fixed; z-index: 45; top: var(--start-top); left: var(--start-left); width: var(--start-size); height: var(--start-size); pointer-events: none; --flight-delay: 0ms; animation: seal-flight-across 1800ms cubic-bezier(0.3, 0.6, 0.35, 1) both, seal-flight-lift 1800ms ease-in-out both; }
   .table-seal-flight img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; filter: drop-shadow(0 0.5rem 0.6rem rgb(0 0 0 / 32%)); }
   @keyframes seal-flight-across {
     0% { translate: 0 0; width: var(--start-size); height: var(--start-size); }
@@ -2905,11 +2924,11 @@
   .demo-banner strong { color: #ffd88a; letter-spacing: 0.04em; }
   .demo-banner button { min-height: 36px; padding: 0.2rem 0.7rem; border: 1px solid #ffd88a; border-radius: 99rem; background: transparent; font: inherit; font-weight: 700; color: #ffd88a; }
   .demo-banner.top { bottom: auto; top: 0.45rem; transform: translateX(-50%) rotate(180deg); }
-  .sale-summary { position: fixed; z-index: 45; left: var(--left); top: var(--top); display: grid; justify-items: center; gap: 0.2rem; pointer-events: none; transform: translate(-50%, -50%); animation: sale-summary 2600ms ease-out both; }
+  .sale-summary { position: fixed; z-index: 45; left: var(--left); top: var(--top); display: grid; justify-items: center; gap: 0.2rem; pointer-events: none; transform: translate(-50%, -50%); animation: sale-summary 2600ms ease-out both; animation-duration: calc(2600ms * var(--speed, 1)); }
   .sale-summary.inverted { animation-name: sale-summary-inverted; }
   .sale-summary strong { color: #c8281e; font-size: clamp(1.6rem, 5vmin, 4rem); font-weight: 900; line-height: 1; text-shadow: 0 2px 0 #fff, 0 0 12px #fff; }
   .sale-coins { display: flex; gap: 0.15rem; }
-  .sale-coins i { display: block; width: clamp(0.9rem, 2.2vmin, 1.8rem); height: clamp(0.9rem, 2.2vmin, 1.8rem); border: 2px solid #c8281e; border-radius: 50%; opacity: 0.7; animation: sale-coin 1400ms ease-out both; animation-delay: calc(var(--i) * 60ms); }
+  .sale-coins i { display: block; width: clamp(0.9rem, 2.2vmin, 1.8rem); height: clamp(0.9rem, 2.2vmin, 1.8rem); border: 2px solid #c8281e; border-radius: 50%; opacity: 0.7; animation: sale-coin 1400ms ease-out both; animation-duration: calc(1400ms * var(--speed, 1)); animation-delay: calc(var(--i) * 60ms * var(--speed, 1)); }
   @keyframes sale-coin { 0% { transform: scale(1); opacity: 0.9; } 100% { transform: scale(0.6); opacity: 0; } }
   @keyframes sale-summary {
     0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
@@ -2946,10 +2965,10 @@
   /* Arc flight: the card flips where it lies (first 30%), then rises on an
      arc to its destination, resizing as it goes. Used for sales, takes,
      trades, camels and deck refills. */
-  .table-card-flight.arc { animation: sale-card-across 1500ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, sale-card-lift 1500ms ease-in-out var(--flight-delay) both; }
-  .table-card-flight.arc .table-card-flight-inner { animation: sale-card-flip 1500ms ease-in-out var(--flight-delay) both; }
+  .table-card-flight.arc { animation: sale-card-across 1500ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, sale-card-lift 1500ms ease-in-out var(--flight-delay) both; animation-duration: calc(1500ms * var(--speed, 1)); }
+  .table-card-flight.arc .table-card-flight-inner { animation: sale-card-flip 1500ms ease-in-out var(--flight-delay) both; animation-duration: calc(1500ms * var(--speed, 1)); }
   /* Arc without a flip (camels): no initial hold. */
-  .table-card-flight.arc.noflip { animation: arc-card-across-now 1200ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, arc-card-lift-now 1200ms ease-in-out var(--flight-delay) both; }
+  .table-card-flight.arc.noflip { animation: arc-card-across-now 1200ms cubic-bezier(0.35, 0.5, 0.3, 1) var(--flight-delay) both, arc-card-lift-now 1200ms ease-in-out var(--flight-delay) both; animation-duration: calc(1200ms * var(--speed, 1)); }
   /* No flip means no back face to turn to: the inner must not rotate, or
      the card turns edge-on and disappears a third of the way along. */
   .table-card-flight.arc.noflip .table-card-flight-inner { animation: none; }
