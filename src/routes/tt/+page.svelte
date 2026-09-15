@@ -116,36 +116,43 @@
   let botThinking = $state(false);
   // Hold a face-down hand card to peek at it on the table (the player's
   // other hand shields the view). Purely local: the AR phones are not told.
-  let revealedCardId = $state<string | null>(null);
-  let longPressTimer: ReturnType<typeof setTimeout> | undefined;
-  let longPressFired = false;
-  // Every finger currently down on the card: the peek starts with the first
-  // and ends only when the last lifts, so a shielding hand (or a second
-  // finger) touching the card never cuts it short.
-  const pressPointers = new Set<number>();
+  // Several cards may be held at once (one finger each): every card keeps
+  // its own fingers and timer, and its peek ends only when its last finger
+  // lifts, so a shielding hand (or a second finger) never cuts it short.
+  let revealedCardIds = $state<string[]>([]);
+  const presses = new Map<string, { pointers: Set<number>; timer?: ReturnType<typeof setTimeout>; fired: boolean }>();
+  const pressFor = (cardId: string) => {
+    let press = presses.get(cardId);
+    if (!press) { press = { pointers: new Set(), fired: false }; presses.set(cardId, press); }
+    return press;
+  };
   function startLongPress(event: PointerEvent, cardId: string) {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
-    pressPointers.add(event.pointerId);
+    const press = pressFor(cardId);
+    press.pointers.add(event.pointerId);
     (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
-    if (pressPointers.size > 1) return; // already pressing
-    clearTimeout(longPressTimer);
-    longPressFired = false;
-    longPressTimer = setTimeout(() => {
-      longPressFired = true;
-      revealedCardId = cardId;
+    if (press.pointers.size > 1) return; // this card is already held
+    clearTimeout(press.timer);
+    press.fired = false;
+    press.timer = setTimeout(() => {
+      press.fired = true;
+      if (!revealedCardIds.includes(cardId)) revealedCardIds = [...revealedCardIds, cardId];
     }, 380);
   }
-  function endLongPress(event: PointerEvent) {
-    pressPointers.delete(event.pointerId);
-    if (pressPointers.size > 0) return; // another finger still holds the card
-    clearTimeout(longPressTimer);
-    longPressTimer = undefined;
-    revealedCardId = null;
+  function endLongPress(event: PointerEvent, cardId: string) {
+    const press = presses.get(cardId);
+    if (!press) return;
+    press.pointers.delete(event.pointerId);
+    if (press.pointers.size > 0) return; // another finger still holds this card
+    clearTimeout(press.timer);
+    press.timer = undefined;
+    revealedCardIds = revealedCardIds.filter((id) => id !== cardId);
   }
   // A click that follows a peek must not toggle the card's selection.
-  function consumeLongPress() {
-    const fired = longPressFired;
-    longPressFired = false;
+  function consumeLongPress(cardId: string) {
+    const press = presses.get(cardId);
+    const fired = press?.fired ?? false;
+    if (press) press.fired = false;
     return fired;
   }
   // AR phones must never see a card before the table shows it: while move
@@ -214,7 +221,14 @@
     winnerBanner: boolean;
     bigSeal: boolean;
     sealsWon: boolean;
+    /** Tokens that have landed in each player's three zones (goods, bonus, most camels). */
+    landed: Record<string, { goods: Token[]; bonus: Token[]; camel: Token[] }>;
+    /** "N wins the game!" has cross-faded into the end-of-game actions. */
+    bannerGone: boolean;
   };
+  type ScoreZone = 'goods' | 'bonus' | 'camel';
+  const ZONE_LABEL: Record<ScoreZone, string> = { goods: 'Goods sold', bonus: 'Bonus tokens', camel: 'Most camels' };
+  const zoneTotal = (uid: string, zone: ScoreZone) => (scoring?.landed[uid]?.[zone] ?? []).reduce((sum, t) => sum + t.value, 0);
   let scoring = $state<Scoring | null>(null);
   // The round whose seal has already reached the winner's seat (so the seat
   // may show it while the round is still "complete").
@@ -247,7 +261,7 @@
   // move's flights have landed.
   function claimRoundScoring(key: string) {
     if (scoring && scoring.stage !== 'final') return;
-    scoring = { key, stage: 'pending', reason: '', label: '', totals: {}, revealedBonus: [], camelBonusUid: null, camelToken: false, tieText: null, winnerUid: null, winnerBanner: false, bigSeal: false, sealsWon: false };
+    scoring = { key, stage: 'pending', reason: '', label: '', totals: {}, revealedBonus: [], camelBonusUid: null, camelToken: false, tieText: null, winnerUid: null, winnerBanner: false, bigSeal: false, sealsWon: false, landed: {}, bannerGone: false };
   }
 
   async function runRoundScoring(key: string) {
@@ -267,16 +281,25 @@
       winnerUid: round.winnerUid,
       winnerBanner: false,
       bigSeal: false,
-      sealsWon: false
+      sealsWon: false,
+      landed: Object.fromEntries(players.map((p) => [p.uid, { goods: [], bonus: [], camel: [] }])),
+      bannerGone: false
     };
     scoring = state;
     const live = () => scoringLive(key);
     // Every beat below is in base milliseconds; SCORE_SPEED stretches them.
     const S = SCORE_SPEED;
     const step = async (ms: number) => { await wait(ms * S); return live(); };
-    const scoreBox = (uid: string) => box(`[data-score-total="${CSS.escape(uid)}"]`);
-    const add = (uid: string, value: number, at: number) =>
-      setTimeout(() => { if (live() && scoring) scoring.totals[uid] = (scoring.totals[uid] ?? 0) + value; }, at * S);
+    // Tokens fly into the player's zone for their category and stay there
+    // (with a subtotal); the total below the zones grows as they land.
+    const zoneBox = (uid: string, zone: ScoreZone) => box(`[data-score-zone="${CSS.escape(uid)}:${zone}"]`);
+    const land = (uid: string, zone: ScoreZone, token: Token, at: number) =>
+      setTimeout(() => {
+        if (!live() || !scoring) return;
+        const zones = scoring.landed[uid] ?? (scoring.landed[uid] = { goods: [], bonus: [], camel: [] });
+        zones[zone] = [...zones[zone], token];
+        scoring.totals[uid] = (scoring.totals[uid] ?? 0) + token.value;
+      }, at * S);
     try {
       if (!(await step(4300))) return;
       // Goods tokens, in sequence, both sides together.
@@ -284,12 +307,12 @@
       await tick();
       let longest = 0;
       for (const p of players) {
-        const dest = scoreBox(p.uid);
+        const dest = zoneBox(p.uid, 'goods');
         const tokens = round.ownedGoodsTokens[p.uid] ?? [];
         tokens.forEach((token, i) => {
           const src = box(`[data-owned-token-id="${CSS.escape(token.id)}"]`);
           if (src && dest) scoreFlight(src, dest, token, i * 260 * S, invertedFor(p.uid));
-          add(p.uid, token.value, i * 260 + 850);
+          land(p.uid, 'goods', token, i * 260 + 850);
         });
         longest = Math.max(longest, tokens.length * 260 + 1000);
       }
@@ -299,13 +322,13 @@
       await tick();
       longest = 0;
       for (const p of players) {
-        const dest = scoreBox(p.uid);
+        const dest = zoneBox(p.uid, 'bonus');
         const tokens = round.ownedBonusTokens[p.uid] ?? [];
         tokens.forEach((token, i) => {
           const src = box(`[data-owned-token-id="${CSS.escape(token.id)}"]`);
           if (src && dest) scoreFlight(src, dest, token, i * 420 * S, invertedFor(p.uid), true);
           setTimeout(() => { if (live() && scoring) scoring.revealedBonus = [...scoring.revealedBonus, token.id]; }, (i * 420 + 500) * S);
-          add(p.uid, token.value, i * 420 + 850);
+          land(p.uid, 'bonus', token, i * 420 + 850);
         });
         longest = Math.max(longest, tokens.length * 420 + 1000);
       }
@@ -320,10 +343,11 @@
         await tick();
         if (!(await step(1600))) return;
         const src = box('[data-camel-bonus-token]');
-        const dest = scoreBox(camelUid);
-        if (src && dest) scoreFlight(src, dest, { id: `camel-bonus-${camelUid}`, kind: 'camel', value: 5 }, 0, invertedFor(camelUid));
+        const dest = zoneBox(camelUid, 'camel');
+        const camelToken: Token = { id: `camel-bonus-${camelUid}`, kind: 'camel', value: 5 };
+        if (src && dest) scoreFlight(src, dest, camelToken, 0, invertedFor(camelUid));
         scoring.camelToken = false;
-        add(camelUid, 5, 850);
+        land(camelUid, 'camel', camelToken, 850);
         if (!(await step(1400))) return;
       }
       // Result: tie-break, then the winner's mat glows.
@@ -345,8 +369,11 @@
       if (lobby.winnerUid) {
         scoring.sealsWon = true;
         if (!(await step(4200))) return;
-        // Stay on this screen: the actions face each player until one is chosen.
+        // Stay on this screen: "N wins the game!" cross-fades into the
+        // actions, which face each player until one is chosen.
         scoring.stage = 'final'; scoring.label = '';
+        if (!(await step(END_FADE_MS / S))) return;
+        scoring.bannerGone = true;
       } else {
         if (!(await step(1000))) return;
         scoring = null;
@@ -390,6 +417,7 @@
   // `--speed` CSS variable so the keyframes stretch with the JS delays.
   const SALE_SPEED = 1.5; // selling at two-thirds speed (2 read as too slow)
   const SCORE_SPEED = 1.5; // the round-end / game-end sequence, 50% slower
+  const END_FADE_MS = 2800; // "N wins the game!" cross-fading into the end-of-game actions
 
   const componentImage = (kind: Good | 'camel' | 'seal' | 'card-back') =>
     `${base}/components/${kind}.webp`;
@@ -1912,8 +1940,8 @@
     {#if scoring?.winnerBanner && scoring.winnerUid === player.uid}
       <div class="round-winner-banner" data-round-winner-banner role="status">Round winner</div>
     {/if}
-    {#if gameWon && lobby.winnerUid === player.uid}
-      <div class="game-winner-banner" data-game-winner-banner role="status">{player.displayName} wins the game!</div>
+    {#if gameWon && lobby.winnerUid === player.uid && scoring?.sealsWon && !scoring.bannerGone}
+      <div class="game-winner-banner" class:fading={scoring.stage === 'final'} style={`--fade:${END_FADE_MS}ms`} data-game-winner-banner role="status">{player.displayName} wins the game!</div>
     {/if}
     {#if botThinking && player.uid === lobby.bot?.uid}
       <div class="bot-thinking" data-bot-thinking={player.uid} role="status" aria-label={`${player.displayName} is thinking`}>
@@ -1933,8 +1961,25 @@
       <strong class="turn-state">{isActive ? 'Your turn' : 'Waiting'}</strong>
       <span class="hand-count" data-hand-count={player.uid}>{lobby.round?.hands[player.uid]?.length ?? 0} / 7 cards</span>
       {#if scoring || lobby.round?.status === 'complete'}
-        <span class="score-total" data-score-total={player.uid} aria-label="Round score">
-          {scoring ? scoring.totals[player.uid] ?? 0 : lobby.round?.scores?.[player.uid]?.total ?? 0}<small>pts</small>
+        <span class="score-stack">
+          {#if scoring && scoring.stage !== 'pending'}
+            <!-- Three landing zones above the total (bottom to top: goods
+                 sold, bonus tokens, most camels). Tokens stay where they
+                 land, each zone with its subtotal, through the seal delivery. -->
+            <span class="score-zones" data-score-zones={player.uid} aria-label="Round score breakdown">
+              {#each ['goods', 'bonus', 'camel'] as const as zone}
+                {@const landed = scoring.landed[player.uid]?.[zone] ?? []}
+                <span class="score-zone" class:filled={landed.length > 0} data-score-zone={`${player.uid}:${zone}`}>
+                  <small>{ZONE_LABEL[zone]}</small>
+                  <span class="zone-chips">{#each landed as token (token.id)}<span class="zone-chip"><TokenChip {token} /></span>{/each}</span>
+                  <b>{zoneTotal(player.uid, zone)}</b>
+                </span>
+              {/each}
+            </span>
+          {/if}
+          <span class="score-total" data-score-total={player.uid} aria-label="Round score">
+            {scoring ? scoring.totals[player.uid] ?? 0 : lobby.round?.scores?.[player.uid]?.total ?? 0}<small>pts</small>
+          </span>
         </span>
       {/if}
       <span class="seat-seals" class:won={gameWon && lobby.winnerUid === player.uid} data-seat-seals={player.uid} aria-label={`${lobby.seals[player.uid] ?? 0} of 2 Seals of Excellence`}>
@@ -1981,19 +2026,19 @@
             class:arriving={arrivingCardIds.includes(card.id)}
             class:selected
             class:loaded
-            class:revealed={revealedCardId === card.id}
+            class:revealed={revealedCardIds.includes(card.id)}
             aria-disabled={!canSelectReturns(player.uid) || loaded}
             aria-pressed={selected}
             aria-label={`${selected ? 'Deselect' : 'Select'} face-down card for a trade; hold to peek at it`}
             data-table-hand-card={card.id}
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
-            data-card-revealed={revealedCardId === card.id || undefined}
-            onclick={() => { if (consumeLongPress()) return; if (canSelectReturns(player.uid) && !loaded) toggleReturn(player.uid, card.id); }}
+            data-card-revealed={revealedCardIds.includes(card.id) || undefined}
+            onclick={() => { if (consumeLongPress(card.id)) return; if (canSelectReturns(player.uid) && !loaded) toggleReturn(player.uid, card.id); }}
             onpointerdown={(e) => startLongPress(e, card.id)}
-            onpointerup={endLongPress}
-            onpointercancel={endLongPress}
-            onpointerleave={endLongPress}
-            onlostpointercapture={endLongPress}
+            onpointerup={(e) => endLongPress(e, card.id)}
+            onpointercancel={(e) => endLongPress(e, card.id)}
+            onpointerleave={(e) => endLongPress(e, card.id)}
+            onlostpointercapture={(e) => endLongPress(e, card.id)}
             oncontextmenu={(e) => e.preventDefault()}
           >
             <span class="peek-card" aria-hidden="true">
@@ -2283,7 +2328,7 @@
       <!-- End state, held on screen: the game's actions (or, after a reload
            mid-sequence, "Open round N") printed twice, one copy turned for
            the far seat. The scores stay on the mats; no summary screen. -->
-      <div class="end-overlay" data-end-state={lobby.winnerUid ? 'game' : 'round'}>
+      <div class="end-overlay" data-end-state={lobby.winnerUid ? 'game' : 'round'} style={`--fade:${scoring?.stage === 'final' ? END_FADE_MS : 500}ms`}>
         <div class="end-actions far">{@render endActions()}</div>
         <div class="end-actions near">{@render endActions()}</div>
       </div>
@@ -2526,7 +2571,8 @@
   }
   .top-edge { grid-column: 2; grid-row: 1; }
   .bottom-edge { grid-column: 2; grid-row: 3; }
-  .edge { width: var(--mat-width); justify-self: center; }
+  /* Above the market section, so the scoring zones overhanging a mat are not painted under it. */
+  .edge { position: relative; z-index: 6; width: var(--mat-width); justify-self: center; }
   .inverted-content { width: 100%; height: 100%; transform: rotate(180deg); }
   .join-seat {
     display: grid;
@@ -2839,7 +2885,9 @@
   }
   .hand-count { font-size: clamp(0.62rem, 1.3vmin, 0.85rem); font-weight: 700; color: #526762; white-space: nowrap; }
   /* ---- Round-end scoring sequence ---- */
-  .scoring-overlay { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; pointer-events: none; }
+  /* Fixed to the viewport: the disc and the big seal sit at the centre of
+     the screen, not of the market section (whose header offset them). */
+  .scoring-overlay { position: fixed; inset: 0; z-index: 44; display: grid; place-items: center; pointer-events: none; }
   .scoring-disc-wrap { animation: scoring-grow 1200ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
   .scoring-disc {
     display: grid; place-items: center; gap: 0.2rem; box-sizing: border-box;
@@ -2854,7 +2902,9 @@
   .scoring-disc .facing { max-width: 88%; margin: 0; font-size: clamp(0.8rem, 1.9vmin, 1.6rem); line-height: 1.25; color: #183a37; font-weight: 700; }
   .scoring-disc .far { transform: rotate(180deg); }
   .end-overlay { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; justify-content: space-between; align-items: center; padding: clamp(0.4rem, 2vmin, 1.5rem); pointer-events: none; }
-  .end-actions { display: flex; gap: clamp(0.4rem, 1.5vmin, 1rem); pointer-events: auto; animation: banner-fade 500ms ease both; }
+  .end-actions { display: flex; gap: clamp(0.4rem, 1.5vmin, 1rem); pointer-events: auto; animation: banner-fade var(--fade, 500ms) ease both; }
+  .game-winner-banner.fading { animation: banner-fade-out var(--fade, 2800ms) ease both; }
+  @keyframes banner-fade-out { from { opacity: 1; transform: translate(-50%, -50%) scale(1); } to { opacity: 0; transform: translate(-50%, -50%) scale(1.06); } }
   .end-actions.far { transform: rotate(180deg); }
   .end-actions button {
     min-height: 44px; padding: 0.5em 1.3em; border: 2px solid #a6442d; border-radius: 99rem; background: #fffaf0; color: #a6442d;
@@ -2865,7 +2915,7 @@
   .end-actions button:disabled { opacity: 0.55; }
   @keyframes banner-fade { from { opacity: 0; } to { opacity: 1; } }
   .big-seal {
-    position: absolute; left: 50%; top: 50%; translate: -50% -50%; width: min(34vh, 24vw); z-index: 5;
+    position: fixed; left: 50%; top: 50%; translate: -50% -50%; width: min(34vh, 24vw); z-index: 45;
     /* The artwork is a square image: clip it to the round seal, like the seat seals. */
     aspect-ratio: 1; border-radius: 50%; object-fit: cover;
     filter: drop-shadow(0 0 2rem #ffd27a) drop-shadow(0 0.8rem 1.6rem rgb(10 32 30 / 45%));
@@ -2878,6 +2928,24 @@
     border-radius: 99rem; background: #183a37; color: #fffaf0; font-weight: 900; font-size: clamp(1rem, 2.6vmin, 2.2rem); line-height: 1.1;
   }
   .score-total small { font-size: 0.45em; font-weight: 700; opacity: 0.8; }
+  /* Landing zones stack upward from the total (which stays where it is);
+     they overhang the mat into the market, above everything on the table. */
+  .score-stack { position: relative; display: inline-grid; justify-items: center; }
+  .score-zones { position: absolute; bottom: calc(100% + 0.3rem); left: 50%; z-index: 7; display: flex; flex-direction: column-reverse; gap: 0.25rem; translate: -50% 0; }
+  .score-zone {
+    display: grid; grid-template-columns: auto minmax(2.2rem, 1fr) auto; align-items: center; gap: 0.35rem; box-sizing: border-box;
+    min-width: clamp(9rem, 22vmin, 16rem); min-height: clamp(1.7rem, 4vmin, 3rem); padding: 0.15rem 0.5rem;
+    border: 2px dashed #b7aa8d; border-radius: 99rem; background: rgb(255 250 240 / 88%); color: #315f58; white-space: nowrap;
+    transition: border-color 300ms, background 300ms;
+  }
+  .score-zone.filled { border-style: solid; border-color: #d38b21; background: #fffaf0; }
+  .score-zone small { font-size: clamp(0.55rem, 1.2vmin, 0.85rem); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+  .score-zone b { min-width: 1.6em; padding: 0.05em 0.4em; border-radius: 99rem; background: #183a37; color: #fffaf0; font-size: clamp(0.8rem, 1.9vmin, 1.5rem); text-align: center; }
+  .zone-chips { display: flex; justify-content: center; }
+  .zone-chip { display: block; width: clamp(1.2rem, 3vmin, 2.2rem); height: clamp(1.2rem, 3vmin, 2.2rem); margin-left: -0.45em; animation: zone-chip-land 350ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
+  .zone-chip:first-child { margin-left: 0; }
+  .zone-chip :global(.token-chip) { width: 100%; height: 100%; }
+  @keyframes zone-chip-land { from { transform: scale(1.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   .tabletop-herd.scoring-glow .herd-pile { animation: herd-glow 1400ms ease-in-out infinite; }
   @keyframes herd-glow { 0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 #ffd27a); } 50% { transform: scale(1.15); filter: drop-shadow(0 0 1.2rem #ffd27a); } }
   .tabletop-herd.scoring-glow .herd-count { transform: translateX(-50%) scale(1.7); transition: transform 750ms ease; }
