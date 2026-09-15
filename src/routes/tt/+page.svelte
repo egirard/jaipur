@@ -675,7 +675,8 @@
     }
   }
 
-  // "Show hands": hand cards lie face up on the table. Unless the players
+  // "Show hands": a human's hand cards lie face up on the table (a computer
+  // opponent's never are). Unless the players
   // chose otherwise, it is on against a computer opponent (nobody to hide
   // from) and off with two humans (their phones show their cards).
   let showHandsChoice = $state<'auto' | 'on' | 'off'>('auto');
@@ -726,6 +727,23 @@
       case 'game/rematched': return 'started a rematch';
     }
   }
+
+  // A second line of detail where the move has one (what a trade gave and
+  // took, how many tokens a sale earned).
+  function activityDetail(activity: GameActivity): string | null {
+    const kinds = (list?: string[]) => list?.map((kind) => label(kind as Good | 'camel')).join(', ');
+    switch (activity.type) {
+      case 'cards/exchanged': return `gave ${kinds(activity.returnedCardKinds) ?? '?'} · took ${kinds(activity.cardKinds) ?? '?'}`;
+      case 'cards/sold': return activity.tokenCount ? `${activity.tokenCount} token${activity.tokenCount === 1 ? '' : 's'} earned` : null;
+      case 'cards/taken-camels': return null;
+      case 'round/started': return activity.starterUid ? `${playerName(activity.starterUid)} starts` : null;
+      default: return null;
+    }
+  }
+  // The game log: the latest move (the other player's, on your turn) is
+  // always visible in each corner; + opens the full, scrollable list.
+  let logOpen = $state<{ top: boolean; bottom: boolean }>({ top: false, bottom: false });
+  const isMove = (a: GameActivity) => a.type.startsWith('cards/') || a.type.startsWith('round/') || a.type === 'game/rematched';
 
   async function maybeOpenFirstRound() {
     if (
@@ -1086,27 +1104,45 @@
     return isLegalSale(lobby.round, uid, kind, ids);
   }
 
-  async function sell(kind: Good, supplySeat: Seat) {
+  async function sell(kind: Good, supplySeat: Seat, count?: number) {
     const uid = lobby.round?.activeUid;
     if (!uid) return;
     saleTokenViewSeats[uid] = supplySeat;
-    await appendFor(uid, 'cards/sold', { kind, cardIds: saleIds(uid, kind) });
+    const ids = saleIds(uid, kind);
+    await appendFor(uid, 'cards/sold', { kind, cardIds: count ? ids.slice(0, count) : ids });
+  }
+
+  // Partial sales are legal (rarely useful): while a sale is staged, the
+  // prompt offers every legal count, the full sale preselected.
+  function saleCounts(uid: string, kind: Good): number[] {
+    const ids = saleIds(uid, kind);
+    const round = lobby.round;
+    if (!round) return [];
+    return ids.map((_, i) => i + 1).filter((n) => isLegalSale(round, uid, kind, ids.slice(0, n)));
+  }
+  function salePoints(kind: Good, count: number): number {
+    return lobby.round?.goodsTokens[kind].slice(0, count).reduce((sum, token) => sum + token.value, 0) ?? 0;
   }
 
   // Selling takes two taps like every other move: the first stages the
   // sale (the stack shows a ✓ and the prompt describes it, with Cancel), the
   // second on the same stack confirms. Table-local: nothing is written to
   // the store until the sale itself.
-  let pendingSale = $state<{ uid: string; kind: Good; seat: Seat; ids: string } | null>(null);
+  let pendingSale = $state<{ uid: string; kind: Good; seat: Seat; ids: string; count: number } | null>(null);
   function tapSell(kind: Good, supplySeat: Seat) {
     const uid = lobby.round?.activeUid;
     if (!uid || !canSell(kind)) return;
     if (pendingSale && pendingSale.uid === uid && pendingSale.kind === kind) {
+      const { count } = pendingSale;
       pendingSale = null;
-      void sell(kind, supplySeat);
+      void sell(kind, supplySeat, count);
       return;
     }
-    pendingSale = { uid, kind, seat: supplySeat, ids: saleIds(uid, kind).join(',') };
+    const ids = saleIds(uid, kind);
+    pendingSale = { uid, kind, seat: supplySeat, ids: ids.join(','), count: ids.length };
+  }
+  function chooseSaleCount(count: number) {
+    if (pendingSale) pendingSale = { ...pendingSale, count };
   }
   function confirmSale() {
     if (pendingSale) tapSell(pendingSale.kind, pendingSale.seat);
@@ -2093,13 +2129,13 @@
             class:arriving={arrivingCardIds.includes(card.id)}
             class:selected
             class:loaded
-            class:revealed={showHands || revealedCardIds.includes(card.id)}
+            class:revealed={(showHands && player.uid !== lobby.bot?.uid) || revealedCardIds.includes(card.id)}
             aria-disabled={!canSelectReturns(player.uid) || loaded}
             aria-pressed={selected}
             aria-label={`${selected ? 'Deselect' : 'Select'} face-down card for a trade; hold to peek at it`}
             data-table-hand-card={card.id}
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
-            data-card-revealed={showHands || revealedCardIds.includes(card.id) || undefined}
+            data-card-revealed={(showHands && player.uid !== lobby.bot?.uid) || revealedCardIds.includes(card.id) || undefined}
             onclick={() => { if (consumeLongPress(card.id)) return; if (canSelectReturns(player.uid) && !loaded) toggleReturn(player.uid, card.id); }}
             onpointerdown={(e) => startLongPress(e, card.id)}
             onpointerup={(e) => endLongPress(e, card.id)}
@@ -2184,14 +2220,35 @@
 {/snippet}
 
 {#snippet gameLog(inverted: boolean)}
-  <details class="corner-log" class:inverted aria-label={inverted ? 'Player 1 game log' : 'Player 2 game log'}>
-    <summary>Game log <span>{lobby.activity.length}</span></summary>
-    <ol reversed>
-      {#each [...lobby.activity].reverse().slice(0, 7) as activity}
-        <li><strong>{playerName(activity.actorUid)}</strong> {activityDescription(activity)}</li>
-      {/each}
-    </ol>
-  </details>
+  {@const side = inverted ? 'top' : 'bottom'}
+  {@const latest = lobby.activity.findLast(isMove)}
+  {@const open = logOpen[side]}
+  <div class="corner-log" class:inverted class:open aria-label={inverted ? 'Player 1 game log' : 'Player 2 game log'} data-game-log={side}>
+    <div class="log-latest" data-log-latest>
+      {#if latest}
+        <span><strong>{playerName(latest.actorUid)}</strong> {activityDescription(latest)}</span>
+      {:else}
+        <span>Game log</span>
+      {/if}
+      {#if !open}
+        <button type="button" class="log-toggle" aria-label="Show the full game log" onclick={() => (logOpen = { ...logOpen, [side]: true })}>+</button>
+      {/if}
+    </div>
+    {#if open}
+      <div class="log-panel" data-log-panel>
+        <div class="log-head">
+          <strong>Game log</strong> <span>{lobby.activity.length}</span>
+          <button type="button" class="log-toggle" aria-label="Hide the game log" onclick={() => (logOpen = { ...logOpen, [side]: false })}>−</button>
+        </div>
+        <ol reversed>
+          {#each [...lobby.activity].reverse() as activity (activity.id)}
+            {@const detail = activityDetail(activity)}
+            <li><strong>{playerName(activity.actorUid)}</strong> {activityDescription(activity)}{#if detail}<small>{detail}</small>{/if}</li>
+          {/each}
+        </ol>
+      </div>
+    {/if}
+  </div>
 {/snippet}
 
 <svelte:head>
@@ -2258,8 +2315,27 @@
           <button type="button" disabled={busy} data-abandon-draw onclick={abandonPendingDraw}>Undo</button>
         {:else if pendingSale}
           {@const preview = salePreview(pendingSale.kind)}
+          {@const counts = saleCounts(pendingSale.uid, pendingSale.kind)}
           <span>Sell {preview?.cards ?? 0} {label(pendingSale.kind).toLowerCase()} for +{preview?.base ?? 0}{preview?.bonus ? ` and a +${preview.bonus} bonus token` : ''}? Tap the ✓ stack again to confirm.</span>
-          <button type="button" disabled={busy} data-confirm-sale onclick={confirmSale}>Sell</button>
+          {#if counts.length > 1}
+            <span class="sale-counts" role="group" aria-label="How many to sell">
+              {#each counts as n (n)}
+                <button
+                  type="button"
+                  class="sale-count"
+                  class:chosen={pendingSale.count === n}
+                  aria-pressed={pendingSale.count === n}
+                  aria-label={`Sell ${n} for ${salePoints(pendingSale.kind, n)} points`}
+                  data-sale-count={n}
+                  onclick={() => chooseSaleCount(n)}
+                >
+                  <span class="sale-count-icons">{#each Array(n) as _}<img src={componentImage(pendingSale.kind)} alt="" />{/each}</span>
+                  <b>+{salePoints(pendingSale.kind, n)}</b>
+                </button>
+              {/each}
+            </span>
+          {/if}
+          <button type="button" disabled={busy} data-confirm-sale onclick={confirmSale}>Sell {pendingSale.count}</button>
           <button type="button" class="cancel" disabled={busy} data-cancel-sale onclick={cancelSale}>Cancel</button>
         {:else if Object.keys(promptLoads).length >= 2}
           {@const problem = exchangeProblem(activeUid)}
@@ -2278,10 +2354,8 @@
           <span>{promptReturns.length} selected · tap a return area or token stack.</span>
           <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Clear</button>
         {:else}
-          {@const last = lobby.activity.findLast((a) => a.type.startsWith('cards/'))}
           {@const activeName = lobby.players.find((p) => p.uid === activeUid)?.displayName ?? 'Trader'}
           <span>
-            {#if last && last.actorUid !== activeUid}<strong>{playerName(last.actorUid)}</strong> {activityDescription(last)} · {/if}
             <strong>{activeName}</strong>: tap your face-down cards (see them in AR) to select, then use the market or token supplies.
           </span>
         {/if}
@@ -2636,8 +2710,8 @@
     font-family: 'Atkinson Hyperlegible', sans-serif;
   }
   .arriving { visibility: hidden !important; }
-  button, summary { font: inherit; }
-  button:focus-visible, summary:focus-visible { outline: 3px solid #d38b21; outline-offset: 2px; }
+  button { font: inherit; }
+  button:focus-visible { outline: 3px solid #d38b21; outline-offset: 2px; }
   .tabletop {
     --rail-width: clamp(8.5rem, 14vw, 24rem);
     /* Player mats keep their 25vh height but are 78% of the column wide,
@@ -2962,14 +3036,27 @@
   .top-log, .bottom-log { position: fixed; z-index: 20; }
   .top-log { top: 0.75rem; left: calc(var(--rail-width) + 1rem); transform: rotate(180deg); }
   .bottom-log { right: calc(var(--rail-width) + 1rem); bottom: 0.75rem; }
-  .corner-log { position: relative; }
-  .corner-log summary { display: flex; min-width: 7rem; min-height: 44px; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.55rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fffaf0; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 24%); cursor: pointer; font-size: 0.75rem; font-weight: 700; list-style: none; }
-  .corner-log summary::-webkit-details-marker { display: none; }
-  .corner-log summary span { display: grid; min-width: 1.4rem; min-height: 1.4rem; place-items: center; border-radius: 99rem; background: #315f58; color: white; }
-  .corner-log ol { position: absolute; right: 0; bottom: calc(100% + 0.35rem); width: min(25rem, 42vw); max-height: min(60vh, 32rem); overflow-y: auto; overscroll-behavior: contain; margin: 0; padding: 0.55rem; border: 1px solid #8e826b; border-radius: 0.7rem; background: #fffaf0; box-shadow: 0 0.7rem 1.2rem rgb(10 32 30 / 24%); list-style: none; }
-  .corner-log.inverted ol { top: calc(100% + 0.35rem); right: auto; bottom: auto; left: 0; }
-  .corner-log li { padding: 0.22rem 0.3rem; border-radius: 0.25rem; background: #f2e8d3; font-size: 0.68rem; }
+  .corner-log { position: relative; width: min(20rem, 30vw); }
+  .log-latest { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.4rem 0.35rem 0.7rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fffaf0; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 24%); font-size: 0.78rem; }
+  .log-latest > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-toggle { display: grid; width: 2rem; height: 2rem; flex: 0 0 auto; place-items: center; padding: 0; border: 0; border-radius: 99rem; background: #315f58; color: white; font: inherit; font-size: 1.1rem; font-weight: 900; line-height: 1; cursor: pointer; }
+  /* The full log opens over the table (upward from the bottom corner, downward from the rotated top one): taller and narrower than the pill, scrolling when long. */
+  .log-panel { position: absolute; right: 0; bottom: calc(100% + 0.35rem); z-index: 1; display: grid; width: 100%; max-height: min(72vh, 40rem); grid-template-rows: auto minmax(0, 1fr); border: 1px solid #8e826b; border-radius: 0.7rem; background: #fffaf0; box-shadow: 0 0.7rem 1.2rem rgb(10 32 30 / 24%); }
+  .corner-log.inverted .log-panel { top: calc(100% + 0.35rem); right: auto; bottom: auto; left: 0; }
+  .log-head { display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.4rem 0.4rem 0.7rem; border-bottom: 1px solid #e4d8bd; font-size: 0.75rem; }
+  .log-head span { display: grid; min-width: 1.4rem; min-height: 1.4rem; place-items: center; border-radius: 99rem; background: #315f58; color: white; font-weight: 700; }
+  .log-head .log-toggle { margin-left: auto; }
+  .corner-log ol { min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0; padding: 0.55rem; list-style: none; }
+  .corner-log li { padding: 0.22rem 0.3rem; border-radius: 0.25rem; background: #f2e8d3; font-size: 0.7rem; }
+  .corner-log li small { display: block; margin-top: 0.1rem; font-size: 0.62rem; color: #5d5240; }
   .corner-log li + li { margin-top: 0.18rem; }
+  /* Partial-sale choices in the prompt: n good icons and the points they earn. */
+  .sale-counts { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  .sale-count { display: grid; justify-items: center; gap: 0.1rem; min-height: 44px; padding: 0.25rem 0.45rem; border: 2px solid #b7aa8d; border-radius: 0.6rem; background: #fffaf0; color: #183a37; font: inherit; font-size: 0.8em; font-weight: 800; }
+  .sale-count.chosen { border-color: #1d7a4a; background: #eafff0; box-shadow: 0 0 0 3px rgb(29 122 74 / 22%); }
+  .sale-count-icons { display: flex; }
+  .sale-count-icons img { width: 1.4em; height: 1.4em; border-radius: 0.2em; object-fit: cover; margin-left: -0.5em; box-shadow: 0 0 0 1px #fffaf0; }
+  .sale-count-icons img:first-child { margin-left: 0; }
   .table-card-flight, .table-token-flight { position: fixed; z-index: 40; top: var(--start-top); left: var(--start-left); width: var(--start-size); height: var(--start-size); pointer-events: none; animation: table-flight 860ms cubic-bezier(0.2, 0.75, 0.22, 1) var(--flight-delay) both; animation-duration: calc(860ms * var(--speed, 1)); }
   .table-card-flight { perspective: 900px; }
   .table-card-flight-inner { position: absolute; inset: 0; display: block; transform-style: preserve-3d; }
