@@ -449,6 +449,8 @@
   onMount(async () => {
     try {
       marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') === 'on';
+      const savedHands = localStorage.getItem('jaipur:tabletop:show-hands');
+      if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
       const pageParams = new URLSearchParams(location.search);
       // The Firebase channel is disabled for this AR fork: the table is
       // the only writer (phones join and watch over the AR relay), so the
@@ -671,6 +673,16 @@
       if (live && live !== marketFacingSeat && pendingTurnSeat === undefined) applyMarketFacing(live);
       publishAr(); // busy cleared
     }
+  }
+
+  // "Show hands": hand cards lie face up on the table. Unless the players
+  // chose otherwise, it is on against a computer opponent (nobody to hide
+  // from) and off with two humans (their phones show their cards).
+  let showHandsChoice = $state<'auto' | 'on' | 'off'>('auto');
+  const showHands = $derived(showHandsChoice === 'auto' ? Boolean(lobby.bot) : showHandsChoice === 'on');
+  function toggleShowHands() {
+    showHandsChoice = showHands ? 'off' : 'on';
+    localStorage.setItem('jaipur:tabletop:show-hands', showHandsChoice);
   }
 
   function toggleMarketFacing() {
@@ -1080,6 +1092,37 @@
     saleTokenViewSeats[uid] = supplySeat;
     await appendFor(uid, 'cards/sold', { kind, cardIds: saleIds(uid, kind) });
   }
+
+  // Selling takes two taps like every other move: the first stages the
+  // sale (the stack shows a ✓ and the prompt describes it, with Cancel), the
+  // second on the same stack confirms. Table-local: nothing is written to
+  // the store until the sale itself.
+  let pendingSale = $state<{ uid: string; kind: Good; seat: Seat; ids: string } | null>(null);
+  function tapSell(kind: Good, supplySeat: Seat) {
+    const uid = lobby.round?.activeUid;
+    if (!uid || !canSell(kind)) return;
+    if (pendingSale && pendingSale.uid === uid && pendingSale.kind === kind) {
+      pendingSale = null;
+      void sell(kind, supplySeat);
+      return;
+    }
+    pendingSale = { uid, kind, seat: supplySeat, ids: saleIds(uid, kind).join(',') };
+  }
+  function confirmSale() {
+    if (pendingSale) tapSell(pendingSale.kind, pendingSale.seat);
+  }
+  function cancelSale() {
+    pendingSale = null;
+  }
+  // A staged sale lapses when it stops describing the table: the turn
+  // passes, the selection changes, or the sale is no longer legal.
+  $effect(() => {
+    if (!pendingSale) return;
+    const uid = lobby.round?.activeUid;
+    if (uid !== pendingSale.uid || pendingDraw || saleIds(pendingSale.uid, pendingSale.kind).join(',') !== pendingSale.ids || !isLegalSale(lobby.round!, pendingSale.uid, pendingSale.kind, saleIds(pendingSale.uid, pendingSale.kind))) {
+      pendingSale = null;
+    }
+  });
 
   function ownedTokens(uid: string): Token[] {
     if (!lobby.round) return [];
@@ -2050,13 +2093,13 @@
             class:arriving={arrivingCardIds.includes(card.id)}
             class:selected
             class:loaded
-            class:revealed={revealedCardIds.includes(card.id)}
+            class:revealed={showHands || revealedCardIds.includes(card.id)}
             aria-disabled={!canSelectReturns(player.uid) || loaded}
             aria-pressed={selected}
             aria-label={`${selected ? 'Deselect' : 'Select'} face-down card for a trade; hold to peek at it`}
             data-table-hand-card={card.id}
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
-            data-card-revealed={revealedCardIds.includes(card.id) || undefined}
+            data-card-revealed={showHands || revealedCardIds.includes(card.id) || undefined}
             onclick={() => { if (consumeLongPress(card.id)) return; if (canSelectReturns(player.uid) && !loaded) toggleReturn(player.uid, card.id); }}
             onpointerdown={(e) => startLongPress(e, card.id)}
             onpointerup={(e) => endLongPress(e, card.id)}
@@ -2199,6 +2242,7 @@
         aria-label="Tabletop action prompt"
         aria-live="polite"
         data-pending-draw={pendingDraw?.kind}
+        data-pending-sale={pendingSale?.kind}
         data-prompt-seat={marketFacingSeat}
         data-prompt-phase={actionAnimating ? 'action' : turnPause ? 'pause' : turnTransitioning ? 'rotation' : 'ready'}
       >
@@ -2212,6 +2256,11 @@
           <span>{pendingDraw.kind === 'camels' ? `Take all ${pendingDraw.cardIds.length} camels? Tap a ✓ camel to confirm.` : 'Take this card? Tap it again to confirm.'}</span>
           <button type="button" disabled={busy} data-confirm-draw onclick={confirmPendingDraw}>Confirm</button>
           <button type="button" disabled={busy} data-abandon-draw onclick={abandonPendingDraw}>Undo</button>
+        {:else if pendingSale}
+          {@const preview = salePreview(pendingSale.kind)}
+          <span>Sell {preview?.cards ?? 0} {label(pendingSale.kind).toLowerCase()} for +{preview?.base ?? 0}{preview?.bonus ? ` and a +${preview.bonus} bonus token` : ''}? Tap the ✓ stack again to confirm.</span>
+          <button type="button" disabled={busy} data-confirm-sale onclick={confirmSale}>Sell</button>
+          <button type="button" class="cancel" disabled={busy} data-cancel-sale onclick={cancelSale}>Cancel</button>
         {:else if Object.keys(promptLoads).length >= 2}
           {@const problem = exchangeProblem(activeUid)}
           <span>{problem ?? `${Object.keys(promptLoads).length} returns placed · tap a ✓ card or Trade.`}</span>
@@ -2397,6 +2446,17 @@
         >Turn to trader {marketFacingEnabled ? 'on' : 'off'}</button>
         <small>Rotates the market 180° so its cards and prompt face whoever's turn it is. Off by default: the market reads fine from both sides, and a phone in AR locks onto the pre-rotation capture and flips.</small>
       </div>
+      <div class="facing-option">
+        <button
+          type="button"
+          class="orientation-toggle"
+          aria-pressed={showHands}
+          aria-label="Show hand cards face up on the table"
+          data-show-hands={showHands ? 'on' : 'off'}
+          onclick={toggleShowHands}
+        >Show hands {showHands ? 'on' : 'off'}</button>
+        <small>Hand cards lie face up on the table. On by default against a computer opponent{showHandsChoice === 'auto' ? ' (as now)' : ''}; off with two players, whose phones show them their cards. Hold a card to peek either way.</small>
+      </div>
       <div class="scale-row">
         <span>Screen diagonal</span>
         <button type="button" onclick={() => setDiag(arDiag - 5)} aria-label="5 inches smaller">−5</button>
@@ -2487,7 +2547,8 @@
       inverted
       {label}
       {canSell}
-      onSell={(kind) => sell(kind, 1)}
+      pending={pendingSale?.kind ?? null}
+      onSell={(kind) => tapSell(kind, 1)}
     />
   </div>
   <div class="token-view bottom-token-view">
@@ -2497,7 +2558,8 @@
       {goods}
       {label}
       {canSell}
-      onSell={(kind) => sell(kind, 2)}
+      pending={pendingSale?.kind ?? null}
+      onSell={(kind) => tapSell(kind, 2)}
     />
   </div>
 

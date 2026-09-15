@@ -11,6 +11,7 @@
     inverted = false,
     label,
     canSell,
+    pending = null,
     onSell
   }: {
     seat: 1 | 2;
@@ -19,6 +20,8 @@
     inverted?: boolean;
     label: (kind: Good) => string;
     canSell: (kind: Good) => boolean;
+    /** The good whose sale is staged (first tap): its stack shows a ✓. */
+    pending?: Good | null;
     onSell: (kind: Good) => void | Promise<void>;
   } = $props();
 
@@ -63,12 +66,15 @@
           type="button"
           class={`rail-token ${kind}`}
           class:sellable={canSell(kind)}
+          class:confirm-ready={pending === kind}
           disabled={!canSell(kind)}
-          aria-label={`Sell to ${label(kind)} token stack, ${round.goodsTokens[kind].length} left`}
+          aria-label={pending === kind ? `Confirm: sell ${label(kind)}` : `Sell to ${label(kind)} token stack, ${round.goodsTokens[kind].length} left`}
+          data-sale-pending={pending === kind || undefined}
           data-token-kind={kind}
           style={`--good-art: url("${assetBase}/components/${kind}.webp")`}
           onclick={() => onSell(kind)}
         >
+          {#if pending === kind}<span class="confirm-mark" aria-hidden="true">✓</span>{/if}
           <span class="rail-head">
             <span class="rail-name">{label(kind)}</span>
             <span class="rail-count">{round.goodsTokens[kind].length}</span>
@@ -177,6 +183,10 @@
   /* Deliberately no `.sellable` styling: a highlight on the stacks the
      active trader could sell to told the other player what their hand
      holds. The button is still disabled when a sale is impossible. */
+  /* A staged sale: the same green ✓ and pulse as a market card awaiting its confirming tap. */
+  .rail-token.confirm-ready { border: 3px solid #1d7a4a; box-shadow: 0 0 0 4px rgb(29 122 74 / 30%); animation: confirm-pulse 1.1s ease-in-out infinite; }
+  .confirm-mark { position: absolute; right: 0.15rem; top: 0.15rem; z-index: 3; display: grid; width: 1.8em; height: 1.8em; place-items: center; border-radius: 50%; background: #1d7a4a; color: #eafff0; font-size: clamp(0.9rem, 2.4vmin, 2rem); font-weight: 900; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); }
+  @keyframes confirm-pulse { 0%, 100% { box-shadow: 0 0 0 4px rgb(29 122 74 / 30%); } 50% { box-shadow: 0 0 0 9px rgb(29 122 74 / 12%); } }
   .rail-head { display: flex; gap: 0.35rem; align-items: baseline; font-weight: 800; text-shadow: 0 0 4px #fffaf0, 0 0 4px #fffaf0; }
   .rail-count { padding: 0 0.4rem; border-radius: 99rem; background: #183a37; color: #fffaf0; text-shadow: none; }
   .rail-chip { display: grid; width: 100%; min-width: 0; justify-items: center; gap: 0.12rem; }
