@@ -2236,7 +2236,9 @@
             <span class="score-zones" data-score-zones={player.uid} aria-label="Round score breakdown">
               {#each ['goods', 'bonus', 'camel'] as const as zone}
                 {@const landed = scoring.landed[player.uid]?.[zone] ?? []}
-                <span class="score-zone" class:filled={landed.length > 0} data-score-zone={`${player.uid}:${zone}`}>
+                <!-- Past three tokens the label breaks into two lines ("Goods" / "sold"),
+                     handing half its width to the chip row so more tokens fit per row. -->
+                <span class="score-zone" class:filled={landed.length > 0} class:wrap={landed.length > 3} data-score-zone={`${player.uid}:${zone}`}>
                   <small>{ZONE_LABEL[zone]}</small>
                   <span class="zone-chips">{#each landed as token (token.id)}<span class="zone-chip"><TokenChip {token} /></span>{/each}</span>
                   <b>{zoneTotal(player.uid, zone)}</b>
@@ -3395,7 +3397,10 @@
   /* Landing zones stack upward from the total (which stays where it is);
      they overhang the mat into the market, above everything on the table. */
   .score-stack { position: relative; display: inline-grid; justify-items: center; }
-  .score-zones { position: absolute; bottom: calc(100% + 0.4rem); left: 50%; z-index: 7; display: flex; flex-direction: column-reverse; gap: 0.5rem; translate: -50% 0; }
+  /* width: max-content — an absolutely positioned box inside the narrow
+     score total would otherwise shrink to its min-width and stack the
+     landed tokens three to a row however many arrive. */
+  .score-zones { position: absolute; bottom: calc(100% + 0.4rem); left: 50%; z-index: 7; display: flex; flex-direction: column-reverse; gap: 0.5rem; width: max-content; translate: -50% 0; }
   .score-zone {
     display: grid; grid-template-columns: auto minmax(4.4rem, 1fr) auto; align-items: center; gap: 0.7rem; box-sizing: border-box;
     min-width: clamp(18rem, 44vmin, 32rem); min-height: clamp(3.4rem, 8vmin, 6rem); padding: 0.3rem 1rem;
@@ -3403,6 +3408,9 @@
     transition: border-color 300ms, background 300ms;
   }
   .score-zone.filled { border-style: solid; border-color: #d38b21; background: #fffaf0; }
+  .score-zone.wrap { grid-template-columns: min-content minmax(4.4rem, 1fr) auto; }
+  .score-zone.wrap small { white-space: normal; text-align: center; line-height: 1.05; }
+  .score-zone.wrap .zone-chips { max-width: clamp(12rem, 40vmin, 30rem); }
   .score-zone small { font-size: clamp(1.1rem, 2.4vmin, 1.7rem); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
   .score-zone b { min-width: 1.6em; padding: 0.05em 0.4em; border-radius: 99rem; background: #183a37; color: #fffaf0; font-size: clamp(1.6rem, 3.8vmin, 3rem); text-align: center; }
   /* Landed tokens sit in wrapping rows at a fixed round size (like the mat's
