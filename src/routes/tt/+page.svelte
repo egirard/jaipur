@@ -2329,6 +2329,7 @@
                   data-sale-count={n}
                   onclick={() => chooseSaleCount(n)}
                 >
+                  <span class="sale-count-title">Sell {n}</span>
                   <span class="sale-count-icons">{#each Array(n) as _}<img src={componentImage(pendingSale.kind)} alt="" />{/each}</span>
                   <b>+{salePoints(pendingSale.kind, n)}</b>
                 </button>
@@ -3054,6 +3055,7 @@
   .sale-counts { display: flex; flex-wrap: wrap; gap: 0.3rem; }
   .sale-count { display: grid; justify-items: center; gap: 0.1rem; min-height: 44px; padding: 0.25rem 0.45rem; border: 2px solid #b7aa8d; border-radius: 0.6rem; background: #fffaf0; color: #183a37; font: inherit; font-size: 0.8em; font-weight: 800; }
   .sale-count.chosen { border-color: #1d7a4a; background: #eafff0; box-shadow: 0 0 0 3px rgb(29 122 74 / 22%); }
+  .sale-count-title { font-size: 0.85em; letter-spacing: 0.04em; text-transform: uppercase; color: #a6442d; }
   .sale-count-icons { display: flex; }
   .sale-count-icons img { width: 1.4em; height: 1.4em; border-radius: 0.2em; object-fit: cover; margin-left: -0.5em; box-shadow: 0 0 0 1px #fffaf0; }
   .sale-count-icons img:first-child { margin-left: 0; }
