@@ -449,6 +449,8 @@
   onMount(async () => {
     try {
       marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') === 'on';
+      musicMuted = localStorage.getItem('jaipur:tabletop:music') === 'off';
+      startMusic(); // plays now where autoplay is allowed, else on the first gesture
       const savedHands = localStorage.getItem('jaipur:tabletop:show-hands');
       if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
       const pageParams = new URLSearchParams(location.search);
@@ -683,6 +685,23 @@
   // A player seated from the table itself ("Play without phone") has no phone to see their cards on.
   const hasPhonelessPlayer = $derived(lobby.players.some((p) => p.uid.startsWith('table-')));
   const showHands = $derived(showHandsChoice === 'auto' ? Boolean(lobby.bot) || hasPhonelessPlayer : showHandsChoice === 'on');
+  // Background music: "Marketplace Melody" (static/audio, see ASSETS.md)
+  // loops at low volume. Browsers only start audio after a gesture, so the
+  // first tap or key on the table starts it; the mute choice is remembered.
+  let music = $state<HTMLAudioElement>();
+  let musicMuted = $state(false);
+  let musicPlaying = $state(false);
+  function startMusic() {
+    if (!music || musicMuted || musicPlaying) return;
+    music.volume = 0.35;
+    void music.play().then(() => (musicPlaying = true)).catch(() => {});
+  }
+  function toggleMusic() {
+    musicMuted = !musicMuted;
+    localStorage.setItem('jaipur:tabletop:music', musicMuted ? 'off' : 'on');
+    if (musicMuted) { music?.pause(); musicPlaying = false; } else startMusic();
+  }
+
   function toggleShowHands() {
     showHandsChoice = showHands ? 'off' : 'on';
     localStorage.setItem('jaipur:tabletop:show-hands', showHandsChoice);
@@ -2154,6 +2173,28 @@
   </section>
 {/snippet}
 
+<svelte:window onpointerdown={startMusic} onkeydown={startMusic} />
+
+{#snippet musicButton(seat: Seat)}
+  <button
+    type="button"
+    class="orientation-toggle music-toggle"
+    class:for-top={seat === 1}
+    class:muted={musicMuted}
+    data-music={musicMuted ? 'off' : 'on'}
+    aria-pressed={!musicMuted}
+    aria-label={musicMuted ? 'Unmute background music' : 'Mute background music'}
+    onclick={toggleMusic}
+  ><svg viewBox="0 0 48 48" width="1em" height="1em" aria-hidden="true">
+      <path fill="currentColor" d="M8 18h8l10-8v28l-10-8H8z"/>
+      {#if musicMuted}
+        <path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M32 18l10 12M42 18L32 30"/>
+      {:else}
+        <path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M31 17a9 9 0 010 14M36 12a16 16 0 010 24"/>
+      {/if}
+    </svg></button>
+{/snippet}
+
 {#snippet optionsGear(seat: Seat)}
   <button
     type="button"
@@ -2445,7 +2486,9 @@
     <!-- Options (gear) in each player's upper-left corner of the market. -->
     {#each [2, 1] as const as gearSeat}
       {@render optionsGear(gearSeat)}
+      {@render musicButton(gearSeat)}
     {/each}
+    <audio bind:this={music} src={`${base}/audio/marketplace-melody.mp3`} loop preload="auto"></audio>
     <!-- The prompt's "?" faces one player; the other gets one in their own
          lower-right corner of the market, so both can open the guide. -->
     {#if lobby.round?.status === 'active'}
@@ -2725,6 +2768,17 @@
           onclick={toggleShowHands}
         >Show hands {showHands ? 'on' : 'off'}</button>
         <small>Hand cards lie face up on the table. On by default against a computer opponent{showHandsChoice === 'auto' ? ' (as now)' : ''}; off with two players, whose phones show them their cards. Hold a card to peek either way.</small>
+      </div>
+      <div class="facing-option">
+        <button
+          type="button"
+          class="orientation-toggle"
+          aria-pressed={!musicMuted}
+          aria-label="Background music"
+          data-music={musicMuted ? 'off' : 'on'}
+          onclick={toggleMusic}
+        >Music {musicMuted ? 'off' : 'on'}</button>
+        <small>"Marketplace Melody" loops quietly in the background. The speaker in each player's corner mutes it too; the choice is remembered.</small>
       </div>
       <div class="scale-row">
         <span>Screen diagonal</span>
@@ -3124,6 +3178,11 @@
   /* Each player's gear sits at their own edge of the market, on their left. */
   .options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); }
   .options-gear.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: var(--market-edge-inset); transform: rotate(180deg); }
+  /* The speaker sits beside each player's gear; a muted one dims. */
+  .music-toggle { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: calc(var(--market-edge-inset) + 3.6em); font-size: 1.6em; line-height: 1; }
+  .music-toggle svg { display: block; }
+  .music-toggle.muted { opacity: 0.55; }
+  .music-toggle.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: calc(var(--market-edge-inset) + 3.6em); transform: rotate(180deg); }
   .scale-panel .table-id { letter-spacing: 0.14em; }
   .scale-panel .facing-option { display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; }
   .scale-panel .facing-option small { flex: 1; line-height: 1.25; color: #5d5240; }

@@ -30,3 +30,11 @@ The generated 1536-pixel PNG sources were reviewed and converted to
 512-by-512 WebP assets at quality 84 for the web client. Accessible names,
 values, state, and rules remain HTML text; artwork is never the sole carrier of
 meaning.
+
+# Background music
+
+`static/audio/marketplace-melody.mp3` ("Marketplace Melody remix v1 ext
+v1.1") was authored by the project owner with Udio on 2026-09-16 and is
+used as the tabletop's looping background music (muted with the speaker
+button in each player's corner or in Table options; the choice is
+remembered in the browser).
