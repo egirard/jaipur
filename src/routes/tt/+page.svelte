@@ -450,6 +450,8 @@
     try {
       marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') === 'on';
       musicMuted = localStorage.getItem('jaipur:tabletop:music') === 'off';
+      const savedVolume = Number(localStorage.getItem('jaipur:tabletop:music-volume'));
+      if (Number.isFinite(savedVolume) && savedVolume > 0 && savedVolume <= 1) musicVolume = savedVolume;
       startMusic(); // plays now where autoplay is allowed, else on the first gesture
       const savedHands = localStorage.getItem('jaipur:tabletop:show-hands');
       if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
@@ -691,15 +693,49 @@
   let music = $state<HTMLAudioElement>();
   let musicMuted = $state(false);
   let musicPlaying = $state(false);
+  let musicVolume = $state(0.35);
+  // Music pauses while the table's window is in the background or unfocused
+  // and resumes when it comes back (the mute choice is untouched).
+  let musicSuspended = $state(false);
+  // Holding the speaker slides a volume control out to the player's right.
+  let volumeOpenFor = $state<Seat | null>(null);
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let holdOpened = false;
   function startMusic() {
-    if (!music || musicMuted || musicPlaying) return;
-    music.volume = 0.35;
+    if (!music || musicMuted || musicSuspended || musicPlaying) return;
+    music.volume = musicVolume;
     void music.play().then(() => (musicPlaying = true)).catch(() => {});
   }
+  function pauseMusic() {
+    music?.pause();
+    musicPlaying = false;
+  }
   function toggleMusic() {
+    if (holdOpened) { holdOpened = false; return; } // the hold opened the slider; not a mute
     musicMuted = !musicMuted;
     localStorage.setItem('jaipur:tabletop:music', musicMuted ? 'off' : 'on');
-    if (musicMuted) { music?.pause(); musicPlaying = false; } else startMusic();
+    if (musicMuted) pauseMusic(); else startMusic();
+  }
+  function setMusicVolume(value: number) {
+    musicVolume = Math.min(1, Math.max(0, value));
+    localStorage.setItem('jaipur:tabletop:music-volume', musicVolume.toFixed(2));
+    if (music) music.volume = musicVolume;
+    if (musicMuted && musicVolume > 0) { musicMuted = false; localStorage.setItem('jaipur:tabletop:music', 'on'); startMusic(); }
+  }
+  function holdStart(seat: Seat) {
+    clearTimeout(holdTimer);
+    holdOpened = false;
+    holdTimer = setTimeout(() => { holdOpened = true; volumeOpenFor = seat; }, 350);
+  }
+  function holdEnd() { clearTimeout(holdTimer); }
+  function closeVolume(event: PointerEvent) {
+    if (volumeOpenFor !== null && !(event.target as Element | null)?.closest?.('.music-control')) volumeOpenFor = null;
+  }
+  function onWindowFocusChange() {
+    const away = document.hidden || !document.hasFocus();
+    if (away === musicSuspended) return;
+    musicSuspended = away;
+    if (away) pauseMusic(); else startMusic();
   }
 
   function toggleShowHands() {
@@ -2173,17 +2209,28 @@
   </section>
 {/snippet}
 
-<svelte:window onpointerdown={startMusic} onkeydown={startMusic} />
+<svelte:window
+  onpointerdown={(e) => { startMusic(); closeVolume(e); }}
+  onkeydown={startMusic}
+  onfocus={onWindowFocusChange}
+  onblur={onWindowFocusChange}
+/>
+<svelte:document onvisibilitychange={onWindowFocusChange} />
 
 {#snippet musicButton(seat: Seat)}
+  <span class="music-control" class:for-top={seat === 1} class:open={volumeOpenFor === seat} data-music-control={seat}>
   <button
     type="button"
     class="orientation-toggle music-toggle"
-    class:for-top={seat === 1}
     class:muted={musicMuted}
     data-music={musicMuted ? 'off' : 'on'}
     aria-pressed={!musicMuted}
-    aria-label={musicMuted ? 'Unmute background music' : 'Mute background music'}
+    aria-label={musicMuted ? 'Unmute background music (hold for volume)' : 'Mute background music (hold for volume)'}
+    onpointerdown={() => holdStart(seat)}
+    onpointerup={holdEnd}
+    onpointercancel={holdEnd}
+    onpointerleave={holdEnd}
+    oncontextmenu={(e) => e.preventDefault()}
     onclick={toggleMusic}
   ><svg viewBox="0 0 48 48" width="1em" height="1em" aria-hidden="true">
       <path fill="currentColor" d="M8 18h8l10-8v28l-10-8H8z"/>
@@ -2193,6 +2240,19 @@
         <path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M31 17a9 9 0 010 14M36 12a16 16 0 010 24"/>
       {/if}
     </svg></button>
+  <input
+    type="range"
+    class="music-volume"
+    min="0"
+    max="1"
+    step="0.05"
+    value={musicVolume}
+    tabindex={volumeOpenFor === seat ? 0 : -1}
+    aria-label="Music volume"
+    data-music-volume={seat}
+    oninput={(e) => setMusicVolume(Number((e.currentTarget as HTMLInputElement).value))}
+  />
+  </span>
 {/snippet}
 
 {#snippet optionsGear(seat: Seat)}
@@ -2492,7 +2552,7 @@
     <!-- The prompt's "?" faces one player; the other gets one in their own
          lower-right corner of the market, so both can open the guide. -->
     {#if lobby.round?.status === 'active'}
-      {#each ([2, 1] as const).filter((s) => s !== marketFacingSeat) as helpSeat}
+      {#each ([2, 1] as const).filter((s) => s !== marketFacingSeat && lobby.players.find((p) => p.seat === s)?.uid !== lobby.bot?.uid) as helpSeat}
         <button
           type="button"
           class="help-icon help-corner"
@@ -3179,10 +3239,15 @@
   .options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); }
   .options-gear.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: var(--market-edge-inset); transform: rotate(180deg); }
   /* The speaker sits beside each player's gear; a muted one dims. */
-  .music-toggle { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: calc(var(--market-edge-inset) + 3.6em); font-size: 1.6em; line-height: 1; }
+  .music-control { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: calc(var(--market-edge-inset) + 3.6em); display: flex; align-items: center; gap: 0.4rem; }
+  .music-control.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: calc(var(--market-edge-inset) + 3.6em); transform: rotate(180deg); }
+  .music-toggle { font-size: 1.6em; line-height: 1; touch-action: none; -webkit-user-select: none; user-select: none; }
   .music-toggle svg { display: block; }
   .music-toggle.muted { opacity: 0.55; }
-  .music-toggle.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: calc(var(--market-edge-inset) + 3.6em); transform: rotate(180deg); }
+  /* Held speaker: the volume slider stretches out to the player's right (the
+     whole control is rotated for the top player, so "right" follows them). */
+  .music-volume { width: 0; height: 2.2rem; margin: 0; padding: 0; opacity: 0; overflow: hidden; accent-color: #a6442d; transition: width 220ms ease, opacity 180ms; }
+  .music-control.open .music-volume { width: clamp(8rem, 18vmin, 14rem); opacity: 1; }
   .scale-panel .table-id { letter-spacing: 0.14em; }
   .scale-panel .facing-option { display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; }
   .scale-panel .facing-option small { flex: 1; line-height: 1.25; color: #5d5240; }
