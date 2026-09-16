@@ -2530,6 +2530,7 @@
           {@const card = round.market[marketIndex]}
           {@const activeUid = round.activeUid}
           {@const loadedReturnId = exchangeLoads(activeUid)[card.id]}
+          {@const fake = tutorialFakes[marketIndex]}
           {@const exchangeReady = Boolean(loadedReturnId) && !pendingDraw &&
             isLegalExchange(round, activeUid, Object.keys(exchangeLoads(activeUid)), Object.values(exchangeLoads(activeUid)))}
           <div
@@ -2579,7 +2580,6 @@
               <PieceArt kind={card.kind} label={label(card.kind)} detail={card.id} />
             </button>
             {/if}
-            {@const fake = tutorialFakes[marketIndex]}
             {#if card.kind !== 'camel'}
               <button
                 type="button"
