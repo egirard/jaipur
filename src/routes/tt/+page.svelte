@@ -321,7 +321,9 @@
     const land = (uid: string, zone: ScoreZone, token: Token, at: number) =>
       setTimeout(() => {
         if (!live() || !scoring) return;
+        // The pour as a zone's first token lands, a clink for every token.
         if (!(scoring.landed[uid]?.[zone] ?? []).length) playSfx('coins-landing');
+        playSfx('coin-clink');
         const zones = scoring.landed[uid] ?? (scoring.landed[uid] = { goods: [], bonus: [], camel: [] });
         zones[zone] = [...zones[zone], token];
         scoring.totals[uid] = (scoring.totals[uid] ?? 0) + token.value;
@@ -716,7 +718,7 @@
   // Sound effects (see $lib/sfx) follow the mute button, the volume slider
   // and the focus state, so one control governs all table audio.
   $effect(() => { setSfxEnabled(!musicMuted && !musicSuspended); });
-  $effect(() => { setSfxVolume(Math.min(1, musicVolume * 2)); }); // effects sit above the quiet music bed
+  $effect(() => { setSfxVolume(musicVolume / 0.35); }); // 1 at the slider's default; the clips carry their own gain
   function toggleMusic() {
     if (holdOpened) { holdOpened = false; return; } // the hold opened the slider; not a mute
     musicMuted = !musicMuted;
@@ -2045,12 +2047,15 @@
           delay: firstTokenDelay + index * 80 * SALE_SPEED,
           speed: SALE_SPEED
         }));
-        // Coins as the first goods token lands (flights take 1000 × speed).
+        // A short clink as each token lands (flights take 1000 × speed), on
+        // top of the coins pour as the first one arrives — overlapping clatter.
         if (goodsAwards.length) playSfx('coins-landing', firstTokenDelay + 1000 * SALE_SPEED);
+        goodsAwards.forEach((_, index) => playSfx('coin-clink', firstTokenDelay + (index * 80 + 1000) * SALE_SPEED));
         // The bonus token is its own beat: it flies once the "cards sold"
         // message has played, and gets a message of its own.
         const soldMessageAt = 900 * SALE_SPEED + firstTokenDelay + Math.max(0, goodsAwards.length - 1) * 80 * SALE_SPEED;
         if (bonusAwards.length) playSfx('coins-landing', soldMessageAt + 2400 * SALE_SPEED);
+        bonusAwards.forEach((_, index) => playSfx('coin-clink', soldMessageAt + (2400 + index * 80) * SALE_SPEED));
         bonusAwards.forEach((token, index) => tokenMovements.push({
           source: box(`${tokenView} [data-bonus-size="${token.kind.replace('bonus-', '')}"]`),
           destinationSelector: `[data-table-tokens="${CSS.escape(uid)}"]`,
