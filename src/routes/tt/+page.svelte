@@ -803,9 +803,10 @@
       const ok = n.goods ? slot.kind !== 'camel' : slot.kind === 'camel';
       if (!ok) { slot.kind = n.kind; items.push({ key: `card-${n.i}`, kind: 'card', ...centre(slot.card), card: n.kind, delay: 0 }); }
     }
+    const deckArea = document.querySelector('.deck')?.getBoundingClientRect();
     const deck = document.querySelector('.deck-card')?.getBoundingClientRect();
     if (deck) {
-      const c = centre(deck);
+      const c = { ...centre(deckArea ?? deck), w: deck.width, h: deck.height }; // centred on the whole deck area, sized to the card
       const d = Math.max(c.w, c.h) * 1.15;
       items.push({ key: 'deck', kind: 'circle', x: c.x, y: c.y, w: d, h: d, delay: next(),
         text: `${round.deck.length} card${round.deck.length === 1 ? '' : 's'} remain in the deck;round ends when the deck or three trade goods are exhausted` });
@@ -817,7 +818,7 @@
       return { x: c.x - flip * c.w / 4, y: c.y - flip * c.h / 4, w: c.w * 0.62, h: c.h };
     };
     if (slots[0]) items.push({ key: 'camels', kind: 'tap', ...quadrant(slots[0].card), side: 'below', delay: next(), text: 'Pick up all camels into your herd' });
-    if (slots[2]) items.push({ key: 'take', kind: 'tap', ...quadrant(slots[2].card), side: 'below', delay: next(), text: 'Take this card from the market (if you have space in your hand for it)' });
+    if (slots[2]) items.push({ key: 'take', kind: 'tap', ...quadrant(slots[2].card), side: 'below', delay: next(), text: 'Take this card from the market (if you have space in your hand)' });
     if (slots[3]) {
       const r = slots[3].target ?? slots[3].card;
       const c = centre(r);
@@ -834,8 +835,8 @@
     const herd = document.querySelector(`[data-seat="${seat}"] [data-table-herd]`)?.getBoundingClientRect();
     if (herd) {
       const c = centre(herd);
-      items.push({ key: 'herd', kind: 'pill', x: c.x + flip * (c.w / 2 - 6), y: c.y, w: 0, h: 0, side: 'right', delay: next(),
-        text: 'You can have any number of camels;Player with the most camels wins +5 at the end of the round' });
+      items.push({ key: 'herd', kind: 'pill', x: c.x + flip * (c.w / 2 - 28), y: c.y, w: 0, h: 0, side: 'right', delay: next(),
+        text: 'You can have any number of camels;Player with the most camels wins +5' });
     }
     tutorial = { seat, items, fading: false };
   }
@@ -3204,10 +3205,10 @@
   .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 700ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 700ms) infinite; }
   .tutorial.fading .tut-circle, .tutorial.fading .tut-tap, .tutorial.fading .tut-pill, .tutorial.fading .tut-card { animation: tut-shrink 550ms ease-in var(--delay, 0ms) both; }
   /* Text sits in the blue: a translucent blue body (the piece shows through) with opaque white text. */
-  .tut-text { display: block; padding: 0.35rem 0.55rem; border-radius: 0.7rem; background: rgb(43 108 212 / 82%); color: #fff; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.25; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
+  .tut-text { display: block; padding: 0.35rem 0.55rem; border-radius: 0.7rem; background: rgb(43 108 212 / 62%); color: #fff; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.25; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
   /* The deck circle carries its text directly. */
-  .tut-circle { display: grid; place-items: center; padding: 8%; border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(43 108 212 / 80%); color: #fff; text-align: center; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
-  .tut-circle span { width: 120%; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.25; }
+  .tut-circle { border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(43 108 212 / 62%); color: #fff; text-align: center; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
+  .tut-circle span { position: absolute; left: 50%; top: 50%; width: 120%; translate: -50% -50%; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.25; }
   /* The tap ring: half again the "?" icon, a bright white finger; its text hangs below and to the right. */
   .tut-tap { width: 0; height: 0; }
   .tut-ring { position: absolute; left: 50%; top: 50%; display: grid; width: 3.45rem; height: 3.45rem; place-items: center; border: 2px solid #fffaf0; border-radius: 50%; background: rgb(43 108 212 / 85%); translate: -50% -50%; box-shadow: 0 0 0 0.4rem rgb(43 108 212 / 25%), 0 0.2rem 0.6rem rgb(10 32 30 / 35%); }
