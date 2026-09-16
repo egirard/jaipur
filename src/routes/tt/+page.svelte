@@ -769,7 +769,7 @@
     text?: string;
     card?: CardKind;
     /** Where the text sits relative to the tap ring, in the player's frame. */
-    side?: 'below' | 'above' | 'left';
+    side?: 'below' | 'above' | 'left' | 'right';
     delay: number;
   };
   let tutorial = $state<{ seat: Seat; items: TutorialItem[]; fading: boolean } | null>(null);
@@ -800,7 +800,7 @@
     const deck = document.querySelector('.deck-card')?.getBoundingClientRect();
     if (deck) {
       const c = centre(deck);
-      const d = Math.max(c.w, c.h) * 1.75;
+      const d = Math.max(c.w, c.h) * 1.3; // the text wraps wide inside, so the circle stays close to the deck
       items.push({ key: 'deck', kind: 'circle', x: c.x, y: c.y, w: d, h: d, delay: next(),
         text: `${round.deck.length} card${round.deck.length === 1 ? '' : 's'} remain in the deck; the round ends when the deck or three trade goods are exhausted` });
     }
@@ -820,12 +820,12 @@
     const hand = document.querySelector(`[data-seat="${seat}"] [data-table-hand]`)?.getBoundingClientRect();
     if (hand) {
       const c = centre(hand);
-      items.push({ key: 'hand', kind: 'pill', x: c.x, y: c.y - flip * (c.h / 2 + 8), w: 0, h: 0, delay: next(), text: 'You can hold up to 7 trade goods in your hand' });
+      items.push({ key: 'hand', kind: 'pill', x: c.x, y: c.y - flip * (c.h / 2 + 2), w: 0, h: 0, delay: next(), text: 'You can hold up to 7 trade goods in your hand' });
     }
     const herd = document.querySelector(`[data-seat="${seat}"] [data-table-herd]`)?.getBoundingClientRect();
     if (herd) {
       const c = centre(herd);
-      items.push({ key: 'herd', kind: 'pill', x: c.x - flip * (c.w / 2 + 12), y: c.y, w: 0, h: 0, side: 'left', delay: next(),
+      items.push({ key: 'herd', kind: 'pill', x: c.x + flip * (c.w / 2 + 6), y: c.y, w: 0, h: 0, side: 'right', delay: next(),
         text: 'You can have any number of camels; the player with the most camels wins +5 at the end of the round' });
     }
     tutorial = { seat, items, fading: false };
@@ -2111,6 +2111,10 @@
     </span>{#if physical && !physical.fullscreen}<small class="scale-note">win</small>{/if}</button>
 {/snippet}
 
+{#snippet tutLines(text: string | undefined)}
+  {#each (text ?? '').split(';') as line, i}{#if i > 0}<br />{/if}{line.trim()}{/each}
+{/snippet}
+
 {#snippet endActions()}
   {#if lobby.winnerUid}
     <button type="button" class="end-primary" disabled={busy || Boolean(demo)} onclick={rematch}>Rematch</button>
@@ -2757,14 +2761,14 @@
         {#if item.kind === 'card'}
           <img class="tut-card" src={componentImage(item.card ?? 'camel')} alt="" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px`} />
         {:else if item.kind === 'circle'}
-          <div class="tut-circle" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px;--delay:${item.delay}ms`}><span>{item.text}</span></div>
+          <div class="tut-circle" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px;--delay:${item.delay}ms`}><span class="tut-text">{@render tutLines(item.text)}</span></div>
         {:else if item.kind === 'tap'}
           <div class={`tut-tap ${item.side ?? 'below'}`} style={`left:${item.x}px;top:${item.y}px;--size:${Math.min(item.w, item.h)}px;--delay:${item.delay}ms`}>
             <span class="tut-ring" aria-hidden="true"><span class="tut-finger">☝</span></span>
-            <span class="tut-text">{item.text}</span>
+            <span class="tut-text">{@render tutLines(item.text)}</span>
           </div>
         {:else}
-          <div class={`tut-pill ${item.side ?? 'above'}`} style={`left:${item.x}px;top:${item.y}px;--delay:${item.delay}ms`}><span>{item.text}</span></div>
+          <div class={`tut-pill ${item.side ?? 'above'}`} style={`left:${item.x}px;top:${item.y}px;--delay:${item.delay}ms`}><span class="tut-text">{@render tutLines(item.text)}</span></div>
         {/if}
       {/each}
     </div>
@@ -3188,18 +3192,23 @@
   .tutorial.for-top .tut-circle, .tutorial.for-top .tut-tap, .tutorial.for-top .tut-pill { rotate: 180deg; }
   .tut-card { border: 2px solid #315f58; border-radius: 0.55rem; object-fit: cover; box-shadow: 0 0.4rem 1rem rgb(10 32 30 / 35%); }
   .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 700ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 700ms) infinite; }
-  .tut-circle { display: grid; place-items: center; padding: 10%; border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(255 250 240 / 72%); text-align: center; }
-  .tut-circle span, .tut-text, .tut-pill span { color: #183a37; font-size: clamp(0.8rem, 1.7vmin, 1.4rem); font-weight: 800; line-height: 1.25; text-shadow: 0 0 6px #fffaf0, 0 0 6px #fffaf0, 0 0 2px #fffaf0; }
-  .tut-tap { display: grid; justify-items: center; gap: 0.35rem; width: 0; height: 0; place-items: center; }
-  .tut-ring { position: absolute; left: 50%; top: 50%; display: grid; width: var(--size); height: var(--size); place-items: center; border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(43 108 212 / 22%); translate: -50% -50%; box-shadow: 0 0 0 0.5rem rgb(43 108 212 / 18%); }
-  .tut-finger { font-size: calc(var(--size) * 0.55); line-height: 1; filter: drop-shadow(0 2px 3px rgb(0 0 0 / 40%)); }
-  .tut-text { position: absolute; left: 50%; width: clamp(11rem, 24vmin, 20rem); padding: 0.45rem 0.7rem; border: 2px solid #2b6cd4; border-radius: 0.8rem; background: rgb(255 250 240 / 82%); text-align: center; translate: -50% 0; }
-  .tut-tap.below .tut-text { top: calc(var(--size) / 2 + 0.5rem); }
-  .tut-tap.above .tut-text { bottom: calc(var(--size) / 2 + 0.5rem); }
-  .tut-tap.left .tut-text { top: 50%; left: auto; right: calc(var(--size) / 2 + 0.6rem); translate: 0 -50%; }
-  .tut-pill { display: grid; width: clamp(13rem, 30vmin, 24rem); padding: 0.5rem 0.9rem; border: 2px solid #2b6cd4; border-radius: 99rem; background: rgb(255 250 240 / 82%); text-align: center; }
-  .tut-pill.left { translate: -100% -50%; }
-  .tutorial.for-top .tut-pill.left { translate: 0 -50%; }
+  /* Text sits in the blue: a translucent blue body (the piece shows through) with opaque white text. */
+  .tut-text { display: block; padding: 0.4rem 0.65rem; border-radius: 0.7rem; background: rgb(43 108 212 / 82%); color: #fff; font-size: clamp(0.75rem, 1.5vmin, 1.2rem); font-weight: 700; line-height: 1.25; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
+  .tut-circle { display: grid; place-items: center; padding: 6%; border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(43 108 212 / 30%); }
+  .tut-circle .tut-text { width: 130%; text-align: center; }
+  /* The tap ring matches the "?" icon; its text hangs below and to the right of it. */
+  .tut-tap { width: 0; height: 0; }
+  .tut-ring { position: absolute; left: 50%; top: 50%; display: grid; width: 2.3rem; height: 2.3rem; place-items: center; border: 2px solid #fffaf0; border-radius: 50%; background: rgb(43 108 212 / 85%); translate: -50% -50%; box-shadow: 0 0 0 0.35rem rgb(43 108 212 / 25%), 0 0.2rem 0.6rem rgb(10 32 30 / 35%); }
+  .tut-finger { font-size: 1.25rem; line-height: 1; filter: drop-shadow(0 1px 2px rgb(0 0 0 / 40%)); }
+  .tut-tap .tut-text { position: absolute; left: 1rem; top: 1rem; width: max-content; max-width: clamp(11rem, 26vmin, 22rem); }
+  .tut-tap.above .tut-text { top: auto; bottom: 1rem; }
+  .tut-tap.left .tut-text { left: auto; right: 1rem; }
+  .tut-pill { display: grid; width: max-content; max-width: clamp(12rem, 30vmin, 24rem); }
+  .tut-pill .tut-text { border-radius: 99rem; text-align: center; }
+  .tut-pill.above { translate: -50% -100%; }
+  .tutorial.for-top .tut-pill.above { translate: -50% 0; }
+  .tut-pill.right { translate: 0 -50%; }
+  .tutorial.for-top .tut-pill.right { translate: -100% -50%; }
   @keyframes tut-grow { from { scale: 0; opacity: 0; } to { scale: 1; opacity: 1; } }
   @keyframes tut-glow { 0%, 100% { filter: drop-shadow(0 0 0.3rem rgb(43 108 212 / 50%)); } 50% { filter: drop-shadow(0 0 1.2rem rgb(43 108 212 / 90%)); } }
   @media (prefers-reduced-motion: reduce) { .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 1ms both; } }
