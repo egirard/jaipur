@@ -854,6 +854,12 @@
       items.push({ key: 'overview', kind: 'pill', x: c.x + (seat === 1 ? innerWidth * 0.22 : 0), y: c.y - flip * (c.h / 2 + 6), w: 0, h: 0, side: 'above', delay: next(), title: true,
         text: 'Game overview;Players alternate turns, taking one of four actions [hand] each turn;Round ends when deck or three trade goods are exhausted;Win by having more points (goods traded, bonus tokens, camel bonus);Game ends when a player wins two rounds' });
     }
+    // Presentation order (stand-in cards appear at once, with the first callout).
+    const order = ['overview', 'take', 'camels', 'trade', 'sell', 'hand', 'herd', 'deck'];
+    for (const item of items) {
+      const at = order.indexOf(item.key);
+      item.delay = at < 0 ? 0 : at * 875;
+    }
     tutorial = { seat, items, fading: false };
   }
   function dismissTutorial() {
@@ -3248,7 +3254,7 @@
   .tutorial > * { position: absolute; translate: -50% -50%; }
   .tutorial.for-top .tut-circle, .tutorial.for-top .tut-tap, .tutorial.for-top .tut-pill { rotate: 180deg; }
   .tut-card { border: 2px solid #315f58; border-radius: 0.55rem; object-fit: cover; box-shadow: 0 0.4rem 1rem rgb(10 32 30 / 35%); }
-  .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 1000ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 1000ms) infinite; }
+  .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 1250ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 1250ms) infinite; }
   /* Text sits in the blue: a translucent blue body (the piece shows through) with opaque white text. */
   .tut-text { display: block; padding: 0.35rem 0.55rem; border-radius: 0.7rem; background: rgb(43 108 212 / 62%); color: #fff; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.5; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
   /* The deck circle carries its text directly. */
