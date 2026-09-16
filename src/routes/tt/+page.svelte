@@ -2538,6 +2538,8 @@
           <span>
             <strong>{activeName}</strong>: take a card from the market; trade 2+ cards with the market; take all camels; or sell cards.
           </span>
+        {/if}
+        <!-- Always present, whatever the prompt is saying: the "?" keeps its place. -->
           <button
             type="button"
             class="help-icon"
@@ -2547,7 +2549,6 @@
             data-help-icon
             onclick={(e) => { e.stopPropagation(); if (tutorial) dismissTutorial(); else void openTutorial(marketFacingSeat); }}
           >?</button>
-        {/if}
       </div>
       <div class="market-stage">
         <span class="deck" aria-label={`Deck, ${lobby.round.deck.length} cards`}>
@@ -3075,6 +3076,8 @@
   .table-hand-card.revealed .peek-card { transform: rotateY(180deg); }
   .table-hand-card.revealed { z-index: 2; box-shadow: 0 0 0 3px #ffd27a, 0 0.5rem 1rem rgb(10 32 30 / 35%); }
   .herd-pile { display: block; padding: 0; border: none; background: none; cursor: pointer; }
+  /* Tapping anywhere near the herd selects a camel: the target reaches well beyond the drawn pile. */
+  .herd-pile::after { content: ''; position: absolute; inset: -40% -30% -55% -30%; }
   .herd-badge { position: absolute; right: -0.2rem; bottom: -0.4rem; z-index: 3; min-width: 1.6rem; padding: 0.15rem 0.4rem; border-radius: 99rem; background: #66ffcc; color: #0d2622; font-weight: 800; font-size: 0.9rem; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
   .table-hand-card.selected, .table-herd-card.selected { transform: translateY(-14%); box-shadow: 0 0 0 3px #66ffcc, 0 0.5rem 1rem rgb(10 32 30 / 35%); z-index: 1; }
   .table-hand-card.loaded, .table-herd-card.loaded { opacity: 0.45; }
