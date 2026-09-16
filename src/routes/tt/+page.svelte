@@ -741,9 +741,100 @@
     }
   }
   // The game log: the latest move (the other player's, on your turn) is
-  // always visible in each corner; + opens the full, scrollable list.
+  // always visible in each corner; + opens the full, scrollable list, oldest
+  // first, opened (and kept) at its newest entries.
+  function scrollToEnd(node: HTMLElement) {
+    const toEnd = () => { node.scrollTop = node.scrollHeight; };
+    toEnd();
+    const observer = new MutationObserver(() => {
+      // Follow new entries unless the reader has scrolled back up.
+      if (node.scrollHeight - node.scrollTop - node.clientHeight < 80) toEnd();
+    });
+    observer.observe(node, { childList: true, subtree: true });
+    return { destroy: () => observer.disconnect() };
+  }
   let logOpen = $state<{ top: boolean; bottom: boolean }>({ top: false, bottom: false });
   const isMove = (a: GameActivity) => a.type.startsWith('cards/') || a.type.startsWith('round/') || a.type === 'game/rematched';
+
+  // ---- Table guide (the "?" on the prompt) ---------------------------------
+  // Callouts grow and glow into place over the real pieces, facing the player
+  // who asked: a translucent body so the piece beneath still shows, opaque
+  // text. Pieces the market happens to lack (a camel, a good) are drawn over
+  // the market for the duration. A tap anywhere fades the whole guide.
+  type TutorialItem = {
+    key: string;
+    kind: 'circle' | 'tap' | 'pill' | 'card';
+    x: number; y: number; // centre, viewport px
+    w: number; h: number;
+    text?: string;
+    card?: CardKind;
+    /** Where the text sits relative to the tap ring, in the player's frame. */
+    side?: 'below' | 'above' | 'left';
+    delay: number;
+  };
+  let tutorial = $state<{ seat: Seat; items: TutorialItem[]; fading: boolean } | null>(null);
+  const centre = (r: DOMRect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height });
+
+  async function openTutorial(seat: Seat) {
+    if (tutorial || !lobby.round) return;
+    const round = lobby.round;
+    const flip = seat === 1 ? -1 : 1; // +1: the player's "down" is the screen's down
+    const items: TutorialItem[] = [];
+    let delay = 0;
+    const next = () => { const d = delay; delay += 380; return d; };
+    // Market slots, with stand-in cards where the real market lacks a kind.
+    const slots = [...document.querySelectorAll<HTMLElement>('[data-market-slot-index]')].map((slot, i) => ({
+      i,
+      kind: (round.market[i]?.kind ?? 'gold') as CardKind,
+      card: slot.querySelector('.market-card')?.getBoundingClientRect() ?? slot.getBoundingClientRect(),
+      target: slot.querySelector('.table-exchange-target')?.getBoundingClientRect() ?? null
+    }));
+    const fakes: Array<{ i: number; kind: CardKind }> = [];
+    if (slots.length) {
+      if (!slots.some((s) => s.kind === 'camel')) fakes.push({ i: 0, kind: 'camel' });
+      const goods = slots.filter((s) => s.kind !== 'camel' && !fakes.some((f) => f.i === s.i));
+      if (goods.length === 0) { fakes.push({ i: slots.length - 2, kind: 'cloth' }, { i: slots.length - 1, kind: 'spice' }); }
+      else if (goods.length === 1 && fakes.length === 0) fakes.push({ i: goods[0].i === slots.length - 1 ? slots.length - 2 : goods[0].i + 1, kind: 'cloth' });
+      for (const f of fakes) { slots[f.i].kind = f.kind; items.push({ key: `card-${f.i}`, kind: 'card', ...centre(slots[f.i].card), card: f.kind, delay: 0 }); }
+    }
+    const deck = document.querySelector('.deck-card')?.getBoundingClientRect();
+    if (deck) {
+      const c = centre(deck);
+      const d = Math.max(c.w, c.h) * 1.75;
+      items.push({ key: 'deck', kind: 'circle', x: c.x, y: c.y, w: d, h: d, delay: next(),
+        text: `${round.deck.length} card${round.deck.length === 1 ? '' : 's'} remain in the deck; the round ends when the deck or three trade goods are exhausted` });
+    }
+    const camel = slots.find((s) => s.kind === 'camel');
+    if (camel) items.push({ key: 'camels', kind: 'tap', ...centre(camel.card), side: 'below', delay: next(), text: 'Pick up all camels into your herd' });
+    const goodSlots = slots.filter((s) => s.kind !== 'camel');
+    const take = goodSlots.at(-1);
+    if (take) items.push({ key: 'take', kind: 'tap', ...centre(take.card), side: 'below', delay: next(), text: 'Take this card from the market (if you have space in your hand for it)' });
+    const trade = goodSlots[0];
+    if (trade) {
+      const r = trade.target ?? trade.card;
+      items.push({ key: 'trade', kind: 'tap', ...centre(r), side: 'above', delay: next(), text: 'Trade two or more cards (camels or trade goods) from your hand with trade cards from the market' });
+    }
+    const stack = document.querySelector(`[data-token-view-seat="${seat}"] [data-token-kind="gold"]`)?.getBoundingClientRect()
+      ?? document.querySelector(`[data-token-view-seat="${seat}"] [data-token-kind]`)?.getBoundingClientRect();
+    if (stack) items.push({ key: 'sell', kind: 'tap', ...centre(stack), side: 'left', delay: next(), text: 'Sell one category of trade good here; selling three or more gives a bonus token; Diamond, Gold and Silver require 2+ cards to sell' });
+    const hand = document.querySelector(`[data-seat="${seat}"] [data-table-hand]`)?.getBoundingClientRect();
+    if (hand) {
+      const c = centre(hand);
+      items.push({ key: 'hand', kind: 'pill', x: c.x, y: c.y - flip * (c.h / 2 + 8), w: 0, h: 0, delay: next(), text: 'You can hold up to 7 trade goods in your hand' });
+    }
+    const herd = document.querySelector(`[data-seat="${seat}"] [data-table-herd]`)?.getBoundingClientRect();
+    if (herd) {
+      const c = centre(herd);
+      items.push({ key: 'herd', kind: 'pill', x: c.x - flip * (c.w / 2 + 12), y: c.y, w: 0, h: 0, side: 'left', delay: next(),
+        text: 'You can have any number of camels; the player with the most camels wins +5 at the end of the round' });
+    }
+    tutorial = { seat, items, fading: false };
+  }
+  function dismissTutorial() {
+    if (!tutorial || tutorial.fading) return;
+    tutorial.fading = true;
+    setTimeout(() => (tutorial = null), 650);
+  }
 
   async function maybeOpenFirstRound() {
     if (
@@ -2062,7 +2153,6 @@
         <h2>{player.displayName}</h2>
       </div>
       <strong class="turn-state">{isActive ? 'Your turn' : 'Waiting'}</strong>
-      <span class="hand-count" data-hand-count={player.uid}>{lobby.round?.hands[player.uid]?.length ?? 0} / 7 cards</span>
       {#if scoring || lobby.round?.status === 'complete'}
         <span class="score-stack">
           {#if scoring && scoring.stage !== 'pending'}
@@ -2240,8 +2330,8 @@
           <strong>Game log</strong> <span>{lobby.activity.length}</span>
           <button type="button" class="log-toggle" aria-label="Hide the game log" onclick={() => (logOpen = { ...logOpen, [side]: false })}>−</button>
         </div>
-        <ol reversed>
-          {#each [...lobby.activity].reverse() as activity (activity.id)}
+        <ol use:scrollToEnd>
+          {#each lobby.activity as activity (activity.id)}
             {@const detail = activityDetail(activity)}
             <li><strong>{playerName(activity.actorUid)}</strong> {activityDescription(activity)}{#if detail}<small>{detail}</small>{/if}</li>
           {/each}
@@ -2357,8 +2447,17 @@
         {:else}
           {@const activeName = lobby.players.find((p) => p.uid === activeUid)?.displayName ?? 'Trader'}
           <span>
-            <strong>{activeName}</strong>: tap your face-down cards (see them in AR) to select, then use the market or token supplies.
+            <strong>{activeName}</strong>: take a card from the market; trade 2+ cards with the market; take all camels; or sell cards.
           </span>
+          <button
+            type="button"
+            class="help-icon"
+            class:active={Boolean(tutorial)}
+            aria-label={tutorial ? 'Dismiss help' : 'How to play: show the table guide'}
+            aria-pressed={Boolean(tutorial)}
+            data-help-icon
+            onclick={(e) => { e.stopPropagation(); if (tutorial) dismissTutorial(); else void openTutorial(marketFacingSeat); }}
+          >?</button>
         {/if}
       </div>
       <div class="market-stage">
@@ -2641,6 +2740,35 @@
   <div class="top-log">{@render gameLog(true)}</div>
   <div class="bottom-log">{@render gameLog(false)}</div>
   <p class="table-status" class:for-top={marketFacingSeat === 1} data-status={statusKind}>{status} · Build {buildHash}</p>
+  {#if tutorial}
+    <!-- Table guide: fixed over the whole screen; every callout faces the
+         player who asked (rotated for seat 1). A tap anywhere fades it. -->
+    <div
+      class="tutorial"
+      class:fading={tutorial.fading}
+      class:for-top={tutorial.seat === 1}
+      role="button"
+      tabindex="-1"
+      aria-label="Table guide; tap anywhere to dismiss"
+      data-tutorial={tutorial.seat}
+      onpointerdown={dismissTutorial}
+    >
+      {#each tutorial.items as item (item.key)}
+        {#if item.kind === 'card'}
+          <img class="tut-card" src={componentImage(item.card ?? 'camel')} alt="" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px`} />
+        {:else if item.kind === 'circle'}
+          <div class="tut-circle" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px;--delay:${item.delay}ms`}><span>{item.text}</span></div>
+        {:else if item.kind === 'tap'}
+          <div class={`tut-tap ${item.side ?? 'below'}`} style={`left:${item.x}px;top:${item.y}px;--size:${Math.min(item.w, item.h)}px;--delay:${item.delay}ms`}>
+            <span class="tut-ring" aria-hidden="true"><span class="tut-finger">☝</span></span>
+            <span class="tut-text">{item.text}</span>
+          </div>
+        {:else}
+          <div class={`tut-pill ${item.side ?? 'above'}`} style={`left:${item.x}px;top:${item.y}px;--delay:${item.delay}ms`}><span>{item.text}</span></div>
+        {/if}
+      {/each}
+    </div>
+  {/if}
   {#each cardFlights as flight (flight.key)}
     <span
       class="table-card-flight"
@@ -3051,6 +3179,30 @@
   .corner-log li { padding: 0.22rem 0.3rem; border-radius: 0.25rem; background: #f2e8d3; font-size: 0.7rem; }
   .corner-log li small { display: block; margin-top: 0.1rem; font-size: 0.62rem; color: #5d5240; }
   .corner-log li + li { margin-top: 0.18rem; }
+  /* The "?" floating to the right of the prompt pill; while the guide shows it carries a small × to dismiss. */
+  .help-icon { position: absolute; left: calc(100% + 0.45rem); top: 50%; display: grid; width: 2.3rem; height: 2.3rem; place-items: center; padding: 0; border: 2px solid #fffaf0; border-radius: 50%; background: #2b6cd4; color: #fff; font: inherit; font-size: 1.25rem; font-weight: 900; line-height: 1; box-shadow: 0 0.2rem 0.6rem rgb(10 32 30 / 35%); transform: translateY(-50%); cursor: pointer; }
+  .help-icon.active::after { content: '×'; position: absolute; right: -0.35rem; top: -0.35rem; display: grid; width: 1.1rem; height: 1.1rem; place-items: center; border-radius: 50%; background: #a6442d; color: #fff; font-size: 0.8rem; line-height: 1; }
+  .tutorial { position: fixed; inset: 0; z-index: 60; background: rgb(24 58 55 / 12%); transition: opacity 600ms ease; cursor: pointer; }
+  .tutorial.fading { opacity: 0; pointer-events: none; }
+  .tutorial > * { position: absolute; translate: -50% -50%; }
+  .tutorial.for-top .tut-circle, .tutorial.for-top .tut-tap, .tutorial.for-top .tut-pill { rotate: 180deg; }
+  .tut-card { border: 2px solid #315f58; border-radius: 0.55rem; object-fit: cover; box-shadow: 0 0.4rem 1rem rgb(10 32 30 / 35%); }
+  .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 700ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 700ms) infinite; }
+  .tut-circle { display: grid; place-items: center; padding: 10%; border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(255 250 240 / 72%); text-align: center; }
+  .tut-circle span, .tut-text, .tut-pill span { color: #183a37; font-size: clamp(0.8rem, 1.7vmin, 1.4rem); font-weight: 800; line-height: 1.25; text-shadow: 0 0 6px #fffaf0, 0 0 6px #fffaf0, 0 0 2px #fffaf0; }
+  .tut-tap { display: grid; justify-items: center; gap: 0.35rem; width: 0; height: 0; place-items: center; }
+  .tut-ring { position: absolute; left: 50%; top: 50%; display: grid; width: var(--size); height: var(--size); place-items: center; border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(43 108 212 / 22%); translate: -50% -50%; box-shadow: 0 0 0 0.5rem rgb(43 108 212 / 18%); }
+  .tut-finger { font-size: calc(var(--size) * 0.55); line-height: 1; filter: drop-shadow(0 2px 3px rgb(0 0 0 / 40%)); }
+  .tut-text { position: absolute; left: 50%; width: clamp(11rem, 24vmin, 20rem); padding: 0.45rem 0.7rem; border: 2px solid #2b6cd4; border-radius: 0.8rem; background: rgb(255 250 240 / 82%); text-align: center; translate: -50% 0; }
+  .tut-tap.below .tut-text { top: calc(var(--size) / 2 + 0.5rem); }
+  .tut-tap.above .tut-text { bottom: calc(var(--size) / 2 + 0.5rem); }
+  .tut-tap.left .tut-text { top: 50%; left: auto; right: calc(var(--size) / 2 + 0.6rem); translate: 0 -50%; }
+  .tut-pill { display: grid; width: clamp(13rem, 30vmin, 24rem); padding: 0.5rem 0.9rem; border: 2px solid #2b6cd4; border-radius: 99rem; background: rgb(255 250 240 / 82%); text-align: center; }
+  .tut-pill.left { translate: -100% -50%; }
+  .tutorial.for-top .tut-pill.left { translate: 0 -50%; }
+  @keyframes tut-grow { from { scale: 0; opacity: 0; } to { scale: 1; opacity: 1; } }
+  @keyframes tut-glow { 0%, 100% { filter: drop-shadow(0 0 0.3rem rgb(43 108 212 / 50%)); } 50% { filter: drop-shadow(0 0 1.2rem rgb(43 108 212 / 90%)); } }
+  @media (prefers-reduced-motion: reduce) { .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 1ms both; } }
   /* Partial-sale choices in the prompt: n good icons and the points they earn. */
   .sale-counts { display: flex; flex-wrap: wrap; gap: 0.3rem; }
   .sale-count { display: grid; justify-items: center; gap: 0.1rem; min-height: 44px; padding: 0.25rem 0.45rem; border: 2px solid #b7aa8d; border-radius: 0.6rem; background: #fffaf0; color: #183a37; font: inherit; font-size: 0.8em; font-weight: 800; }
@@ -3079,7 +3231,6 @@
     45% { transform: translateY(calc(var(--arc-lift) * -1)) scale(1.25); }
     100% { transform: translateY(0) scale(0.9); }
   }
-  .hand-count { font-size: clamp(0.62rem, 1.3vmin, 0.85rem); font-weight: 700; color: #526762; white-space: nowrap; }
   /* ---- Round-end scoring sequence ---- */
   /* Fixed to the viewport: the disc and the big seal sit at the centre of
      the screen, not of the market section (whose header offset them). */
