@@ -680,7 +680,9 @@
   // chose otherwise, it is on against a computer opponent (nobody to hide
   // from) and off with two humans (their phones show their cards).
   let showHandsChoice = $state<'auto' | 'on' | 'off'>('auto');
-  const showHands = $derived(showHandsChoice === 'auto' ? Boolean(lobby.bot) : showHandsChoice === 'on');
+  // A player seated from the table itself ("Play without phone") has no phone to see their cards on.
+  const hasPhonelessPlayer = $derived(lobby.players.some((p) => p.uid.startsWith('table-')));
+  const showHands = $derived(showHandsChoice === 'auto' ? Boolean(lobby.bot) || hasPhonelessPlayer : showHandsChoice === 'on');
   function toggleShowHands() {
     showHandsChoice = showHands ? 'off' : 'on';
     localStorage.setItem('jaipur:tabletop:show-hands', showHandsChoice);
@@ -858,7 +860,7 @@
     const order = ['overview', 'take', 'camels', 'trade', 'sell', 'hand', 'herd', 'deck'];
     for (const item of items) {
       const at = order.indexOf(item.key);
-      item.delay = at < 0 ? 0 : at * 875;
+      item.delay = at < 0 ? 0 : at * 700;
     }
     tutorial = { seat, items, fading: false };
   }
@@ -964,6 +966,21 @@
   ];
 
   // Seat a bot of the chosen level on an empty seat (one bot per table).
+  // "Play without phone": a human sits at this seat from the table itself,
+  // with no phone to show them their cards — so Show hands defaults on
+  // for them (see showHands) and hold-to-peek is always there.
+  let seatNameEntry = $state<{ seat: Seat; name: string } | null>(null);
+  const tableSeatUid = (seat: Seat) => `table-${gameId}-${seat}`;
+  async function joinWithoutPhone(seat: Seat) {
+    if (!repository || !gameId || playerForSeat(seat) || busy) return;
+    const uid = tableSeatUid(seat);
+    if (lobby.players.some((player) => player.uid === uid)) return;
+    const name = (seatNameEntry?.seat === seat ? seatNameEntry.name : '').trim().slice(0, 32) || `Player ${seat}`;
+    seatNameEntry = null;
+    await repository.append('player/joined', { displayName: name, seat, playerUid: uid });
+    await repository.append('player/ready', { playerUid: uid, ready: true });
+  }
+
   async function addBot(seat: Seat, difficulty: BotDifficulty = 'apprentice') {
     if (!repository || lobby.bot || playerForSeat(seat) || busy) return;
     const level = botLevels.find((l) => l.difficulty === difficulty);
@@ -2100,6 +2117,19 @@
     {:else}
       <span class="qr-placeholder" aria-hidden="true"></span>
     {/if}
+    <!-- Sit here from the table itself: no phone, cards shown face up (Show hands). -->
+    {#if seatNameEntry?.seat === seat}
+      <form class="no-phone-join" data-no-phone-form={seat} onsubmit={(e) => { e.preventDefault(); void joinWithoutPhone(seat); }}>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input type="text" maxlength="32" placeholder={`Player ${seat}`} autocapitalize="words" autofocus bind:value={seatNameEntry.name} aria-label="Your trader name" />
+        <button type="submit" disabled={!repository || busy} data-no-phone-sit={seat}>Sit here</button>
+        <button type="button" class="quiet" onclick={() => (seatNameEntry = null)}>Cancel</button>
+      </form>
+    {:else}
+      <button type="button" class="bot-seat-button no-phone-button" data-no-phone-seat={seat} disabled={!repository || busy} onclick={() => (seatNameEntry = { seat, name: '' })}>
+        Play without phone <small>Your cards lie face up on the table</small>
+      </button>
+    {/if}
     {#if legacyPhone && qr}
       <a href={qr.url} class="qr-frame" aria-label={`Join tabletop ${gameId} as Player ${seat} with the phone controller`}>
         <img src={qr.image} alt={`QR code to join as Player ${seat} with the phone controller`} />
@@ -3112,6 +3142,11 @@
   .rejoin-codes img { width: min(9rem, 24vw); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.5rem; }
   .rejoin-codes p { flex-basis: 100%; margin: 0; }
   .bot-seat-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; }
+  .no-phone-button { border-color: #315f58; color: #315f58; }
+  .no-phone-join { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.4rem; }
+  .no-phone-join input { min-height: 44px; width: min(14rem, 60vw); padding: 0.4rem 0.7rem; border: 1px solid #6e756d; border-radius: 99rem; font: inherit; text-align: center; }
+  .no-phone-join button { min-height: 44px; padding: 0.4rem 0.9rem; border: 0; border-radius: 99rem; background: #a6442d; color: #fffaf0; font: inherit; font-weight: 700; }
+  .no-phone-join button.quiet { background: transparent; color: #a6442d; border: 1px solid #a6442d; }
   .bot-seat-button small { display: block; font-weight: 400; font-size: 0.75em; opacity: 0.75; }
   .bot-seat-button { min-height: 44px; padding: 0.4rem 0.9rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
   .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
@@ -3254,7 +3289,7 @@
   .tutorial > * { position: absolute; translate: -50% -50%; }
   .tutorial.for-top .tut-circle, .tutorial.for-top .tut-tap, .tutorial.for-top .tut-pill { rotate: 180deg; }
   .tut-card { border: 2px solid #315f58; border-radius: 0.55rem; object-fit: cover; box-shadow: 0 0.4rem 1rem rgb(10 32 30 / 35%); }
-  .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 1250ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 1250ms) infinite; }
+  .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 1000ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 1000ms) infinite; }
   /* Text sits in the blue: a translucent blue body (the piece shows through) with opaque white text. */
   .tut-text { display: block; padding: 0.35rem 0.55rem; border-radius: 0.7rem; background: rgb(43 108 212 / 62%); color: #fff; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.5; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
   /* The deck circle carries its text directly. */
