@@ -769,7 +769,7 @@
     text?: string;
     card?: CardKind;
     /** Where the text sits relative to the tap ring, in the player's frame. */
-    side?: 'below' | 'above' | 'left' | 'right';
+    side?: 'below' | 'above' | 'left' | 'right' | 'over';
     delay: number;
   };
   let tutorial = $state<{ seat: Seat; items: TutorialItem[]; fading: boolean } | null>(null);
@@ -789,51 +789,61 @@
       card: slot.querySelector('.market-card')?.getBoundingClientRect() ?? slot.getBoundingClientRect(),
       target: slot.querySelector('.table-exchange-target')?.getBoundingClientRect() ?? null
     }));
-    const fakes: Array<{ i: number; kind: CardKind }> = [];
-    if (slots.length) {
-      if (!slots.some((s) => s.kind === 'camel')) fakes.push({ i: 0, kind: 'camel' });
-      const goods = slots.filter((s) => s.kind !== 'camel' && !fakes.some((f) => f.i === s.i));
-      if (goods.length === 0) { fakes.push({ i: slots.length - 2, kind: 'cloth' }, { i: slots.length - 1, kind: 'spice' }); }
-      else if (goods.length === 1 && fakes.length === 0) fakes.push({ i: goods[0].i === slots.length - 1 ? slots.length - 2 : goods[0].i + 1, kind: 'cloth' });
-      for (const f of fakes) { slots[f.i].kind = f.kind; items.push({ key: `card-${f.i}`, kind: 'card', ...centre(slots[f.i].card), card: f.kind, delay: 0 }); }
+    // Fixed teaching slots: the first card is a camel, the third a trade
+    // good (take), the fourth a trade good (trade); stand-ins are drawn over
+    // whatever the market really holds there.
+    const need: Array<{ i: number; kind: CardKind; goods: boolean }> = [
+      { i: 0, kind: 'camel', goods: false },
+      { i: 2, kind: 'cloth', goods: true },
+      { i: 3, kind: 'spice', goods: true }
+    ];
+    for (const n of need) {
+      const slot = slots[n.i];
+      if (!slot) continue;
+      const ok = n.goods ? slot.kind !== 'camel' : slot.kind === 'camel';
+      if (!ok) { slot.kind = n.kind; items.push({ key: `card-${n.i}`, kind: 'card', ...centre(slot.card), card: n.kind, delay: 0 }); }
     }
     const deck = document.querySelector('.deck-card')?.getBoundingClientRect();
     if (deck) {
       const c = centre(deck);
-      const d = Math.max(c.w, c.h) * 1.3; // the text wraps wide inside, so the circle stays close to the deck
+      const d = Math.max(c.w, c.h) * 1.15;
       items.push({ key: 'deck', kind: 'circle', x: c.x, y: c.y, w: d, h: d, delay: next(),
-        text: `${round.deck.length} card${round.deck.length === 1 ? '' : 's'} remain in the deck; the round ends when the deck or three trade goods are exhausted` });
+        text: `${round.deck.length} card${round.deck.length === 1 ? '' : 's'} remain in the deck;round ends when the deck or three trade goods are exhausted` });
     }
-    const camel = slots.find((s) => s.kind === 'camel');
-    if (camel) items.push({ key: 'camels', kind: 'tap', ...centre(camel.card), side: 'below', delay: next(), text: 'Pick up all camels into your herd' });
-    const goodSlots = slots.filter((s) => s.kind !== 'camel');
-    const take = goodSlots.at(-1);
-    if (take) items.push({ key: 'take', kind: 'tap', ...centre(take.card), side: 'below', delay: next(), text: 'Take this card from the market (if you have space in your hand for it)' });
-    const trade = goodSlots[0];
-    if (trade) {
-      const r = trade.target ?? trade.card;
-      items.push({ key: 'trade', kind: 'tap', ...centre(r), side: 'above', delay: next(), text: 'Trade two or more cards (camels or trade goods) from your hand with trade cards from the market' });
+    // A ring in the upper-left quadrant of a card (in the player's frame),
+    // its text wrapping within the card's width below and to the right.
+    const quadrant = (r: DOMRect) => {
+      const c = centre(r);
+      return { x: c.x - flip * c.w / 4, y: c.y - flip * c.h / 4, w: c.w * 0.62, h: c.h };
+    };
+    if (slots[0]) items.push({ key: 'camels', kind: 'tap', ...quadrant(slots[0].card), side: 'below', delay: next(), text: 'Pick up all camels into your herd' });
+    if (slots[2]) items.push({ key: 'take', kind: 'tap', ...quadrant(slots[2].card), side: 'below', delay: next(), text: 'Take this card from the market (if you have space in your hand for it)' });
+    if (slots[3]) {
+      const r = slots[3].target ?? slots[3].card;
+      const c = centre(r);
+      items.push({ key: 'trade', kind: 'tap', x: c.x - flip * c.w / 4, y: c.y, w: slots[3].card.width * 1.4, h: c.h, side: 'below', delay: next(), text: 'Trade two or more cards (camels or trade goods) from your hand with trade cards from the market' });
     }
     const stack = document.querySelector(`[data-token-view-seat="${seat}"] [data-token-kind="gold"]`)?.getBoundingClientRect()
       ?? document.querySelector(`[data-token-view-seat="${seat}"] [data-token-kind]`)?.getBoundingClientRect();
-    if (stack) items.push({ key: 'sell', kind: 'tap', ...centre(stack), side: 'left', delay: next(), text: 'Sell one category of trade good here; selling three or more gives a bonus token; Diamond, Gold and Silver require 2+ cards to sell' });
+    if (stack) items.push({ key: 'sell', kind: 'tap', ...centre(stack), side: 'left', delay: next(), text: 'Sell one category of trade good;Bonus token if 3+ cards sold;Diamond/Gold/Silver need 2+' });
     const hand = document.querySelector(`[data-seat="${seat}"] [data-table-hand]`)?.getBoundingClientRect();
     if (hand) {
       const c = centre(hand);
-      items.push({ key: 'hand', kind: 'pill', x: c.x, y: c.y - flip * (c.h / 2 + 2), w: 0, h: 0, delay: next(), text: 'You can hold up to 7 trade goods in your hand' });
+      items.push({ key: 'hand', kind: 'pill', x: c.x, y: c.y, w: 0, h: 0, side: 'over', delay: next(), text: 'You can hold up to 7 trade goods in your hand' });
     }
     const herd = document.querySelector(`[data-seat="${seat}"] [data-table-herd]`)?.getBoundingClientRect();
     if (herd) {
       const c = centre(herd);
-      items.push({ key: 'herd', kind: 'pill', x: c.x + flip * (c.w / 2 + 6), y: c.y, w: 0, h: 0, side: 'right', delay: next(),
-        text: 'You can have any number of camels; the player with the most camels wins +5 at the end of the round' });
+      items.push({ key: 'herd', kind: 'pill', x: c.x + flip * (c.w / 2 - 6), y: c.y, w: 0, h: 0, side: 'right', delay: next(),
+        text: 'You can have any number of camels;Player with the most camels wins +5 at the end of the round' });
     }
     tutorial = { seat, items, fading: false };
   }
   function dismissTutorial() {
     if (!tutorial || tutorial.fading) return;
-    tutorial.fading = true;
-    setTimeout(() => (tutorial = null), 650);
+    tutorial.fading = true; // each callout shrinks away on its own delay, as it grew
+    const last = Math.max(0, ...tutorial.items.map((i) => i.delay));
+    setTimeout(() => (tutorial = null), last + 700);
   }
 
   async function maybeOpenFirstRound() {
@@ -2761,10 +2771,10 @@
         {#if item.kind === 'card'}
           <img class="tut-card" src={componentImage(item.card ?? 'camel')} alt="" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px`} />
         {:else if item.kind === 'circle'}
-          <div class="tut-circle" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px;--delay:${item.delay}ms`}><span class="tut-text">{@render tutLines(item.text)}</span></div>
+          <div class="tut-circle" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px;--delay:${item.delay}ms`}><span>{@render tutLines(item.text)}</span></div>
         {:else if item.kind === 'tap'}
-          <div class={`tut-tap ${item.side ?? 'below'}`} style={`left:${item.x}px;top:${item.y}px;--size:${Math.min(item.w, item.h)}px;--delay:${item.delay}ms`}>
-            <span class="tut-ring" aria-hidden="true"><span class="tut-finger">☝</span></span>
+          <div class={`tut-tap ${item.side ?? 'below'}`} style={`left:${item.x}px;top:${item.y}px;--text-w:${item.w}px;--delay:${item.delay}ms`}>
+            <span class="tut-ring" aria-hidden="true"><svg class="tut-finger" viewBox="0 0 24 24"><path d="M9 11V4.5a1.5 1.5 0 0 1 3 0V11l1-.2V8.5a1.5 1.5 0 0 1 3 0v3l1 .1V10a1.5 1.5 0 0 1 3 0v6.5c0 3-2.5 5.5-5.5 5.5h-2.2a5 5 0 0 1-4.2-2.3l-3.4-5.4a1.5 1.5 0 0 1 2.4-1.7L9 15z" fill="currentColor" /></svg></span>
             <span class="tut-text">{@render tutLines(item.text)}</span>
           </div>
         {:else}
@@ -3186,29 +3196,33 @@
   /* The "?" floating to the right of the prompt pill; while the guide shows it carries a small × to dismiss. */
   .help-icon { position: absolute; left: calc(100% + 0.45rem); top: 50%; display: grid; width: 2.3rem; height: 2.3rem; place-items: center; padding: 0; border: 2px solid #fffaf0; border-radius: 50%; background: #2b6cd4; color: #fff; font: inherit; font-size: 1.25rem; font-weight: 900; line-height: 1; box-shadow: 0 0.2rem 0.6rem rgb(10 32 30 / 35%); transform: translateY(-50%); cursor: pointer; }
   .help-icon.active::after { content: '×'; position: absolute; right: -0.35rem; top: -0.35rem; display: grid; width: 1.1rem; height: 1.1rem; place-items: center; border-radius: 50%; background: #a6442d; color: #fff; font-size: 0.8rem; line-height: 1; }
-  .tutorial { position: fixed; inset: 0; z-index: 60; background: rgb(24 58 55 / 12%); transition: opacity 600ms ease; cursor: pointer; }
-  .tutorial.fading { opacity: 0; pointer-events: none; }
+  .tutorial { position: fixed; inset: 0; z-index: 60; background: rgb(24 58 55 / 12%); transition: background 600ms ease; cursor: pointer; }
+  .tutorial.fading { pointer-events: none; background: transparent; }
   .tutorial > * { position: absolute; translate: -50% -50%; }
   .tutorial.for-top .tut-circle, .tutorial.for-top .tut-tap, .tutorial.for-top .tut-pill { rotate: 180deg; }
   .tut-card { border: 2px solid #315f58; border-radius: 0.55rem; object-fit: cover; box-shadow: 0 0.4rem 1rem rgb(10 32 30 / 35%); }
   .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 700ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 700ms) infinite; }
+  .tutorial.fading .tut-circle, .tutorial.fading .tut-tap, .tutorial.fading .tut-pill, .tutorial.fading .tut-card { animation: tut-shrink 550ms ease-in var(--delay, 0ms) both; }
   /* Text sits in the blue: a translucent blue body (the piece shows through) with opaque white text. */
-  .tut-text { display: block; padding: 0.4rem 0.65rem; border-radius: 0.7rem; background: rgb(43 108 212 / 82%); color: #fff; font-size: clamp(0.75rem, 1.5vmin, 1.2rem); font-weight: 700; line-height: 1.25; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
-  .tut-circle { display: grid; place-items: center; padding: 6%; border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(43 108 212 / 30%); }
-  .tut-circle .tut-text { width: 130%; text-align: center; }
-  /* The tap ring matches the "?" icon; its text hangs below and to the right of it. */
+  .tut-text { display: block; padding: 0.35rem 0.55rem; border-radius: 0.7rem; background: rgb(43 108 212 / 82%); color: #fff; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.25; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
+  /* The deck circle carries its text directly. */
+  .tut-circle { display: grid; place-items: center; padding: 8%; border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(43 108 212 / 80%); color: #fff; text-align: center; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
+  .tut-circle span { width: 120%; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.25; }
+  /* The tap ring: half again the "?" icon, a bright white finger; its text hangs below and to the right. */
   .tut-tap { width: 0; height: 0; }
-  .tut-ring { position: absolute; left: 50%; top: 50%; display: grid; width: 2.3rem; height: 2.3rem; place-items: center; border: 2px solid #fffaf0; border-radius: 50%; background: rgb(43 108 212 / 85%); translate: -50% -50%; box-shadow: 0 0 0 0.35rem rgb(43 108 212 / 25%), 0 0.2rem 0.6rem rgb(10 32 30 / 35%); }
-  .tut-finger { font-size: 1.25rem; line-height: 1; filter: drop-shadow(0 1px 2px rgb(0 0 0 / 40%)); }
-  .tut-tap .tut-text { position: absolute; left: 1rem; top: 1rem; width: max-content; max-width: clamp(11rem, 26vmin, 22rem); }
-  .tut-tap.above .tut-text { top: auto; bottom: 1rem; }
-  .tut-tap.left .tut-text { left: auto; right: 1rem; }
+  .tut-ring { position: absolute; left: 50%; top: 50%; display: grid; width: 3.45rem; height: 3.45rem; place-items: center; border: 2px solid #fffaf0; border-radius: 50%; background: rgb(43 108 212 / 85%); translate: -50% -50%; box-shadow: 0 0 0 0.4rem rgb(43 108 212 / 25%), 0 0.2rem 0.6rem rgb(10 32 30 / 35%); }
+  .tut-finger { width: 2.1rem; height: 2.1rem; color: #fff; filter: drop-shadow(0 1px 2px rgb(0 0 0 / 45%)); }
+  .tut-tap .tut-text { position: absolute; left: 1.2rem; top: 1.2rem; width: var(--text-w, 12rem); }
+  .tut-tap.above .tut-text { top: auto; bottom: 1.2rem; }
+  .tut-tap.left .tut-text { left: auto; right: 1.2rem; }
   .tut-pill { display: grid; width: max-content; max-width: clamp(12rem, 30vmin, 24rem); }
   .tut-pill .tut-text { border-radius: 99rem; text-align: center; }
+  .tut-pill.over { translate: -50% -50%; }
   .tut-pill.above { translate: -50% -100%; }
   .tutorial.for-top .tut-pill.above { translate: -50% 0; }
   .tut-pill.right { translate: 0 -50%; }
   .tutorial.for-top .tut-pill.right { translate: -100% -50%; }
+  @keyframes tut-shrink { from { scale: 1; opacity: 1; } to { scale: 0; opacity: 0; } }
   @keyframes tut-grow { from { scale: 0; opacity: 0; } to { scale: 1; opacity: 1; } }
   @keyframes tut-glow { 0%, 100% { filter: drop-shadow(0 0 0.3rem rgb(43 108 212 / 50%)); } 50% { filter: drop-shadow(0 0 1.2rem rgb(43 108 212 / 90%)); } }
   @media (prefers-reduced-motion: reduce) { .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 1ms both; } }
