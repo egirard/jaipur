@@ -775,6 +775,11 @@
     delay: number;
   };
   let tutorial = $state<{ seat: Seat; items: TutorialItem[]; fading: boolean } | null>(null);
+  // Stand-in cards by market slot: a camel stand-in hides the slot's return
+  // area; a good stand-in over a camel shows one.
+  const tutorialFakes = $derived<Record<number, CardKind>>(Object.fromEntries(
+    (tutorial?.items ?? []).filter((i) => i.kind === 'card').map((i) => [Number(i.key.replace('card-', '')), i.card ?? 'camel'])
+  ));
   const centre = (r: DOMRect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height });
 
   async function openTutorial(seat: Seat) {
@@ -822,10 +827,10 @@
     if (slots[0]) items.push({ key: 'camels', kind: 'tap', ...quadrant(slots[0].card), side: 'below', delay: next(), text: 'Pick up all camels into your herd' });
     if (slots[2]) items.push({ key: 'take', kind: 'tap', ...quadrant(slots[2].card), side: 'below', delay: next(), text: 'Take this card from the market (if you have space in your hand)' });
     if (slots[3]) {
-      const c = centre(slots[3].card);
-      items.push({ key: 'trade', kind: 'tap', x: c.x, y: c.y, w: c.w * 1.1, h: c.h, side: 'below', delay: next(), text: 'Trade two or more cards (camels or trade goods) from your hand with trade cards from the market' });
+      const c = centre(slots[3].target ?? slots[3].card);
+      items.push({ key: 'trade', kind: 'tap', x: c.x, y: c.y, w: slots[3].card.width * 1.1, h: c.h, side: 'below', delay: next(), text: 'Trade two or more cards (camels or trade goods) from your hand with trade cards from the market' });
     }
-    const stack = document.querySelector(`[data-token-view-seat="${seat}"] [data-token-kind="gold"]`)?.getBoundingClientRect()
+    const stack = document.querySelector(`[data-token-view-seat="${seat}"] [data-token-kind="${seat === 1 ? 'diamond' : 'gold'}"]`)?.getBoundingClientRect()
       ?? document.querySelector(`[data-token-view-seat="${seat}"] [data-token-kind]`)?.getBoundingClientRect();
     if (stack) items.push({ key: 'sell', kind: 'tap', ...centre(stack), side: 'left', delay: next(), text: 'Sell one category of trade good;Bonus token if 3+ cards sold;Diamond/Gold/Silver need 2+' });
     // The hand container runs the full mat width; centre on the cards and
@@ -846,7 +851,7 @@
     }
     if (deckArea) {
       const c = centre(deckArea);
-      items.push({ key: 'overview', kind: 'pill', x: c.x, y: c.y - flip * (c.h / 2 + 6), w: 0, h: 0, side: 'above', delay: next(), title: true,
+      items.push({ key: 'overview', kind: 'pill', x: c.x + (seat === 1 ? innerWidth * 0.22 : 0), y: c.y - flip * (c.h / 2 + 6), w: 0, h: 0, side: 'above', delay: next(), title: true,
         text: 'Game overview;Players alternate turns, taking one of four actions [hand] each turn;Round ends when deck or three trade goods are exhausted;Win by having more points (goods traded, bonus tokens, camel bonus);Game ends when a player wins two rounds' });
     }
     tutorial = { seat, items, fading: false };
@@ -2574,11 +2579,13 @@
               <PieceArt kind={card.kind} label={label(card.kind)} detail={card.id} />
             </button>
             {/if}
+            {@const fake = tutorialFakes[marketIndex]}
             {#if card.kind !== 'camel'}
               <button
                 type="button"
                 class="table-exchange-target"
                 class:loaded={Boolean(loadedReturnId)}
+                class:tut-hidden={fake === 'camel'}
                 disabled={busy || Boolean(pendingDraw) || (!loadedReturnId && selectedReturnIds(activeUid).length === 0)}
                 aria-pressed={Boolean(loadedReturnId)}
                 aria-label={loadedReturnId
@@ -2606,11 +2613,12 @@
               <button
                 type="button"
                 class="table-exchange-target target-placeholder"
+                class:tut-visible={Boolean(fake) && fake !== 'camel'}
                 disabled
                 aria-hidden="true"
                 tabindex="-1"
                 data-return-seat={marketFacingSeat}
-              ></button>
+              >{#if fake && fake !== 'camel'}<span aria-hidden="true">＋</span><small>Return</small>{/if}</button>
             {/if}
           </div>
           {/snippet}
@@ -3196,6 +3204,9 @@
   .table-exchange-target { display: grid; width: var(--table-market-card-size); height: var(--table-target-height); min-height: var(--table-target-height); grid-row: 1; grid-template-columns: auto 1fr; place-items: center; gap: 0.2rem; padding: 0.2rem; border: 2px dashed #315f58; border-radius: 0.6rem; background: rgb(255 250 240 / 72%); color: #315f58; font-weight: 700; transform: rotate(var(--market-rotation)); transition: transform 420ms ease-in-out; }
   .shared-market[data-market-facing-seat='2'] .table-exchange-target { grid-row: 3; }
   .target-placeholder { visibility: hidden; }
+  /* Table guide stand-ins: a camel drawn over a good loses its return area; a good drawn over a camel gains one. */
+  .table-exchange-target.tut-hidden { visibility: hidden; }
+  .target-placeholder.tut-visible { visibility: visible; }
   .table-exchange-target:disabled { opacity: 0.48; }
   .table-exchange-target.loaded { border-style: solid; border-color: #d38b21; background: #fff4d6; opacity: 1; }
   .table-exchange-target > span { font-size: 1.2rem; }
@@ -3239,10 +3250,10 @@
   .tut-card { border: 2px solid #315f58; border-radius: 0.55rem; object-fit: cover; box-shadow: 0 0.4rem 1rem rgb(10 32 30 / 35%); }
   .tut-circle, .tut-tap, .tut-pill { animation: tut-grow 1000ms cubic-bezier(0.2, 0.9, 0.3, 1.25) var(--delay) both, tut-glow 1800ms ease-in-out calc(var(--delay) + 1000ms) infinite; }
   /* Text sits in the blue: a translucent blue body (the piece shows through) with opaque white text. */
-  .tut-text { display: block; padding: 0.35rem 0.55rem; border-radius: 0.7rem; background: rgb(43 108 212 / 62%); color: #fff; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.25; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
+  .tut-text { display: block; padding: 0.35rem 0.55rem; border-radius: 0.7rem; background: rgb(43 108 212 / 62%); color: #fff; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.5; text-align: left; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
   /* The deck circle carries its text directly. */
   .tut-circle { border: 3px solid #2b6cd4; border-radius: 50%; background: rgb(43 108 212 / 62%); color: #fff; text-align: center; box-shadow: 0 0.3rem 0.8rem rgb(10 32 30 / 35%); }
-  .tut-circle span { position: absolute; left: 50%; top: 50%; width: 120%; translate: -50% -50%; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.25; }
+  .tut-circle span { position: absolute; left: 50%; top: 50%; width: 120%; translate: -50% -50%; font-size: clamp(0.7rem, 1.4vmin, 1.1rem); font-weight: 700; line-height: 1.5; }
   /* The tap ring: half again the "?" icon, a bright white finger; its text hangs below and to the right. */
   .tut-tap { width: 0; height: 0; }
   .tut-ring { position: absolute; left: 50%; top: 50%; display: grid; width: 3.45rem; height: 3.45rem; place-items: center; border: 2px solid #fffaf0; border-radius: 50%; background: rgb(43 108 212 / 85%); translate: -50% -50%; box-shadow: 0 0 0 0.4rem rgb(43 108 212 / 25%), 0 0.2rem 0.6rem rgb(10 32 30 / 35%); }
@@ -3253,7 +3264,7 @@
   .tut-pill { display: grid; width: max-content; max-width: clamp(12rem, 30vmin, 24rem); }
   .tut-pill .tut-text { border-radius: 99rem; text-align: center; }
   /* The overview: an oversized pill above the deck, reaching into the other player's side. */
-  .tut-pill.overview { max-width: min(46rem, 60vw); }
+  .tut-pill.overview { max-width: min(54rem, 70vw); }
   .tut-pill.overview .tut-text { padding: 0.7rem 1.4rem; border-radius: 1.6rem; font-size: clamp(0.85rem, 1.9vmin, 1.5rem); text-align: left; }
   .tut-title { display: block; margin-bottom: 0.2em; font-family: 'Cormorant Garamond', serif; font-size: 1.35em; letter-spacing: 0.04em; text-align: center; }
   .tut-finger.inline { display: inline-block; width: 1.1em; height: 1.1em; vertical-align: -0.2em; margin: 0 0.15em; }
