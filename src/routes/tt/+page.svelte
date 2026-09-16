@@ -8,6 +8,7 @@
   import QRCode from 'qrcode';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
+  import { configureSfx, playSfx, setSfxEnabled, setSfxVolume } from '$lib/sfx';
   import StableMarketLayout from '$lib/StableMarketLayout.svelte';
   import TabletopTokenMarket from '$lib/TabletopTokenMarket.svelte';
   import TokenChip from '$lib/TokenChip.svelte';
@@ -320,6 +321,7 @@
     const land = (uid: string, zone: ScoreZone, token: Token, at: number) =>
       setTimeout(() => {
         if (!live() || !scoring) return;
+        if (!(scoring.landed[uid]?.[zone] ?? []).length) playSfx('coins-landing');
         const zones = scoring.landed[uid] ?? (scoring.landed[uid] = { goods: [], bonus: [], camel: [] });
         zones[zone] = [...zones[zone], token];
         scoring.totals[uid] = (scoring.totals[uid] ?? 0) + token.value;
@@ -449,6 +451,7 @@
   onMount(async () => {
     try {
       marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') === 'on';
+      configureSfx(base);
       musicMuted = localStorage.getItem('jaipur:tabletop:music') === 'off';
       const savedVolume = Number(localStorage.getItem('jaipur:tabletop:music-volume'));
       if (Number.isFinite(savedVolume) && savedVolume > 0 && savedVolume <= 1) musicVolume = savedVolume;
@@ -710,6 +713,10 @@
     music?.pause();
     musicPlaying = false;
   }
+  // Sound effects (see $lib/sfx) follow the mute button, the volume slider
+  // and the focus state, so one control governs all table audio.
+  $effect(() => { setSfxEnabled(!musicMuted && !musicSuspended); });
+  $effect(() => { setSfxVolume(Math.min(1, musicVolume * 2)); }); // effects sit above the quiet music bed
   function toggleMusic() {
     if (holdOpened) { holdOpened = false; return; } // the hold opened the slider; not a mute
     musicMuted = !musicMuted;
@@ -1958,6 +1965,7 @@
         });
         refillDelay = 1350 + (activity.cardIds?.length ?? 1) * 90;
         refillStep = activity.type === 'cards/taken-camels' ? 260 : 70;
+        playSfx(activity.type === 'cards/taken-camels' ? 'camel-herd' : 'pickup-goods');
       }
       if (activity.type === 'cards/exchanged') {
         // The chosen market cards flip face-down and arc into the hand;
@@ -1965,6 +1973,9 @@
         // up and slide into the vacated market slots.
         const taken = activity.cardIds?.length ?? 0;
         holdHandSpaces(uid, (previous.round?.hands[uid] ?? []).map(({ id }) => id));
+        // One pickup as the market cards lift, another as the returns slide in.
+        playSfx('pickup-goods');
+        playSfx('pickup-goods', 1350 + taken * 90);
         activity.cardIds?.forEach((cardId, index) => movements.push({
           cardId,
           source: box(`[data-market-card-id="${CSS.escape(cardId)}"]`),
@@ -1997,6 +2008,7 @@
         // side), whichever stack was tapped.
         const tokenView = tokenViewSelector(uid);
         delete saleTokenViewSeats[uid];
+        playSfx('selling-goods');
         // The sold cards flip face-up in the hand, then arc (shrinking) to
         // that good's stack on the seller's side; the tokens follow after.
         // Their places in the hand stay open until everything has landed.
@@ -2033,9 +2045,12 @@
           delay: firstTokenDelay + index * 80 * SALE_SPEED,
           speed: SALE_SPEED
         }));
+        // Coins as the first goods token lands (flights take 1000 × speed).
+        if (goodsAwards.length) playSfx('coins-landing', firstTokenDelay + 1000 * SALE_SPEED);
         // The bonus token is its own beat: it flies once the "cards sold"
         // message has played, and gets a message of its own.
         const soldMessageAt = 900 * SALE_SPEED + firstTokenDelay + Math.max(0, goodsAwards.length - 1) * 80 * SALE_SPEED;
+        if (bonusAwards.length) playSfx('coins-landing', soldMessageAt + 2400 * SALE_SPEED);
         bonusAwards.forEach((token, index) => tokenMovements.push({
           source: box(`${tokenView} [data-bonus-size="${token.kind.replace('bonus-', '')}"]`),
           destinationSelector: `[data-table-tokens="${CSS.escape(uid)}"]`,
@@ -2251,6 +2266,7 @@
     aria-label="Music volume"
     data-music-volume={seat}
     oninput={(e) => setMusicVolume(Number((e.currentTarget as HTMLInputElement).value))}
+    onchange={() => (volumeOpenFor = null)}
   />
   </span>
 {/snippet}

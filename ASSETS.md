@@ -38,3 +38,12 @@ v1.1") was authored by the project owner with Udio on 2026-09-16 and is
 used as the tabletop's looping background music (muted with the speaker
 button in each player's corner or in Table options; the choice is
 remembered in the browser).
+
+# Sound effects
+
+`static/audio/sfx/` holds five recordings authored by the project owner on
+2026-09-16 (camel-herd, pickup-goods-1/2, selling-goods, coins-landing).
+The table plays short randomised excerpts of them (volume, playback rate,
+start offset and length vary per play; see `src/lib/sfx.ts`) when camels are
+taken, a good is taken or traded, a sale starts, and tokens land. They
+follow the music mute button and volume slider.
