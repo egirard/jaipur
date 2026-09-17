@@ -83,6 +83,16 @@
     setTimeout(refreshPhysical, 300);
   }
 
+  /** Close the table: leave full screen and close the window. A browser
+   *  only lets a page close a window it opened (or an installed app's own
+   *  window); otherwise the table blanks the page so the device can be put
+   *  away — the game is kept in this browser and resumes on the next load. */
+  async function closeApp() {
+    if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+    window.close();
+    setTimeout(() => { if (!document.hidden) location.replace('about:blank'); }, 400);
+  }
+
   function newTable() {
     const url = new URL(location.href);
     url.searchParams.delete('game');
@@ -880,6 +890,32 @@
     (tutorial?.items ?? []).filter((i) => i.kind === 'card').map((i) => [Number(i.key.replace('card-', '')), i.card ?? 'camel'])
   ));
   const centre = (r: DOMRect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height });
+
+  /** Svelte action: nudge a guide callout back inside the viewport (a small
+   *  screen pushed the overview pill and edge callouts off it). Measured
+   *  with the grow animation paused so the final box is what gets clamped;
+   *  the shift goes on the margin, which moves the box whatever its
+   *  rotation or translate. */
+  function keepOnScreen(el: HTMLElement) {
+    const previous = el.style.animation;
+    el.style.animation = 'none';
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    for (const node of [el, ...el.querySelectorAll<HTMLElement>('*')]) {
+      const r = node.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      left = Math.min(left, r.left); top = Math.min(top, r.top); right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom);
+    }
+    el.style.animation = previous;
+    if (!Number.isFinite(left)) return;
+    const margin = 8;
+    let dx = 0, dy = 0;
+    if (right > innerWidth - margin) dx = innerWidth - margin - right;
+    if (left + dx < margin) dx = margin - left;
+    if (bottom > innerHeight - margin) dy = innerHeight - margin - bottom;
+    if (top + dy < margin) dy = margin - top;
+    if (dx) el.style.marginLeft = `${dx}px`;
+    if (dy) el.style.marginTop = `${dy}px`;
+  }
 
   async function openTutorial(seat: Seat) {
     if (tutorial || !lobby.round) return;
@@ -2325,7 +2361,7 @@
         <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M15 33L33 15M15 33h5m-5 0v-5M33 15h-5m5 0v5"/>
       </svg>
       <b>{arDiag}″</b>
-    </span>{#if physical && !physical.fullscreen}<small class="scale-note">win</small>{/if}</button>
+    </span></button>
 {/snippet}
 
 {#snippet tutLines(text: string | undefined, titled = false)}
@@ -2925,6 +2961,7 @@
         <button type="button" onclick={toggleFullscreen}>{physical.fullscreen ? 'Exit full screen' : 'Full screen'}</button>
         <button type="button" onclick={newTable}>New table</button>
         <button type="button" onclick={runAnimationDemo} disabled={Boolean(demo) || busy}>Run animation demo</button>
+        <button type="button" class="close-app" onclick={closeApp} data-close-app>Close app</button>
       </div>
       <div class="rejoin-codes" aria-label="AR join codes">
         {#each arQrs as arQr}
@@ -3020,14 +3057,14 @@
         {#if item.kind === 'card'}
           <img class="tut-card" src={componentImage(item.card ?? 'camel')} alt="" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px`} />
         {:else if item.kind === 'circle'}
-          <div class="tut-circle" style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px;--delay:${item.delay}ms`}><span>{@render tutLines(item.text)}</span></div>
+          <div class="tut-circle" use:keepOnScreen style={`left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px;--delay:${item.delay}ms`}><span>{@render tutLines(item.text)}</span></div>
         {:else if item.kind === 'tap'}
-          <div class={`tut-tap ${item.side ?? 'below'}`} style={`left:${item.x}px;top:${item.y}px;--text-w:${item.w}px;--delay:${item.delay}ms`}>
+          <div class={`tut-tap ${item.side ?? 'below'}`} use:keepOnScreen style={`left:${item.x}px;top:${item.y}px;--text-w:${item.w}px;--delay:${item.delay}ms`}>
             <span class="tut-ring" aria-hidden="true"><svg class="tut-finger" viewBox="0 0 24 24"><path d="M9 11V4.5a1.5 1.5 0 0 1 3 0V11l1-.2V8.5a1.5 1.5 0 0 1 3 0v3l1 .1V10a1.5 1.5 0 0 1 3 0v6.5c0 3-2.5 5.5-5.5 5.5h-2.2a5 5 0 0 1-4.2-2.3l-3.4-5.4a1.5 1.5 0 0 1 2.4-1.7L9 15z" fill="currentColor" /></svg></span>
             <span class="tut-text">{@render tutLines(item.text)}</span>
           </div>
         {:else}
-          <div class={`tut-pill ${item.side ?? 'above'}`} class:overview={item.title} style={`left:${item.x}px;top:${item.y}px;--delay:${item.delay}ms`}><span class="tut-text">{@render tutLines(item.text, item.title)}</span></div>
+          <div class={`tut-pill ${item.side ?? 'above'}`} class:overview={item.title} use:keepOnScreen style={`left:${item.x}px;top:${item.y}px;--delay:${item.delay}ms`}><span class="tut-text">{@render tutLines(item.text, item.title)}</span></div>
         {/if}
       {/each}
     </div>
@@ -3310,7 +3347,8 @@
   .scale-panel .facing-option small { flex: 1; line-height: 1.25; color: #5d5240; }
   .scale-panel {
     position: fixed; z-index: 30; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    width: min(34rem, 92vw); padding: 0.9rem 1.1rem; border: 1px solid #8e826b; border-radius: 0.9rem;
+    width: min(34rem, 92vw); max-height: calc(100vh - 1.5rem); max-height: calc(100dvh - 1.5rem); overflow-y: auto; overscroll-behavior: contain;
+    padding: 0.9rem 1.1rem; border: 1px solid #8e826b; border-radius: 0.9rem;
     background: #fffaf0; box-shadow: 0 1rem 2.4rem rgb(10 32 30 / 35%); font-size: clamp(0.8rem, 1.6vmin, 1.1rem);
   }
   .scale-panel > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
@@ -3322,7 +3360,8 @@
   .scale-facts { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem; margin: 0; }
   .scale-facts dt { font-weight: 700; color: #a6442d; }
   .scale-facts dd { margin: 0; }
-  .scale-actions { display: flex; gap: 0.5rem; margin-top: 0.8rem; }
+  .scale-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
+  .scale-panel .close-app { margin-left: auto; border-color: #a6442d; color: #a6442d; }
   .rejoin-codes { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: flex-start; margin-top: 0.9rem; padding-top: 0.7rem; border-top: 1px solid #d8ccb0; }
   .rejoin-codes figure { margin: 0; text-align: center; }
   .rejoin-codes img { width: min(9rem, 24vw); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.5rem; }
@@ -3676,7 +3715,6 @@
   .scale-gear { position: relative; display: inline-grid; place-items: center; font-size: 2.2em; line-height: 1; }
   .scale-gear svg { display: block; }
   .scale-gear b { position: absolute; font-size: 0.34em; font-weight: 800; color: #183a37; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
-  .scale-note { margin-left: 0.2rem; font-size: 0.6em; opacity: 0.7; }
   .herd-count { position: absolute; left: 50%; bottom: -0.6rem; transform: translateX(-50%); z-index: 3; min-width: 1.9rem; padding: 0.15rem 0.45rem; border: 2px solid #fffaf0; border-radius: 99rem; background: #a6442d; color: #fffaf0; font-size: clamp(0.85rem, 2vmin, 1.6rem); font-weight: 900; line-height: 1.2; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
   @keyframes table-flight {
     0% { opacity: 0.96; transform: translate(0, 0) rotate(-3deg); }
