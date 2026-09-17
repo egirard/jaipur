@@ -1,10 +1,16 @@
 // Table sound effects: short, randomised excerpts of longer recordings so
-// the same move never sounds quite the same twice. Each play picks a
-// volume, a playback rate, a start offset within the recording and a
-// duration, fades in and out, then stops. Effects follow the table's mute
-// and focus state through `setSfxEnabled`. Playback runs through a Web
-// Audio gain node so an effect can sit well above the media element's
-// 1.0 ceiling (the recordings are quiet next to the music bed).
+// the same move never sounds quite the same twice. Each play picks a gain,
+// a playback rate, a start offset within the recording and a duration,
+// fades in and out, then stops. Effects follow the table's mute and focus
+// state through `setSfxEnabled`.
+//
+// The recordings are decoded once into Web Audio buffers and played through
+// buffer sources, not media elements: a media element needs a user gesture
+// to play on stricter browsers, and an AudioContext created outside a
+// gesture stays suspended — which is why a table could play the music
+// (started from a tap) but none of the effects (fired by animations).
+// `unlockSfx` runs from the table's own gesture handlers and both creates
+// and resumes the context; effects then play from anywhere.
 
 export type SfxName = 'camel-herd' | 'pickup-goods' | 'selling-goods' | 'coins-landing' | 'coin-clink';
 
@@ -29,25 +35,42 @@ let baseUrl = '';
 let enabled = true;
 let master = 1;
 let context: AudioContext | undefined;
-const live = new Map<HTMLAudioElement, GainNode | undefined>();
-
-function audioContext(): AudioContext | undefined {
-  if (typeof AudioContext === 'undefined') return undefined;
-  context ??= new AudioContext();
-  if (context.state === 'suspended') void context.resume();
-  return context;
-}
+const buffers = new Map<string, AudioBuffer>();
+const encoded = new Map<string, Promise<ArrayBuffer | null>>();
+const live = new Set<{ source: AudioBufferSourceNode; gain: GainNode }>();
 const between = (range: [number, number]) => range[0] + Math.random() * (range[1] - range[0]);
 
-/** Where the sfx files live (the app's base path + /audio/sfx). */
+/** Where the sfx files live (the app's base path + /audio/sfx). Starts
+ *  fetching the recordings; decoding waits for the context. */
 export function configureSfx(base: string) {
   baseUrl = `${base}/audio/sfx/`;
+  if (typeof window === 'undefined') return;
+  for (const clip of Object.values(CLIPS)) for (const file of clip.files) {
+    if (!encoded.has(file)) encoded.set(file, fetch(baseUrl + file).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null));
+  }
+}
+
+/** Call from a user gesture (any tap or key on the table): creates and
+ *  resumes the audio context, then decodes the recordings. */
+export function unlockSfx() {
+  if (typeof window === 'undefined' || typeof AudioContext === 'undefined') return;
+  context ??= new AudioContext();
+  if (context.state === 'suspended') void context.resume();
+  const ctx = context;
+  for (const [file, promise] of encoded) {
+    if (buffers.has(file)) continue;
+    void promise.then((bytes) => {
+      if (!bytes || buffers.has(file)) return;
+      // decodeAudioData detaches the buffer: hand it a copy so a retry can reuse it.
+      return ctx.decodeAudioData(bytes.slice(0)).then((decoded) => { buffers.set(file, decoded); }).catch(() => undefined);
+    });
+  }
 }
 
 /** Mute/unmute every effect (the table's mute button and focus state). */
 export function setSfxEnabled(on: boolean) {
   enabled = on;
-  if (!on) for (const a of [...live.keys()]) stopNow(a);
+  if (!on) for (const entry of [...live]) stopNow(entry);
 }
 
 /** Master level (the table's volume slider, 1 = the default position). */
@@ -55,11 +78,11 @@ export function setSfxVolume(level: number) {
   master = Math.min(3, Math.max(0, level));
 }
 
-function stopNow(a: HTMLAudioElement) {
-  a.pause();
-  live.get(a)?.disconnect();
-  a.src = '';
-  live.delete(a);
+function stopNow(entry: { source: AudioBufferSourceNode; gain: GainNode }) {
+  try { entry.source.stop(); } catch { /* already ended */ }
+  entry.source.disconnect();
+  entry.gain.disconnect();
+  live.delete(entry);
 }
 
 /** Play one randomised excerpt of an effect after `delayMs`. */
@@ -70,52 +93,45 @@ export function playSfx(name: SfxName, delayMs = 0) {
   const seconds = between(clip.seconds);
   const peak = between(clip.volume) * master;
   const rate = between(clip.rate);
-  const fadeOutMs = clip.fadeOut ?? FADE_OUT_MS;
+  const fadeOut = (clip.fadeOut ?? FADE_OUT_MS) / 1000;
   window.setTimeout(() => {
-    if (!enabled || peak <= 0) return;
-    const a = new Audio(baseUrl + file);
-    a.preload = 'auto';
-    a.playbackRate = rate;
-    const ctx = audioContext();
-    // Through a gain node when Web Audio is there (gain may exceed 1);
-    // otherwise the element's own volume, capped at 1.
-    let gain: GainNode | undefined;
-    if (ctx) {
-      gain = ctx.createGain();
-      gain.gain.value = 0;
-      ctx.createMediaElementSource(a).connect(gain);
-      gain.connect(ctx.destination);
-    } else {
-      a.volume = 0;
+    const ctx = context;
+    const buffer = buffers.get(file);
+    // A source started on a suspended context would queue up and burst out
+    // at the first tap: skip until the table has been touched once.
+    if (!enabled || peak <= 0 || !ctx || !buffer || ctx.state !== 'running') {
+      log.push({ name, file, skipped: !ctx ? 'no-context' : ctx.state !== 'running' ? ctx.state : !buffer ? 'not-decoded' : !enabled ? 'muted' : 'silent', at: Date.now() });
+      return;
     }
-    const setLevel = (v: number) => { if (gain) gain.gain.value = v; else a.volume = Math.min(1, v); };
-    live.set(a, gain);
-    const begin = () => {
-      if (!live.has(a)) return;
-      // Somewhere in the recording, leaving room for the excerpt (plus a
-      // little tail so the fade-out never runs off the end).
-      const room = Math.max(0, (a.duration || 0) - seconds * rate - 0.3);
-      a.currentTime = Math.random() * room;
-      const started = performance.now();
-      const holdMs = seconds * 1000;
-      const tickFade = () => {
-        if (!live.has(a)) return;
-        const t = performance.now() - started;
-        if (t < FADE_IN_MS) setLevel(peak * (t / FADE_IN_MS));
-        else if (t < holdMs - fadeOutMs) setLevel(peak);
-        else if (t < holdMs) setLevel(peak * Math.max(0, (holdMs - t) / fadeOutMs));
-        else { stopNow(a); return; }
-        requestAnimationFrame(tickFade);
-      };
-      a.play().then(() => requestAnimationFrame(tickFade)).catch(() => stopNow(a));
-      log.push({ name, file, seconds: Number(seconds.toFixed(2)), start: Number(a.currentTime.toFixed(2)), peak: Number(peak.toFixed(2)), rate: Number(rate.toFixed(2)), at: Date.now() });
-      if (log.length > 60) log.shift();
-    };
-    if (a.readyState >= 1) begin(); else a.addEventListener('loadedmetadata', begin, { once: true });
-    a.addEventListener('error', () => stopNow(a), { once: true });
+    // Somewhere in the recording, leaving room for the excerpt (plus a
+    // little tail so the fade-out never runs off the end).
+    const room = Math.max(0, buffer.duration - seconds * rate - 0.3);
+    const offset = Math.random() * room;
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = rate;
+    const gain = ctx.createGain();
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(peak, now + FADE_IN_MS / 1000);
+    gain.gain.setValueAtTime(peak, now + Math.max(FADE_IN_MS / 1000, seconds - fadeOut));
+    gain.gain.linearRampToValueAtTime(0, now + seconds);
+    source.connect(gain);
+    gain.connect(ctx.destination);
+    const entry = { source, gain };
+    live.add(entry);
+    source.onended = () => stopNow(entry);
+    source.start(now, offset, seconds * rate + 0.05);
+    log.push({ name, file, seconds: Number(seconds.toFixed(2)), start: Number(offset.toFixed(2)), peak: Number(peak.toFixed(2)), rate: Number(rate.toFixed(2)), at: Date.now() });
+    if (log.length > 60) log.shift();
   }, Math.max(0, delayMs));
 }
 
+/** State for diagnostics and tests (`window.__jaipurSfx`). */
+export function sfxStatus() {
+  return { context: context?.state ?? 'none', decoded: [...buffers.keys()], fetched: [...encoded.keys()], enabled, master, live: live.size };
+}
+
 /** The last plays, for tests (`window.__jaipurSfx`). */
-export const log: Array<{ name: SfxName; file: string; seconds: number; start: number; peak: number; rate: number; at: number }> = [];
-if (typeof window !== 'undefined') (window as unknown as { __jaipurSfx: typeof log }).__jaipurSfx = log;
+export const log: Array<{ name: SfxName; file: string; at: number; seconds?: number; start?: number; peak?: number; rate?: number; skipped?: string }> = [];
+if (typeof window !== 'undefined') Object.assign(window as unknown as Record<string, unknown>, { __jaipurSfx: log, __jaipurSfxStatus: sfxStatus });

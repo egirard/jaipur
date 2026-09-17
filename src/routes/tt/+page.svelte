@@ -8,7 +8,7 @@
   import QRCode from 'qrcode';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
-  import { configureSfx, playSfx, setSfxEnabled, setSfxVolume } from '$lib/sfx';
+  import { configureSfx, playSfx, setSfxEnabled, setSfxVolume, unlockSfx } from '$lib/sfx';
   import StableMarketLayout from '$lib/StableMarketLayout.svelte';
   import TabletopTokenMarket from '$lib/TabletopTokenMarket.svelte';
   import TokenChip from '$lib/TokenChip.svelte';
@@ -722,6 +722,7 @@
     volumeOpenFor = null;
   }
   function startMusic() {
+    unlockSfx(); // runs from the table's gesture handlers: the effects' audio context needs one
     if (!music || musicMuted || musicSuspended || musicPlaying) return;
     music.volume = musicVolume;
     void music.play().then(() => (musicPlaying = true)).catch(() => {});
