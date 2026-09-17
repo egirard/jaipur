@@ -3498,9 +3498,8 @@
   .log-latest { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.4rem 0.35rem 0.7rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fffaf0; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 24%); font-size: 0.78rem; }
   .log-latest > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .log-toggle { display: grid; width: 2rem; height: 2rem; flex: 0 0 auto; place-items: center; padding: 0; border: 0; border-radius: 99rem; background: #315f58; color: white; font: inherit; font-size: 1.1rem; font-weight: 900; line-height: 1; cursor: pointer; }
-  /* The full log opens over the table (upward from the bottom corner, downward from the rotated top one): taller and narrower than the pill, scrolling when long. */
+  /* The full log opens over the table, away from the player's edge ("above" the + from their seat): taller and narrower than the pill, scrolling when long. The top corner is rotated 180°, so the same local "above the pill" rule puts its panel toward the table too. */
   .log-panel { position: absolute; right: 0; bottom: calc(100% + 0.35rem); z-index: 1; display: grid; width: 100%; max-height: min(72vh, 40rem); grid-template-rows: auto minmax(0, 1fr); border: 1px solid #8e826b; border-radius: 0.7rem; background: #fffaf0; box-shadow: 0 0.7rem 1.2rem rgb(10 32 30 / 24%); }
-  .corner-log.inverted .log-panel { top: calc(100% + 0.35rem); right: auto; bottom: auto; left: 0; }
   .log-head { display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.4rem 0.4rem 0.7rem; border-bottom: 1px solid #e4d8bd; font-size: 0.75rem; }
   .log-head span { display: grid; min-width: 1.4rem; min-height: 1.4rem; place-items: center; border-radius: 99rem; background: #315f58; color: white; font-weight: 700; }
   .log-head .log-toggle { margin-left: auto; }
