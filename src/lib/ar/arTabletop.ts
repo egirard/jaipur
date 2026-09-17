@@ -121,46 +121,49 @@ function loadCardImages(base: string): Promise<void> {
 
 /** Card face: the real card icon with the goods name overlaid large and
  *  outlined, so it reads at a glance against the artwork in AR. */
+// Card art is square: the table draws every card as a square, so the AR
+// faces (and the phone view's images) must be too — portrait art had been
+// squashed onto square planes in AR and drawn portrait on the phone.
 function drawCardArt(kind: string): string {
   const c = document.createElement('canvas');
   c.width = 256;
-  c.height = 358;
+  c.height = 256;
   const ctx = c.getContext('2d')!;
   ctx.fillStyle = '#fffaf0';
-  ctx.fillRect(0, 0, 256, 358);
+  ctx.fillRect(0, 0, 256, 256);
   const img = cardImages.get(kind);
   if (img) {
     // cover-fit the icon inside the border
     const iw = img.naturalWidth || 1;
     const ih = img.naturalHeight || 1;
-    const scale = Math.max(232 / iw, 334 / ih);
+    const scale = Math.max(232 / iw, 232 / ih);
     const dw = iw * scale;
     const dh = ih * scale;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(12, 12, 232, 334);
+    ctx.rect(12, 12, 232, 232);
     ctx.clip();
-    ctx.drawImage(img, 128 - dw / 2, 179 - dh / 2, dw, dh);
+    ctx.drawImage(img, 128 - dw / 2, 128 - dh / 2, dw, dh);
     ctx.restore();
   } else {
     ctx.fillStyle = KIND_COLORS[kind] ?? '#888';
-    ctx.fillRect(12, 12, 232, 334);
+    ctx.fillRect(12, 12, 232, 232);
   }
   ctx.strokeStyle = '#183a37';
   ctx.lineWidth = 6;
-  ctx.strokeRect(12, 12, 232, 334);
+  ctx.strokeRect(12, 12, 232, 232);
   // Label band: big, outlined text on a translucent strip.
   ctx.fillStyle = 'rgba(24, 58, 55, 0.55)';
-  ctx.fillRect(12, 280, 232, 66);
+  ctx.fillRect(12, 190, 232, 54);
   ctx.font = 'bold 44px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
   ctx.lineWidth = 8;
   ctx.strokeStyle = '#07110f';
-  ctx.strokeText(kind.toUpperCase(), 128, 314);
+  ctx.strokeText(kind.toUpperCase(), 128, 217);
   ctx.fillStyle = '#fffbea';
-  ctx.fillText(kind.toUpperCase(), 128, 314);
+  ctx.fillText(kind.toUpperCase(), 128, 217);
   return c.toDataURL('image/png');
 }
 
@@ -220,28 +223,28 @@ function drawGlowRing(): string {
 function drawBackArt(): string {
   const c = document.createElement('canvas');
   c.width = 256;
-  c.height = 358;
+  c.height = 256;
   const ctx = c.getContext('2d')!;
   const img = cardImages.get('card-back');
   if (img) {
-    const scale = Math.max(256 / (img.naturalWidth || 1), 358 / (img.naturalHeight || 1));
+    const scale = Math.max(256 / (img.naturalWidth || 1), 256 / (img.naturalHeight || 1));
     const dw = (img.naturalWidth || 1) * scale;
     const dh = (img.naturalHeight || 1) * scale;
-    ctx.drawImage(img, 128 - dw / 2, 179 - dh / 2, dw, dh);
+    ctx.drawImage(img, 128 - dw / 2, 128 - dh / 2, dw, dh);
     return c.toDataURL('image/png');
   }
   ctx.fillStyle = '#183a37';
-  ctx.fillRect(0, 0, 256, 358);
+  ctx.fillRect(0, 0, 256, 256);
   ctx.strokeStyle = '#2e5a55';
   ctx.lineWidth = 3;
-  for (let i = -358; i < 256; i += 24) {
+  for (let i = -256; i < 256; i += 24) {
     ctx.beginPath();
     ctx.moveTo(i, 0);
-    ctx.lineTo(i + 358, 358);
+    ctx.lineTo(i + 256, 256);
     ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(i + 358, 0);
-    ctx.lineTo(i, 358);
+    ctx.moveTo(i + 256, 0);
+    ctx.lineTo(i, 256);
     ctx.stroke();
   }
   ctx.fillStyle = '#fffaf0';

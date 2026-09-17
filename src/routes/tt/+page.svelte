@@ -137,7 +137,28 @@
     if (!press) { press = { pointers: new Set(), fired: false }; presses.set(cardId, press); }
     return press;
   };
-  function startLongPress(event: PointerEvent, cardId: string) {
+  /** Svelte action: run a handler on touch-down rather than on release
+   *  (the table should answer the finger at once), swallowing the click
+   *  that follows; a click with no press before it (keyboard) still runs. */
+  function tapDown(node: HTMLElement, handler: () => void) {
+    let pressedAt = 0;
+    const down = (e: PointerEvent) => {
+      if ((e.pointerType === 'mouse' && e.button !== 0) || (node as HTMLButtonElement).disabled) return;
+      pressedAt = performance.now();
+      handler();
+    };
+    const click = (e: MouseEvent) => {
+      if (performance.now() - pressedAt < 800) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+      if (!(node as HTMLButtonElement).disabled) handler();
+    };
+    node.addEventListener('pointerdown', down);
+    node.addEventListener('click', click, true);
+    return { update(next: () => void) { handler = next; }, destroy() { node.removeEventListener('pointerdown', down); node.removeEventListener('click', click, true); } };
+  }
+  // A hand card is selected the moment it is touched; if the touch turns
+  // into a hold (a peek), that selection is undone — hold means look, tap
+  // means stage.
+  function startLongPress(event: PointerEvent, cardId: string, onTap?: () => void) {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const press = pressFor(cardId);
     press.pointers.add(event.pointerId);
@@ -145,10 +166,18 @@
     if (press.pointers.size > 1) return; // this card is already held
     clearTimeout(press.timer);
     press.fired = false;
+    onTap?.();
     press.timer = setTimeout(() => {
       press.fired = true;
+      // A hold is a peek, not a selection: toggle back once the table is
+      // free again (the touch-down toggle may still be publishing).
+      if (onTap) void retryWhenFree(onTap);
       if (!revealedCardIds.includes(cardId)) revealedCardIds = [...revealedCardIds, cardId];
     }, 380);
+  }
+  async function retryWhenFree(action: () => void) {
+    for (let i = 0; i < 40 && busy; i++) await new Promise((r) => setTimeout(r, 50));
+    action();
   }
   function endLongPress(event: PointerEvent, cardId: string) {
     const press = presses.get(cardId);
@@ -465,8 +494,12 @@
       marketFacingEnabled = localStorage.getItem('jaipur:tabletop:turn-facing-market') === 'on';
       configureSfx(base);
       musicMuted = localStorage.getItem('jaipur:tabletop:music') === 'off';
-      const savedVolume = Number(localStorage.getItem('jaipur:tabletop:music-volume'));
-      if (Number.isFinite(savedVolume) && savedVolume > 0 && savedVolume <= 1) musicVolume = savedVolume;
+      sfxMuted = localStorage.getItem('jaipur:tabletop:sfx') === 'off';
+      const level = (key: string) => { const v = Number(localStorage.getItem(key)); return Number.isFinite(v) && v >= 0 && v <= 1 && localStorage.getItem(key) !== null ? v : undefined; };
+      masterVolume = level('jaipur:tabletop:volume') ?? 1;
+      // 'music-volume' was the older single music level.
+      musicLevel = level('jaipur:tabletop:music-level') ?? level('jaipur:tabletop:music-volume') ?? 0.35;
+      sfxLevel = level('jaipur:tabletop:sfx-level') ?? 1;
       startMusic(); // plays now where autoplay is allowed, else on the first gesture
       const savedHands = localStorage.getItem('jaipur:tabletop:show-hands');
       if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
@@ -710,7 +743,14 @@
   let music = $state<HTMLAudioElement>();
   let musicMuted = $state(false);
   let musicPlaying = $state(false);
-  let musicVolume = $state(0.35);
+  // Levels: the corner speaker's slider is a master over everything; the
+  // options panel sets music and effects separately, each with its own mute.
+  let masterVolume = $state(1);
+  let musicLevel = $state(0.35);
+  let sfxLevel = $state(1);
+  let sfxMuted = $state(false);
+  const musicVolume = $derived(masterVolume * musicLevel);
+  const allMuted = $derived(musicMuted && sfxMuted);
   // Music pauses while the table's window is in the background or unfocused
   // and resumes when it comes back (the mute choice is untouched).
   let musicSuspended = $state(false);
@@ -745,18 +785,40 @@
   }
   // Sound effects (see $lib/sfx) follow the mute button, the volume slider
   // and the focus state, so one control governs all table audio.
-  $effect(() => { setSfxEnabled(!musicMuted && !musicSuspended); });
-  $effect(() => { setSfxVolume(musicVolume / 0.35); }); // 1 at the slider's default; the clips carry their own gain
-  function toggleMusic() {
-    musicMuted = !musicMuted;
-    localStorage.setItem('jaipur:tabletop:music', musicMuted ? 'off' : 'on');
-    if (musicMuted) pauseMusic(); else startMusic();
+  $effect(() => { setSfxEnabled(!sfxMuted && !musicSuspended); });
+  $effect(() => { setSfxVolume(masterVolume * sfxLevel); }); // 1 at the defaults; the clips carry their own gain
+  $effect(() => { if (music) music.volume = musicVolume; });
+  function setMusicMuted(muted: boolean) {
+    musicMuted = muted;
+    localStorage.setItem('jaipur:tabletop:music', muted ? 'off' : 'on');
+    if (muted) pauseMusic(); else startMusic();
   }
+  function setSfxMuted(muted: boolean) {
+    sfxMuted = muted;
+    localStorage.setItem('jaipur:tabletop:sfx', muted ? 'off' : 'on');
+  }
+  /** The corner speaker: everything off, or everything back on. */
+  function toggleMusic() {
+    const mute = !allMuted;
+    setMusicMuted(mute);
+    setSfxMuted(mute);
+  }
+  const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+  /** The corner slider: master level over music and effects; raising it from silence unmutes both. */
   function setMusicVolume(value: number) {
-    musicVolume = Math.min(1, Math.max(0, value));
-    localStorage.setItem('jaipur:tabletop:music-volume', musicVolume.toFixed(2));
-    if (music) music.volume = musicVolume;
-    if (musicMuted && musicVolume > 0) { musicMuted = false; localStorage.setItem('jaipur:tabletop:music', 'on'); startMusic(); }
+    masterVolume = clamp01(value);
+    localStorage.setItem('jaipur:tabletop:volume', masterVolume.toFixed(2));
+    if (allMuted && masterVolume > 0) toggleMusic();
+  }
+  function setMusicLevel(value: number) {
+    musicLevel = clamp01(value);
+    localStorage.setItem('jaipur:tabletop:music-level', musicLevel.toFixed(2));
+    if (musicMuted && musicLevel > 0) setMusicMuted(false);
+  }
+  function setSfxLevel(value: number) {
+    sfxLevel = clamp01(value);
+    localStorage.setItem('jaipur:tabletop:sfx-level', sfxLevel.toFixed(2));
+    if (sfxMuted && sfxLevel > 0) setSfxMuted(false);
   }
   function pressStart(event: PointerEvent, seat: Seat) {
     if (event.button !== 0 && event.pointerType === 'mouse') return;
@@ -784,6 +846,17 @@
     if (!pressDragged && inButton && event.type === 'pointerup') toggleMusic();
     pressDragged = false;
     keepVolumeOpen(volumeOpenFor); // stays out for a moment after the press
+  }
+  /** A tap anywhere else ends what was pending: the options panel closes
+   *  (unless the tap is inside it or on a gear), a staged sale lapses unless
+   *  the tap is on a token stack or the sale prompt, and a draw awaiting
+   *  confirmation is undone unless the tap is on the prompt or the card. */
+  function tapElsewhere(event: PointerEvent) {
+    const target = event.target as Element | null;
+    const within = (selector: string) => Boolean(target?.closest?.(selector));
+    if (scalePanelOpen && !within('.scale-panel') && !within('.options-gear')) scalePanelOpen = false;
+    if (pendingSale && !within('[data-token-kind]') && !within('.market-prompt')) cancelSale();
+    if (pendingDraw && !within('.market-prompt') && !within('[data-market-card-id]') && !within('.deck')) void abandonPendingDraw();
   }
   function onWindowFocusChange() {
     const away = document.hidden || !document.hasFocus();
@@ -2301,7 +2374,7 @@
 {/snippet}
 
 <svelte:window
-  onpointerdown={(e) => { startMusic(); closeVolumeOutside(e); }}
+  onpointerdown={(e) => { startMusic(); closeVolumeOutside(e); tapElsewhere(e); }}
   onkeydown={startMusic}
   onfocus={onWindowFocusChange}
   onblur={onWindowFocusChange}
@@ -2313,10 +2386,10 @@
   <button
     type="button"
     class="orientation-toggle music-toggle"
-    class:muted={musicMuted}
-    data-music={musicMuted ? 'off' : 'on'}
-    aria-pressed={!musicMuted}
-    aria-label={musicMuted ? 'Unmute background music (hold for volume)' : 'Mute background music (hold for volume)'}
+    class:muted={allMuted}
+    data-music={allMuted ? 'off' : 'on'}
+    aria-pressed={!allMuted}
+    aria-label={allMuted ? 'Unmute all table sound (hold for volume)' : 'Mute all table sound (hold for volume)'}
     onpointerdown={(e) => pressStart(e, seat)}
     onpointermove={pressMove}
     onpointerup={pressEnd}
@@ -2325,7 +2398,7 @@
     onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMusic(); } }}
   ><svg viewBox="0 0 48 48" width="1em" height="1em" aria-hidden="true">
       <path fill="currentColor" d="M8 18h8l10-8v28l-10-8H8z"/>
-      {#if musicMuted}
+      {#if allMuted}
         <path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M32 18l10 12M42 18L32 30"/>
       {:else}
         <path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M31 17a9 9 0 010 14M36 12a16 16 0 010 24"/>
@@ -2337,9 +2410,9 @@
     min="0"
     max="1"
     step="0.05"
-    value={musicVolume}
+    value={masterVolume}
     tabindex={volumeOpenFor === seat ? 0 : -1}
-    aria-label="Music volume"
+    aria-label="Table volume"
     data-music-volume={seat}
     oninput={(e) => { setMusicVolume(Number((e.currentTarget as HTMLInputElement).value)); keepVolumeOpen(seat); }}
     onpointerdown={() => keepVolumeOpen(seat)}
@@ -2495,8 +2568,9 @@
             data-table-hand-card={card.id}
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
             data-card-revealed={(showHands && player.uid !== lobby.bot?.uid) || revealedCardIds.includes(card.id) || undefined}
-            onclick={() => { if (consumeLongPress(card.id)) return; if (canSelectReturns(player.uid) && !loaded) toggleReturn(player.uid, card.id); }}
-            onpointerdown={(e) => startLongPress(e, card.id)}
+            onclick={(e) => { e.preventDefault(); }}
+            onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && canSelectReturns(player.uid) && !loaded) { e.preventDefault(); void toggleReturn(player.uid, card.id); } }}
+            onpointerdown={(e) => startLongPress(e, card.id, canSelectReturns(player.uid) && !loaded ? () => { void toggleReturn(player.uid, card.id); } : undefined)}
             onpointerup={(e) => endLongPress(e, card.id)}
             onpointercancel={(e) => endLongPress(e, card.id)}
             onpointerleave={(e) => endLongPress(e, card.id)}
@@ -2525,8 +2599,11 @@
           disabled={!canSelectReturns(player.uid) || (lobby.round?.herds[player.uid]?.length ?? 0) === 0}
           aria-label={`Camel pile: tap to select the next camel for a trade (${herdSelectedCount(player.uid)} selected)`}
           data-table-herd-pile={player.uid}
-          onclick={() => toggleHerd(player.uid)}
+          use:tapDown={() => toggleHerd(player.uid)}
         >
+          {#if (lobby.round?.herds[player.uid] ?? []).length === 0}
+            <img class="table-herd-card shadow" src={componentImage('camel')} alt="" draggable="false" style="--pile-index:0" />
+          {/if}
           {#each (lobby.round?.herds[player.uid] ?? []).slice(-5) as camel, index}
             {@const selected = selectedReturnIds(player.uid).includes(camel.id)}
             {@const loaded = Object.values(exchangeLoads(player.uid)).includes(camel.id)}
@@ -2809,7 +2886,7 @@
               aria-label={card.kind === 'camel' ? `Take all ${round.market.filter(({ kind }) => kind === 'camel').length} camels` : `Take ${label(card.kind)} ${card.id}`}
               data-market-card-id={card.id}
               data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
-              onclick={() => chooseMarket(card)}
+              use:tapDown={() => { void chooseMarket(card); }}
             >
               <PieceArt kind={card.kind} label={label(card.kind)} detail={card.id} />
             </button>
@@ -2827,7 +2904,7 @@
                   : `Place a selected private card face-down beside ${label(card.kind)}`}
                 data-table-exchange-target={card.id}
                 data-return-seat={marketFacingSeat}
-                onclick={() => chooseExchangeTarget(activeUid, card.id)}
+                use:tapDown={() => { void chooseExchangeTarget(activeUid, card.id); }}
               >
                 {#if loadedReturnId}
                   {@const loadedCamel = round.herds[activeUid]?.some(({ id }) => id === loadedReturnId)}
@@ -2923,16 +3000,29 @@
         >Show hands {showHands ? 'on' : 'off'}</button>
         <small>Hand cards lie face up on the table. On by default against a computer opponent{showHandsChoice === 'auto' ? ' (as now)' : ''}; off with two players, whose phones show them their cards. Hold a card to peek either way.</small>
       </div>
-      <div class="facing-option">
+      <div class="facing-option sound-option">
         <button
           type="button"
           class="orientation-toggle"
           aria-pressed={!musicMuted}
           aria-label="Background music"
-          data-music={musicMuted ? 'off' : 'on'}
-          onclick={toggleMusic}
+          data-music-option={musicMuted ? 'off' : 'on'}
+          onclick={() => setMusicMuted(!musicMuted)}
         >Music {musicMuted ? 'off' : 'on'}</button>
-        <small>"Marketplace Melody" loops quietly in the background. The speaker in each player's corner mutes it too; the choice is remembered.</small>
+        <input type="range" min="0" max="1" step="0.05" value={musicLevel} aria-label="Music level" data-music-level oninput={(e) => setMusicLevel(Number((e.currentTarget as HTMLInputElement).value))} />
+        <small>"Marketplace Melody" loops in the background.</small>
+      </div>
+      <div class="facing-option sound-option">
+        <button
+          type="button"
+          class="orientation-toggle"
+          aria-pressed={!sfxMuted}
+          aria-label="Sound effects"
+          data-sfx-option={sfxMuted ? 'off' : 'on'}
+          onclick={() => setSfxMuted(!sfxMuted)}
+        >Effects {sfxMuted ? 'off' : 'on'}</button>
+        <input type="range" min="0" max="1" step="0.05" value={sfxLevel} aria-label="Effects level" data-sfx-level oninput={(e) => setSfxLevel(Number((e.currentTarget as HTMLInputElement).value))} />
+        <small>Camels, pickups, sales and coins. The speaker in each player's corner mutes everything and its slider is a master level; all choices are remembered.</small>
       </div>
       <div class="scale-row">
         <span>Screen diagonal</span>
@@ -3304,6 +3394,8 @@
   }
   .herd-pile { position: relative; width: clamp(5rem, 9vw, 14rem); height: var(--hand-card-size); }
   .herd-pile .table-herd-card { position: absolute; padding: 0; background: none; overflow: hidden; pointer-events: none; left: calc(var(--pile-index) * clamp(0.55rem, 1.1vmin, 1.4rem)); width: var(--hand-card-size); height: var(--hand-card-size); border: 2px solid #a6442d; border-radius: 0.55rem; transform: rotate(calc((var(--pile-index) - 2) * 2deg)); }
+  /* An empty herd shows where the camels will go. */
+  .herd-pile .table-herd-card.shadow { opacity: 0.28; filter: grayscale(1); border-style: dashed; }
   .herd-pile .table-herd-card.selected { transform: rotate(calc((var(--pile-index) - 2) * 2deg)) translateY(-14%); }
   .seat-tokens { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .seat-tokens .earned { width: clamp(1.4rem, 3.2vmin, 3.6rem); height: clamp(1.4rem, 3.2vmin, 3.6rem); flex: 0 0 auto; }
@@ -3349,6 +3441,7 @@
   .scale-panel .table-id { letter-spacing: 0.14em; }
   .scale-panel .facing-option { display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; }
   .scale-panel .facing-option small { flex: 1; line-height: 1.25; color: #5d5240; }
+  .scale-panel .sound-option input[type='range'] { width: 7rem; flex: 0 0 auto; accent-color: #a6442d; }
   .scale-panel {
     position: fixed; z-index: 30; left: 50%; top: 50%; transform: translate(-50%, -50%);
     width: min(34rem, 92vw); max-height: calc(100vh - 1.5rem); max-height: calc(100dvh - 1.5rem); overflow-y: auto; overscroll-behavior: contain;
