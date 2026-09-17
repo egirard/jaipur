@@ -702,10 +702,11 @@
   // Music pauses while the table's window is in the background or unfocused
   // and resumes when it comes back (the mute choice is untouched).
   let musicSuspended = $state(false);
-  // Holding the speaker slides a volume control out to the player's right.
+  // Pressing the speaker slides a volume control out to the player's right
+  // for as long as the press lasts: drag along it to set the level, or let
+  // go on the speaker itself to toggle mute. It folds away on release.
   let volumeOpenFor = $state<Seat | null>(null);
-  let holdTimer: ReturnType<typeof setTimeout> | undefined;
-  let holdOpened = false;
+  let pressDragged = false;
   function startMusic() {
     if (!music || musicMuted || musicSuspended || musicPlaying) return;
     music.volume = musicVolume;
@@ -720,7 +721,6 @@
   $effect(() => { setSfxEnabled(!musicMuted && !musicSuspended); });
   $effect(() => { setSfxVolume(musicVolume / 0.35); }); // 1 at the slider's default; the clips carry their own gain
   function toggleMusic() {
-    if (holdOpened) { holdOpened = false; return; } // the hold opened the slider; not a mute
     musicMuted = !musicMuted;
     localStorage.setItem('jaipur:tabletop:music', musicMuted ? 'off' : 'on');
     if (musicMuted) pauseMusic(); else startMusic();
@@ -731,14 +731,31 @@
     if (music) music.volume = musicVolume;
     if (musicMuted && musicVolume > 0) { musicMuted = false; localStorage.setItem('jaipur:tabletop:music', 'on'); startMusic(); }
   }
-  function holdStart(seat: Seat) {
-    clearTimeout(holdTimer);
-    holdOpened = false;
-    holdTimer = setTimeout(() => { holdOpened = true; volumeOpenFor = seat; }, 350);
+  function pressStart(event: PointerEvent, seat: Seat) {
+    if (event.button !== 0 && event.pointerType === 'mouse') return;
+    pressDragged = false;
+    volumeOpenFor = seat;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   }
-  function holdEnd() { clearTimeout(holdTimer); }
-  function closeVolume(event: PointerEvent) {
-    if (volumeOpenFor !== null && !(event.target as Element | null)?.closest?.('.music-control')) volumeOpenFor = null;
+  function pressMove(event: PointerEvent) {
+    if (volumeOpenFor === null || !(event.buttons & 1)) return;
+    const button = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const inButton = event.clientX >= button.left && event.clientX <= button.right && event.clientY >= button.top && event.clientY <= button.bottom;
+    if (inButton && !pressDragged) return; // still on the speaker: a release here toggles mute
+    pressDragged = true;
+    const track = (event.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>('.music-volume')?.getBoundingClientRect();
+    if (!track || track.width === 0) return;
+    let fraction = (event.clientX - track.left) / track.width;
+    if (volumeOpenFor === 1) fraction = 1 - fraction; // the top player's control is rotated
+    setMusicVolume(Math.round(Math.min(1, Math.max(0, fraction)) * 20) / 20);
+  }
+  function pressEnd(event: PointerEvent) {
+    if (volumeOpenFor === null) return;
+    const button = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const inButton = event.clientX >= button.left && event.clientX <= button.right && event.clientY >= button.top && event.clientY <= button.bottom;
+    if (!pressDragged && inButton && event.type === 'pointerup') toggleMusic();
+    pressDragged = false;
+    volumeOpenFor = null;
   }
   function onWindowFocusChange() {
     const away = document.hidden || !document.hasFocus();
@@ -2230,7 +2247,7 @@
 {/snippet}
 
 <svelte:window
-  onpointerdown={(e) => { startMusic(); closeVolume(e); }}
+  onpointerdown={startMusic}
   onkeydown={startMusic}
   onfocus={onWindowFocusChange}
   onblur={onWindowFocusChange}
@@ -2246,12 +2263,12 @@
     data-music={musicMuted ? 'off' : 'on'}
     aria-pressed={!musicMuted}
     aria-label={musicMuted ? 'Unmute background music (hold for volume)' : 'Mute background music (hold for volume)'}
-    onpointerdown={() => holdStart(seat)}
-    onpointerup={holdEnd}
-    onpointercancel={holdEnd}
-    onpointerleave={holdEnd}
+    onpointerdown={(e) => pressStart(e, seat)}
+    onpointermove={pressMove}
+    onpointerup={pressEnd}
+    onpointercancel={pressEnd}
     oncontextmenu={(e) => e.preventDefault()}
-    onclick={toggleMusic}
+    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMusic(); } }}
   ><svg viewBox="0 0 48 48" width="1em" height="1em" aria-hidden="true">
       <path fill="currentColor" d="M8 18h8l10-8v28l-10-8H8z"/>
       {#if musicMuted}
@@ -2267,11 +2284,10 @@
     max="1"
     step="0.05"
     value={musicVolume}
-    tabindex={volumeOpenFor === seat ? 0 : -1}
-    aria-label="Music volume"
+    tabindex="-1"
+    aria-hidden="true"
     data-music-volume={seat}
-    oninput={(e) => setMusicVolume(Number((e.currentTarget as HTMLInputElement).value))}
-    onchange={() => (volumeOpenFor = null)}
+    readonly
   />
   </span>
 {/snippet}
@@ -3267,7 +3283,8 @@
   .music-toggle.muted { opacity: 0.55; }
   /* Held speaker: the volume slider stretches out to the player's right (the
      whole control is rotated for the top player, so "right" follows them). */
-  .music-volume { width: 0; height: 2.2rem; margin: 0; padding: 0; opacity: 0; overflow: hidden; accent-color: #a6442d; transition: width 220ms ease, opacity 180ms; }
+  /* Display only: the press on the speaker owns the pointer and reads the level off this track. */
+  .music-volume { width: 0; height: 2.2rem; margin: 0; padding: 0; opacity: 0; overflow: hidden; accent-color: #a6442d; pointer-events: none; transition: width 220ms ease, opacity 180ms; }
   .music-control.open .music-volume { width: clamp(8rem, 18vmin, 14rem); opacity: 1; }
   .scale-panel .table-id { letter-spacing: 0.14em; }
   .scale-panel .facing-option { display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; }
