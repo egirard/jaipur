@@ -19,7 +19,8 @@ export type ArAsset = { img: string; wM: number; hM: number };
 
 export type ArNode = {
   id: string;
-  kind?: 'card' | 'tile' | 'stack';
+  /** `badge`: a floating count marker with no piece under it (e.g. a herd's size). */
+  kind?: 'card' | 'tile' | 'stack' | 'badge';
   xM: number;
   zM: number;
   rotY?: number;

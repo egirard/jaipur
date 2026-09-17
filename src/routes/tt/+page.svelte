@@ -196,7 +196,7 @@
   function publishAr() {
     if (actionAnimating) { arPublishHeld = true; return; }
     arPublishHeld = false;
-    void tick().then(() => ar?.publishFromState(lobby));
+    void tick().then(() => ar?.publishFromState(lobby, showHands ? lobby.players.filter((p) => p.uid !== lobby.bot?.uid).map((p) => p.uid) : []));
   }
   let arrivingCardIds = $state<string[]>([]);
   // Safety net: a card hidden as "arriving" whose flight never finished
@@ -702,6 +702,8 @@
   // A player seated from the table itself ("Play without phone") has no phone to see their cards on.
   const hasPhonelessPlayer = $derived(lobby.players.some((p) => p.uid.startsWith('table-')));
   const showHands = $derived(showHandsChoice === 'auto' ? Boolean(lobby.bot) || hasPhonelessPlayer : showHandsChoice === 'on');
+  // Show hands changes what the AR phones may see (placed return cards): republish.
+  $effect(() => { void showHands; publishAr(); });
   // Background music: "Marketplace Melody" (static/audio, see ASSETS.md)
   // loops at low volume. Browsers only start audio after a gesture, so the
   // first tap or key on the table starts it; the mute choice is remembered.
@@ -2829,9 +2831,11 @@
               >
                 {#if loadedReturnId}
                   {@const loadedCamel = round.herds[activeUid]?.some(({ id }) => id === loadedReturnId)}
+                  {@const loadedKind = showHands && activeUid !== lobby.bot?.uid ? round.hands[activeUid]?.find(({ id }) => id === loadedReturnId)?.kind : undefined}
+                  <!-- Show hands: the placed card lies face up here too. -->
                   <img
                     class:arriving={arrivingCardIds.includes(loadedReturnId)}
-                    src={componentImage(loadedCamel ? 'camel' : 'card-back')}
+                    src={componentImage(loadedCamel ? 'camel' : loadedKind ?? 'card-back')}
                     alt=""
                     data-loaded-return={loadedReturnId}
                     data-card-arriving={arrivingCardIds.includes(loadedReturnId) || undefined}

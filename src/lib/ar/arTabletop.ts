@@ -277,6 +277,7 @@ export class ArTabletop {
   viewers = 0;
   onViewersChanged: ((n: number) => void) | null = null;
   private seatNames = new Map<string, string>();
+  private lastPlayers: GameState['players'] = [];
 
   constructor(session?: string, assetBase = '') {
     // Real card art arrives asynchronously; once it has, re-render the
@@ -445,8 +446,10 @@ export class ArTabletop {
   /** Publish artwork + shared scene + per-seat hands from the game state.
    *  Call after the DOM has settled (the market rects are measured live so
    *  AR pieces sit exactly on their on-screen counterparts). */
-  publishFromState(lobby: GameState): void {
+  publishFromState(lobby: GameState, shownHandUids: readonly string[] = []): void {
     if (!this.attached || !this.mPerPx) return;
+    const shown = new Set(shownHandUids);
+    this.lastPlayers = lobby.players;
     // The screen just changed under the phones: refresh their target once
     // the pieces have settled.
     this.refreshTracking();
@@ -503,6 +506,24 @@ export class ArTabletop {
           count: round.deck.length, face: 'back',
         });
       }
+      // Cards placed face-down in the market's return slots: everyone sees
+      // the back (no peeking), the owner's seat scene lays the face over it
+      // (same id, private wins), and with Show hands on the face is public.
+      // Camels on a return slot were already face up. Herd sizes float over
+      // each pile as a badge (public on the table too).
+      for (const player of lobby.players) {
+        const loads = lobby.tabletopIntents[player.uid]?.exchangeLoads ?? {};
+        for (const [targetId, cardId] of Object.entries(loads)) {
+          const node = this.returnNode(round, player.uid, targetId, cardId, wM, shown.has(player.uid));
+          if (node) nodes.push(node);
+        }
+        const herdSize = round.herds[player.uid]?.length ?? 0;
+        const pileRect = document.querySelector(`[data-table-herd-pile="${CSS.escape(player.uid)}"]`)?.getBoundingClientRect();
+        if (herdSize > 0 && pileRect) {
+          const { xM, zM } = this.toMeters(pileRect);
+          nodes.push({ id: `herdcount:${player.uid}`, kind: 'badge', xM, zM, rotY: player.seat === 1 ? Math.PI : 0, count: herdSize, face: 'back' });
+        }
+      }
     }
     this.host.publishScene({ nodes });
 
@@ -522,6 +543,13 @@ export class ArTabletop {
       const myTurn = Boolean(player && round?.status === 'active' && round.activeUid === player.uid && !lobby.pendingDraw);
       const rotY = seatNo === 1 ? Math.PI : 0;
       const handNodes: ArNode[] = [];
+      // The owner sees the faces of their own cards on the return slots.
+      if (player && round) {
+        for (const [targetId, cardId] of Object.entries(intent?.exchangeLoads ?? {})) {
+          const node = this.returnNode(round, player.uid, targetId, cardId, wM, true);
+          if (node) handNodes.push(node);
+        }
+      }
       for (const card of hand) {
         const rect = document
           .querySelector(`[data-table-hand-card="${CSS.escape(card.id)}"]`)
@@ -650,6 +678,30 @@ export class ArTabletop {
         this.host.publishSceneFor(seat, scene);
       }
     }
+  }
+
+  /** A card on a market return slot, sized to the image the table draws
+   *  there (hand-size or market-size art, whichever is closer). */
+  private returnNode(round: NonNullable<GameState['round']>, uid: string, targetId: string, cardId: string, marketWM: number, reveal: boolean): ArNode | undefined {
+    const rect = (document.querySelector(`[data-loaded-return="${CSS.escape(cardId)}"]`)
+      ?? document.querySelector(`[data-table-exchange-target="${CSS.escape(targetId)}"]`))?.getBoundingClientRect();
+    if (!rect || !this.mPerPx) return undefined;
+    const card = round.hands[uid]?.find((c) => c.id === cardId) ?? round.herds[uid]?.find((c) => c.id === cardId);
+    if (!card) return undefined;
+    const small = Math.abs(rect.width * this.mPerPx - marketWM) > marketWM * 0.15;
+    const { xM, zM } = this.toMeters(rect);
+    const seat = round && this.seatOf(uid);
+    const faceUp = card.kind === 'camel' || reveal;
+    return {
+      id: `ret:${cardId}`, kind: 'card', xM, zM, rotY: seat === 1 ? Math.PI : 0,
+      faceUp, peek: false, tap: false,
+      face: `${small ? 's' : 'k'}-${card.kind}`, back: small ? 'back-s' : 'back',
+    };
+  }
+
+  private seatOf(uid: string): 1 | 2 | undefined {
+    const seat = this.lastPlayers.find((p) => p.uid === uid)?.seat;
+    return seat === 1 || seat === 2 ? seat : undefined;
   }
 
   /** Remember a name the table accepted for a seat (so the seat scene can
