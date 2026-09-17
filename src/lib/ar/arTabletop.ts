@@ -303,8 +303,9 @@ export class ArTabletop {
         // The phone view is this seat's private hand controller (what the
         // upstream /hand page does): tapping one of its own cards or camels
         // toggles the piece in the seat's tabletop intent, exactly like a
-        // tap on the table. Only the seat's own pieces are honoured. (AR
-        // `tap` stays viewer-local: a peek/inspect, never a selection.)
+        // tap on the table. The AR view sends the same intent for the seat's
+        // own pieces. Only the seat's own pieces are honoured. (AR `tap` on
+        // anything else stays viewer-local: an inspect, never a selection.)
         if (a.action === 'select' && a.seat && typeof a.nodeId === 'string') {
           const m = /^(hand|herd):(.+)$/.exec(a.nodeId);
           if (m) this.onToggleReturn?.(a.seat, m[2]);
