@@ -702,11 +702,25 @@
   // Music pauses while the table's window is in the background or unfocused
   // and resumes when it comes back (the mute choice is untouched).
   let musicSuspended = $state(false);
-  // Pressing the speaker slides a volume control out to the player's right
-  // for as long as the press lasts: drag along it to set the level, or let
-  // go on the speaker itself to toggle mute. It folds away on release.
+  // Pressing the speaker slides a volume control out to the player's right:
+  // drag along it (in the same press or afterwards) to set the level, or let
+  // go on the speaker itself to toggle mute. It stays out until a tap
+  // elsewhere or three seconds without being touched.
   let volumeOpenFor = $state<Seat | null>(null);
   let pressDragged = false;
+  let volumeTimer: ReturnType<typeof setTimeout> | undefined;
+  const VOLUME_LINGER_MS = 3000;
+  function keepVolumeOpen(seat: Seat) {
+    volumeOpenFor = seat;
+    clearTimeout(volumeTimer);
+    volumeTimer = setTimeout(() => (volumeOpenFor = null), VOLUME_LINGER_MS);
+  }
+  function closeVolumeOutside(event: PointerEvent) {
+    if (volumeOpenFor === null) return;
+    if ((event.target as Element | null)?.closest?.('.music-control')) return;
+    clearTimeout(volumeTimer);
+    volumeOpenFor = null;
+  }
   function startMusic() {
     if (!music || musicMuted || musicSuspended || musicPlaying) return;
     music.volume = musicVolume;
@@ -734,7 +748,7 @@
   function pressStart(event: PointerEvent, seat: Seat) {
     if (event.button !== 0 && event.pointerType === 'mouse') return;
     pressDragged = false;
-    volumeOpenFor = seat;
+    keepVolumeOpen(seat);
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   }
   function pressMove(event: PointerEvent) {
@@ -748,6 +762,7 @@
     let fraction = (event.clientX - track.left) / track.width;
     if (volumeOpenFor === 1) fraction = 1 - fraction; // the top player's control is rotated
     setMusicVolume(Math.round(Math.min(1, Math.max(0, fraction)) * 20) / 20);
+    keepVolumeOpen(volumeOpenFor);
   }
   function pressEnd(event: PointerEvent) {
     if (volumeOpenFor === null) return;
@@ -755,7 +770,7 @@
     const inButton = event.clientX >= button.left && event.clientX <= button.right && event.clientY >= button.top && event.clientY <= button.bottom;
     if (!pressDragged && inButton && event.type === 'pointerup') toggleMusic();
     pressDragged = false;
-    volumeOpenFor = null;
+    keepVolumeOpen(volumeOpenFor); // stays out for a moment after the press
   }
   function onWindowFocusChange() {
     const away = document.hidden || !document.hasFocus();
@@ -2247,7 +2262,7 @@
 {/snippet}
 
 <svelte:window
-  onpointerdown={startMusic}
+  onpointerdown={(e) => { startMusic(); closeVolumeOutside(e); }}
   onkeydown={startMusic}
   onfocus={onWindowFocusChange}
   onblur={onWindowFocusChange}
@@ -2284,10 +2299,11 @@
     max="1"
     step="0.05"
     value={musicVolume}
-    tabindex="-1"
-    aria-hidden="true"
+    tabindex={volumeOpenFor === seat ? 0 : -1}
+    aria-label="Music volume"
     data-music-volume={seat}
-    readonly
+    oninput={(e) => { setMusicVolume(Number((e.currentTarget as HTMLInputElement).value)); keepVolumeOpen(seat); }}
+    onpointerdown={() => keepVolumeOpen(seat)}
   />
   </span>
 {/snippet}
@@ -3283,8 +3299,10 @@
   .music-toggle.muted { opacity: 0.55; }
   /* Held speaker: the volume slider stretches out to the player's right (the
      whole control is rotated for the top player, so "right" follows them). */
-  /* Display only: the press on the speaker owns the pointer and reads the level off this track. */
+  /* While the speaker is pressed, the press owns the pointer and reads the
+     level off this track; once it is out, the track itself can be dragged. */
   .music-volume { width: 0; height: 2.2rem; margin: 0; padding: 0; opacity: 0; overflow: hidden; accent-color: #a6442d; pointer-events: none; transition: width 220ms ease, opacity 180ms; }
+  .music-control.open .music-volume { pointer-events: auto; }
   .music-control.open .music-volume { width: clamp(8rem, 18vmin, 14rem); opacity: 1; }
   .scale-panel .table-id { letter-spacing: 0.14em; }
   .scale-panel .facing-option { display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; }
