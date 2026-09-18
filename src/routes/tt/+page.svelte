@@ -2692,7 +2692,7 @@
   <meta name="description" content="A shared two-player Jaipur tabletop." />
 </svelte:head>
 
-<main class="tabletop" data-e2e-tabletop data-e2e-layout style={`--market-art: url("${componentImage('card-back')}")`}>
+<main class="tabletop" data-e2e-tabletop data-e2e-layout style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg")`}>
   <div class="top-edge edge">
     <div class="inverted-content">
       {#if playerForSeat(1)}
@@ -3253,10 +3253,13 @@
     /* The market pattern is the whole table's background (the mats, rails
        and market float on it). Lighter wash than upstream: AR phones
        image-track this pattern. */
-    background-image: var(--table-mat, linear-gradient(rgb(255 250 238 / 62%), rgb(255 250 238 / 62%)), var(--market-art));
+    /* The owner's mandala tablecloth photo (static/components/mat.jpg):
+       a real cloth is as non-repeating as backgrounds get for the phones'
+       image tracking, and it stays put through play. */
+    background-image: var(--table-mat);
     background-position: center;
-    background-size: 100% 100%;
-    background-color: #e9dcc1;
+    background-size: cover;
+    background-color: #5e150f;
   }
   .edge, .shared-market {
     min-width: 0;

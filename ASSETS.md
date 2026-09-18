@@ -48,3 +48,10 @@ The table plays short randomised excerpts of them (volume, playback rate,
 start offset and length vary per play; see `src/lib/sfx.ts`) when camels are
 taken, a good is taken or traded, a sale starts, and tokens land. They
 follow the music mute button and volume slider.
+
+# Table mat
+
+`static/components/mat.jpg` is a photograph of a mandala tablecloth supplied
+by the project owner on 2026-09-18 (cropped to the cloth). It is the
+tabletop's background and, being a real non-repeating cloth, the pattern
+the AR phones image-track.

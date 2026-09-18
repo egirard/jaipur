@@ -20,7 +20,6 @@
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
 import html2canvas from 'html2canvas';
-import { drawTrackingMat } from './trackingMat';
 import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene } from './arHost';
 import type { Card, GameState } from '../jaipur-rules';
 
@@ -346,7 +345,6 @@ export class ArTabletop {
     this.mPerPx = physicalInfo(readDiagInches()).mPerCssPx;
     this.attached = true;
     this.host.connect();
-    void this.refreshMat();
     this.refreshTracking(0);
     addEventListener('resize', this.onResize);
     // Browser zoom / moving to another monitor changes the pixel ratio.
@@ -373,7 +371,6 @@ export class ArTabletop {
   private onResize = () => {
     this.mPerPx = physicalInfo(currentDiagInches()).mPerCssPx;
     this.watchDpr();
-    void this.refreshMat();
     this.refreshTracking(300);
     this.onGeometryChanged?.();
   };
@@ -391,18 +388,6 @@ export class ArTabletop {
     this.lastTrackingJpeg = ''; // force a republish even if pixels match
     this.refreshTracking(200);
     this.onGeometryChanged?.();
-  }
-
-  /** The non-repeating background the phones track (see trackingMat.ts),
-   *  regenerated for the viewport size and handed to the page's CSS. */
-  private matKey = '';
-  private async refreshMat(): Promise<void> {
-    await loadCardImages(this.base);
-    const key = `${innerWidth}x${innerHeight}`;
-    if (key === this.matKey) return;
-    this.matKey = key;
-    const url = drawTrackingMat(cardImages.get('card-back'), innerWidth, innerHeight, Math.min(devicePixelRatio || 1, 1.5));
-    document.documentElement.style.setProperty('--table-mat', `url("${url}")`);
   }
 
   /** Re-capture the screen and republish it as the tracked image, debounced
