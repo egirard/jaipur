@@ -31,6 +31,12 @@ export type ArViewerDiag = {
 };
 import type { Card, GameState } from '../jaipur-rules';
 
+/** What the table last published for the phones to track: the whole
+ *  screen (target 0) and the patches cut from it (targets 1..n), each with
+ *  its screen rectangle (CSS px) so the page can outline it in place. */
+export type ArTrackingTarget = { index: number; rect: { left: number; top: number; width: number; height: number }; widthM: number; heightM: number; xM: number; zM: number };
+export type ArTrackingTargets = { epoch: number; at: number; targets: ArTrackingTarget[] };
+
 export type ArJoinHandler = (seat: string, name: string) => void;
 /** A seated phone asks for a computer opponent of the given level. */
 export type ArBotRequestHandler = (seat: string, difficulty: string) => void;
@@ -111,7 +117,9 @@ const STATIC_CAPTURE_IGNORE = [
   '.player-seat > *', '.join-seat > *', '.market-stage', '.market-prompt', '.help-icon', '.help-corner',
   '.corner-log', '.music-control', '.options-gear', '.scale-panel', '.tutorial', '.tabletop-mark',
   '.table-card-flight', '.table-token-flight', '[data-token-kind]', '.bonus-stack', '.seat-tokens',
-  '.score-stack', '.seat-seals', '.rejoin', '.shared-market > header'
+  '.score-stack', '.seat-seals', '.rejoin', '.shared-market > header',
+  // Diagnostics overlays must never become part of the target they describe.
+  '.ar-targets', '.ar-diag'
 ].join(', ');
 
 const cardImages = new Map<string, HTMLImageElement>();
@@ -299,6 +307,12 @@ export class ArTabletop {
   onViewersChanged: ((n: number) => void) | null = null;
   /** A phone's registration report (see the API doc's `diag` action). */
   onViewerDiag: ((viewerId: string, seat: string | undefined, report: ArViewerDiag) => void) | null = null;
+  /** The tracking targets just published (whole screen + patches), with their screen rectangles. */
+  onTrackingPublished: ((targets: ArTrackingTargets) => void) | null = null;
+  lastTargets: ArTrackingTargets | null = null;
+  /** Diagnostics the phones should show (published as `scene.debug`). */
+  debug: { targets?: boolean; diag?: boolean } | null = null;
+  get epoch(): number { return this.trackingEpoch; }
   private seatNames = new Map<string, string>();
   private lastPlayers: GameState['players'] = [];
 
@@ -409,7 +423,7 @@ export class ArTabletop {
    *  pieces. A whole 55" screen cannot fit in a phone's view at arm's
    *  length, and the image tracker only detects what it can mostly see;
    *  a patch a quarter of the band wide can. */
-  private trackingPatches(canvas: HTMLCanvasElement, scale: number): ArTrackingPatch[] {
+  private trackingPatches(canvas: HTMLCanvasElement, scale: number, rects: ArTrackingTarget[]): ArTrackingPatch[] {
     const band = document.querySelector('.shared-market')?.getBoundingClientRect();
     if (!band || !this.mPerPx || band.width < 200 || band.height < 100) return [];
     const patches: ArTrackingPatch[] = [];
@@ -424,6 +438,7 @@ export class ArTabletop {
       c.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
       const { xM, zM } = this.toMeters(new DOMRect(rect.left, rect.top, rect.width, rect.height));
       patches.push({ image: c.toDataURL('image/jpeg', 0.85), widthM: rect.width * this.mPerPx, xM, zM });
+      rects.push({ index: rects.length + 1, rect, widthM: rect.width * this.mPerPx, heightM: rect.height * this.mPerPx, xM, zM });
     }
     return patches;
   }
@@ -474,7 +489,14 @@ export class ArTabletop {
       if (jpeg !== this.lastTrackingJpeg && this.attached) {
         this.lastTrackingJpeg = jpeg;
         this.trackingEpoch += 1;
-        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, this.trackingPatches(canvas, scale));
+        const rects: ArTrackingTarget[] = [];
+        const patches = this.trackingPatches(canvas, scale, rects);
+        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, patches);
+        this.lastTargets = {
+          epoch: this.trackingEpoch, at: Date.now(),
+          targets: [{ index: 0, rect: { left: 0, top: 0, width: innerWidth, height: innerHeight }, widthM: innerWidth * this.mPerPx, heightM: innerHeight * this.mPerPx, xM: 0, zM: 0 }, ...rects],
+        };
+        this.onTrackingPublished?.(this.lastTargets);
       }
     } catch (error) {
       console.warn('AR: screen capture failed', error);
@@ -579,7 +601,7 @@ export class ArTabletop {
         }
       }
     }
-    this.host.publishScene({ nodes });
+    this.host.publishScene({ nodes, ...(this.debug ? { debug: this.debug } : {}) });
 
     // Hands: private per seat, drawn on top of the owner's face-down cards
     // on the table (measured from the live DOM, so the AR face sits exactly

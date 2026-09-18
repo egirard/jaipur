@@ -36,7 +36,7 @@
     isGood
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
-  import { ArTabletop, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type SalePreview } from '$lib/ar/arTabletop';
+  import { ArTabletop, type ArTrackingTargets, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type SalePreview } from '$lib/ar/arTabletop';
   import { botActionEvent, botEngineVersion, chooseBotAction, createBotObservation, type BotObservation, type JaipurAction } from '$lib/jaipur-bot';
   import StrongBotWorker from '$lib/jaipur-bot.worker?worker';
   import type { StrongBotRequest, StrongBotResponse } from '$lib/jaipur-bot.worker';
@@ -61,6 +61,20 @@
   // (a phone that stops reporting drops out after 12 s).
   type PhoneDiag = ArViewerDiag & { seat?: string; at: number };
   let phoneDiags = $state<Record<string, PhoneDiag>>({});
+  // Diagnostics options (Table options): outline the AR tracking targets on
+  // the screen and print each phone's registration numbers on its seat.
+  // Both are also published to the phones (scene.debug), which draw the
+  // same outlines in AR and show their own numbers.
+  let showArTargets = $state(false);
+  let showArDiag = $state(false);
+  let arTargets = $state<ArTrackingTargets | null>(null);
+  function setArDebug(next: { targets?: boolean; diag?: boolean }) {
+    if (next.targets !== undefined) showArTargets = next.targets;
+    if (next.diag !== undefined) showArDiag = next.diag;
+    localStorage.setItem('jaipur:tabletop:ar-targets', showArTargets ? 'on' : 'off');
+    localStorage.setItem('jaipur:tabletop:ar-diag', showArDiag ? 'on' : 'off');
+    if (ar) { ar.debug = { targets: showArTargets, diag: showArDiag }; publishAr(); }
+  }
   const phoneDiagFor = (seat: Seat): PhoneDiag | undefined =>
     Object.values(phoneDiags).filter((d) => d.seat === String(seat)).sort((a, b) => b.at - a.at)[0];
   const diagWord = (d: PhoneDiag | undefined) =>
@@ -75,6 +89,26 @@
       d.epoch != null ? `epoch ${d.epoch}` : ''
     ].filter(Boolean);
     return parts.join(' · ');
+  };
+  const cm = (m: number) => `${(m * 100).toFixed(1)} cm`;
+  const signed = (m: number) => `${m < 0 ? '−' : '+'}${Math.abs(m).toFixed(3)} m`;
+  /** Which phones are registered from a given target right now (fresh reports only). */
+  const phonesOnTarget = (index: number) =>
+    Object.values(phoneDiags).filter((d) => d.target === index && (d.state === 'tracked' || d.state === 'emulated'));
+  const targetLive = (index: number) => {
+    const on = phonesOnTarget(index);
+    return on.some((d) => d.state === 'tracked') ? 'tracked' : on.length ? 'emulated' : '';
+  };
+  /** The numbers block printed on a seat when "Show AR diagnostics" is on. */
+  const diagBlock = (d: PhoneDiag | undefined) => {
+    if (!d) return 'AR phone: none reporting';
+    const age = Math.round((Date.now() - d.at) / 1000);
+    const targetWord = d.target < 0 ? 'none yet' : d.target === 0 ? '0 (whole screen)' : `${d.target} (patch)`;
+    return [
+      `${d.state} · frames ${d.frames} · tracked ${d.tracked} · held ${d.emulated} · ${d.fps} fps · report ${age}s ago`,
+      `target ${targetWord} of ${d.targets} · scale ×${d.scale.toFixed(3)} · image ${d.score ?? 'unrated'} · epoch ${d.epoch ?? '?'} (table ${arTargets?.epoch ?? '?'})`,
+      `seen ${d.seen ? 'yes' : 'no'} · last result ${d.sinceResultMs == null ? '—' : `${d.sinceResultMs} ms ago`}`
+    ].join('\n');
   };
   // The AR phone is the way to sit down at this table. The upstream phone
   // controller (/hand, Firebase-driven) is a distinct offering; ?phone=1
@@ -523,6 +557,8 @@
       startMusic(); // plays now where autoplay is allowed, else on the first gesture
       const savedHands = localStorage.getItem('jaipur:tabletop:show-hands');
       if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
+      showArTargets = localStorage.getItem('jaipur:tabletop:ar-targets') === 'on';
+      showArDiag = localStorage.getItem('jaipur:tabletop:ar-diag') === 'on';
       const pageParams = new URLSearchParams(location.search);
       // The Firebase channel is disabled for this AR fork: the table is
       // the only writer (phones join and watch over the AR relay), so the
@@ -681,6 +717,8 @@
       ar.onViewerDiag = (viewerId, seat, report) => {
         phoneDiags = { ...phoneDiags, [viewerId]: { ...report, seat, at: Date.now() } };
       };
+      ar.onTrackingPublished = (targets) => (arTargets = targets);
+      ar.debug = { targets: showArTargets, diag: showArDiag };
       setInterval(() => {
         const cutoff = Date.now() - 12000;
         const fresh = Object.fromEntries(Object.entries(phoneDiags).filter(([, d]) => d.at > cutoff && d.state !== 'ended'));
@@ -1795,6 +1833,7 @@
         return Boolean(lobby.winnerUid);
       },
       demo: () => runAnimationDemo(),
+      demoSale: (seat: Seat, kind: Good, count: number) => demoSale(seat, kind, count),
       demoStep: (index: number, seat: Seat) => DEMO_CATEGORIES[index].run(seat)
     };
   }
@@ -2526,6 +2565,10 @@
         <!-- The seat's AR phone: how its registration is going, as a dot. -->
         <span class={`ar-dot ${pd?.state}`} data-ar-dot={seat} data-ar-state={pd?.state} title={`AR phone ${diagWord(pd)} · ${pd ? diagLine(pd) : ''}`} aria-label={`AR phone ${diagWord(pd)}`}></span>
       {/if}
+      {#if showArDiag}
+        <!-- Diagnostics option: this seat's phone registration numbers, printed on the mat. -->
+        <pre class="ar-diag" data-ar-diag-seat={seat} aria-label={`AR diagnostics for Player ${seat}`}>{diagBlock(phoneDiagFor(seat))}</pre>
+      {/if}
       {#if scoring || lobby.round?.status === 'complete'}
         <span class="score-stack">
           {#if scoring && scoring.stage !== 'pending'}
@@ -3004,6 +3047,18 @@
     {/if}
   </section>
 
+  {#if showArTargets && arTargets}
+    <!-- Diagnostics option: the tracking targets the phones were sent, outlined where they sit on the screen. -->
+    <div class="ar-targets" aria-hidden="true" data-ar-targets={arTargets.epoch}>
+      {#each arTargets.targets as t (t.index)}
+        {@const live = targetLive(t.index)}
+        <div class={`ar-target ${t.index === 0 ? 'whole' : 'patch'} ${live ? `live-${live}` : ''}`} style={`left:${t.rect.left}px;top:${t.rect.top}px;width:${t.rect.width}px;height:${t.rect.height}px`}>
+          <span class="ar-target-label">Target {t.index} · {t.index === 0 ? 'whole screen' : 'patch'} · {cm(t.widthM)} × {cm(t.heightM)}{t.index === 0 ? ` · epoch ${arTargets.epoch}` : ` · centre ${signed(t.xM)}, ${signed(t.zM)}`}{phonesOnTarget(t.index).map((d) => ` · ${d.seat ? `P${d.seat}` : 'spectator'} ${d.state === 'tracked' ? 'locked' : 'holding'}`).join('')}</span>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
   {#if scalePanelOpen && physical}
     {@const cardW = 0.0856 / physical.mPerCssPx}
     {@const cardH = 0.05398 / physical.mPerCssPx}
@@ -3032,6 +3087,14 @@
           onclick={toggleShowHands}
         >Show hands {showHands ? 'on' : 'off'}</button>
         <small>Hand cards lie face up on the table. On by default against a computer opponent{showHandsChoice === 'auto' ? ' (as now)' : ''}; off with two players, whose phones show them their cards. Hold a card to peek either way.</small>
+      </div>
+      <div class="facing-option diag-option">
+        <label><input type="checkbox" checked={showArTargets} data-ar-targets-option onchange={(e) => setArDebug({ targets: (e.currentTarget as HTMLInputElement).checked })} /> Show AR tracking targets</label>
+        <small>Outlines what the phones are told to track: the whole screen (target 0, blue) and the mat patches cut from it (red). A target turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
+      </div>
+      <div class="facing-option diag-option">
+        <label><input type="checkbox" checked={showArDiag} data-ar-diag-option onchange={(e) => setArDebug({ diag: (e.currentTarget as HTMLInputElement).checked })} /> Show AR diagnostics</label>
+        <small>Prints each phone's registration numbers on its player's mat (and on the phone itself). See docs/TRACKING-DIAGNOSTICS.md in ARViewer for what each number means.</small>
       </div>
       <div class="facing-option sound-option">
         <button
@@ -3114,20 +3177,6 @@
     </section>
   {/if}
 
-  {#if devMode}
-    <div class="dev-anim top" aria-label="Animation demos, top side">
-      <span>Initiate animation</span>
-      <button type="button" onclick={() => demoSale(1, 'diamond', 3)}>3 diamonds</button>
-      <button type="button" onclick={() => demoSale(1, 'silver', 2)}>2 silver</button>
-      <button type="button" onclick={() => demoSale(1, 'leather', 5)}>5 leather</button>
-    </div>
-    <div class="dev-anim bottom" aria-label="Animation demos, bottom side">
-      <span>Initiate animation</span>
-      <button type="button" onclick={() => demoSale(2, 'diamond', 3)}>3 diamonds</button>
-      <button type="button" onclick={() => demoSale(2, 'silver', 2)}>2 silver</button>
-      <button type="button" onclick={() => demoSale(2, 'leather', 5)}>5 leather</button>
-    </div>
-  {/if}
 
   {#if demo}
     {@const demoLabel = `${demo.title} · Player ${demo.seat} (${demo.seat === 1 ? 'top' : 'bottom'})`}
@@ -3515,6 +3564,18 @@
   .ar-dot.emulated { background: #e0a100; }
   .ar-dot.searching, .ar-dot.lost { background: #c92a2a; }
   .turn-state + .ar-dot { margin-left: 0.4rem; vertical-align: middle; }
+  .scale-panel .diag-option label { display: flex; flex: 0 0 auto; align-items: center; gap: 0.45rem; font-weight: 700; color: #183a37; }
+  .scale-panel .diag-option input { width: 1.2em; height: 1.2em; accent-color: #a6442d; }
+  /* Diagnostics: the tracking targets outlined on the screen (never captured). */
+  .ar-targets { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
+  .ar-target { position: absolute; box-sizing: border-box; border: 3px dashed #1c7ed6; border-radius: 4px; }
+  .ar-target.patch { border-color: #d6336c; background: rgb(214 51 108 / 8%); }
+  .ar-target.live-tracked { border-color: #2f9e44; border-style: solid; background: rgb(47 158 68 / 12%); }
+  .ar-target.live-emulated { border-color: #e0a100; border-style: solid; background: rgb(224 161 0 / 10%); }
+  .ar-target-label { position: absolute; left: 0.3rem; top: 0.3rem; padding: 0.15rem 0.45rem; border-radius: 0.4rem; background: rgb(255 250 240 / 92%); color: #183a37; font: 700 0.7rem/1.3 ui-monospace, Menlo, monospace; white-space: nowrap; }
+  .ar-target.whole > .ar-target-label { top: auto; bottom: 0.3rem; left: 50%; transform: translateX(-50%); }
+  /* Diagnostics: a phone's registration numbers on its seat (never captured). */
+  .ar-diag { justify-self: start; margin: 0; padding: 0.25rem 0.5rem; border-radius: 0.5rem; background: rgb(255 250 240 / 88%); color: #183a37; font: 0.68rem/1.35 ui-monospace, Menlo, monospace; white-space: pre; pointer-events: none; }
   .scale-panel .close-app { margin-left: auto; border-color: #a6442d; color: #a6442d; }
   .rejoin-codes { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: flex-start; margin-top: 0.9rem; padding-top: 0.7rem; border-top: 1px solid #d8ccb0; }
   .rejoin-codes figure { margin: 0; text-align: center; }
@@ -3861,11 +3922,6 @@
   .confirm-mark { position: absolute; right: 0.15rem; top: 0.15rem; z-index: 3; display: grid; width: 1.8em; height: 1.8em; place-items: center; border-radius: 50%; background: #1d7a4a; color: #eafff0; font-size: clamp(0.9rem, 2.4vmin, 2rem); font-weight: 900; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); }
   @keyframes confirm-pulse { 0%, 100% { box-shadow: 0 0 0 4px rgb(29 122 74 / 30%); } 50% { box-shadow: 0 0 0 9px rgb(29 122 74 / 12%); } }
   .market-prompt button.cancel { border-color: #a6442d; color: #a6442d; background: #fff4f0; }
-  .dev-anim { position: fixed; z-index: 25; display: flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.5rem; border: 1px dashed #a6442d; border-radius: 0.6rem; background: rgb(255 244 240 / 92%); font-size: 0.7rem; }
-  .dev-anim span { font-weight: 700; color: #a6442d; text-transform: uppercase; letter-spacing: 0.06em; }
-  .dev-anim button { min-height: 36px; padding: 0.2rem 0.55rem; border: 1px solid #a6442d; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #a6442d; }
-  .dev-anim.bottom { left: calc(var(--rail-width) + 1rem); bottom: 0.4rem; }
-  .dev-anim.top { right: calc(var(--rail-width) + 1rem); top: 0.4rem; transform: rotate(180deg); }
   .scale-gear { position: relative; display: inline-grid; place-items: center; font-size: 2.2em; line-height: 1; }
   .scale-gear svg { display: block; }
   .scale-gear b { position: absolute; font-size: 0.34em; font-weight: 800; color: #183a37; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }

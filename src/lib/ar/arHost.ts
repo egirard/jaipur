@@ -63,6 +63,10 @@ export type ArScene = {
   /** Host-defined buttons the phone view offers; pressing one sends
    *  `{action:'control', data:{id}}`. */
   controls?: { id: string; label: string }[];
+  /** Diagnostics the host asks viewers to show (shared scene only):
+   *  `targets` outlines the tracking targets in AR, `diag` prints the
+   *  viewer's registration numbers on screen. */
+  debug?: { targets?: boolean; diag?: boolean };
 };
 
 /** An action forwarded by the relay; viewerId/seat are relay-stamped. */
