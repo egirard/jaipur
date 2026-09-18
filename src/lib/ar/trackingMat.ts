@@ -7,13 +7,10 @@
 // offered was the opposite: one four-fold-symmetric tile repeated under a
 // 62% white wash.
 //
-// This mat is a bazaar mandala cloth — deep maroon ground, rings of large
-// paisley teardrops in orange, gold, green and cream with pale outlines —
-// but with the symmetry broken on purpose: every petal in every ring has
-// its own colour, size and inner motif from a seeded generator, the rings
-// of each mandala start at their own phase, and the mandalas sit where the
-// mat shows between the panels. Deterministic for a given viewport, so the
-// capture always matches the screen.
+// This mat is a bazaar mandala cloth after the owner's reference — deep
+// maroon ground, one mandala centred on the table — with the symmetry
+// broken on purpose (see drawTrackingMat). Deterministic for a given
+// viewport, so the capture always matches the screen.
 
 const GROUND = '#5e150f';
 const PETALS = ['#e8641c', '#f3b23c', '#c9391f', '#d9822b', '#3f7f2a', '#f6e7c8'];
@@ -36,105 +33,98 @@ function teardrop(ctx: CanvasRenderingContext2D, w: number, h: number) {
   ctx.closePath();
 }
 
-function mandala(ctx: CanvasRenderingContext2D, rnd: () => number, cx: number, cy: number, radius: number) {
-  ctx.save();
-  ctx.translate(cx, cy);
-  // Rings from the outside in; each ring's petal count and phase are its own.
-  const rings = [
-    { r: radius * 0.86, n: 14 + Math.floor(rnd() * 5), len: radius * 0.3, wid: radius * 0.13 },
-    { r: radius * 0.58, n: 10 + Math.floor(rnd() * 4), len: radius * 0.26, wid: radius * 0.12 },
-    { r: radius * 0.33, n: 7 + Math.floor(rnd() * 3), len: radius * 0.2, wid: radius * 0.1 },
-  ];
-  for (const ring of rings) {
-    const phase = rnd() * Math.PI * 2;
-    for (let i = 0; i < ring.n; i++) {
-      const a = phase + (i / ring.n) * Math.PI * 2;
-      const scale = 0.8 + rnd() * 0.45;
-      const fill = PETALS[Math.floor(rnd() * PETALS.length)];
-      const inner = PETALS[Math.floor(rnd() * PETALS.length)];
-      ctx.save();
-      ctx.rotate(a);
-      ctx.translate(0, -ring.r);
-      ctx.scale(scale, scale);
-      // Petal body with a pale outline (the cloth's white stitching).
-      teardrop(ctx, ring.wid, ring.len);
-      ctx.fillStyle = fill;
-      ctx.fill();
-      ctx.lineWidth = Math.max(2, ring.wid * 0.12);
-      ctx.strokeStyle = OUTLINE;
-      ctx.stroke();
-      // Inner motif: a smaller drop, a ring, or a dot — never the same twice.
-      const motif = Math.floor(rnd() * 3);
-      ctx.fillStyle = inner === fill ? '#f6e7c8' : inner;
-      if (motif === 0) { teardrop(ctx, ring.wid * 0.5, ring.len * 0.55); ctx.fill(); }
-      else if (motif === 1) { ctx.beginPath(); ctx.arc(0, ring.len * 0.08, ring.wid * 0.28, 0, Math.PI * 2); ctx.lineWidth = Math.max(2, ring.wid * 0.1); ctx.strokeStyle = ctx.fillStyle; ctx.stroke(); }
-      else { ctx.beginPath(); ctx.arc(0, ring.len * 0.1, ring.wid * 0.2, 0, Math.PI * 2); ctx.fill(); }
-      ctx.restore();
-    }
-    // A thin band between rings, dotted at its own spacing.
-    ctx.beginPath();
-    ctx.arc(0, 0, ring.r - ring.len * 0.62, 0, Math.PI * 2);
-    ctx.lineWidth = Math.max(2, radius * 0.012);
-    ctx.strokeStyle = OUTLINE;
-    ctx.stroke();
-    const dots = Math.round(ring.n * (1.6 + rnd()));
-    for (let d = 0; d < dots; d++) {
-      const a = (d / dots) * Math.PI * 2 + rnd() * 0.1;
-      const rr = ring.r - ring.len * 0.62 - radius * 0.035;
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * rr, Math.sin(a) * rr, Math.max(1.5, radius * 0.012), 0, Math.PI * 2);
-      ctx.fillStyle = PETALS[Math.floor(rnd() * PETALS.length)];
-      ctx.fill();
-    }
-  }
-  // Centre medallion.
-  ctx.beginPath(); ctx.arc(0, 0, radius * 0.12, 0, Math.PI * 2); ctx.fillStyle = '#3f7f2a'; ctx.fill();
-  ctx.lineWidth = Math.max(2, radius * 0.015); ctx.strokeStyle = OUTLINE; ctx.stroke();
-  ctx.beginPath(); ctx.arc(0, 0, radius * 0.05, 0, Math.PI * 2); ctx.fillStyle = '#f6e7c8'; ctx.fill();
-  ctx.restore();
-}
 
-/** A data URL for a `width`×`height` CSS-pixel mat (drawn at `scale`). */
+/** A data URL for a `width`×`height` CSS-pixel mat (drawn at `scale`).
+ *
+ *  One mandala centred on the table and reaching its corners, built from
+ *  wedges radiating from the centre. Each wedge carries a sequence of
+ *  medallions (circles with an inner motif) growing outward, like the
+ *  reference cloth's paisley rays. Two things vary, so a glimpse of any
+ *  patch tells the tracker where it is: the wedge's own colouring and
+ *  motifs (orientation, since no two wedges match) and the ring's base
+ *  colour, which drifts from green at the centre through gold and orange
+ *  to red at the rim (distance from the centre). */
 export function drawTrackingMat(_tile: HTMLImageElement | undefined, width: number, height: number, scale = 1): string {
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(width * scale));
   c.height = Math.max(1, Math.round(height * scale));
   const ctx = c.getContext('2d')!;
   ctx.scale(scale, scale);
-  const rnd = seeded(Math.round(width) * 7919 + Math.round(height) * 104729 + 23);
+  const rnd = seeded(Math.round(width) * 7919 + Math.round(height) * 104729 + 29);
+  const cx = width / 2;
+  const cy = height / 2;
+  const R = Math.hypot(cx, cy) * 1.02; // to the corners
   // Ground: maroon, a touch lighter toward the middle.
-  const g = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * 0.7);
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
   g.addColorStop(0, '#7a1f16'); g.addColorStop(1, GROUND);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, width, height);
-  // Mandalas where the mat shows: the gutters beside the market band (the
-  // rails take ~14% each side, the band the middle 60%), the corners beside
-  // the seat mats, and one big one under the market whose outer rings peek
-  // out around the band and between the cards.
-  const R = Math.min(width, height);
-  const spots = [
-    { x: width * 0.5, y: height * 0.5, r: R * 0.62 },
-    { x: width * 0.17, y: height * 0.5, r: R * 0.24 },
-    { x: width * 0.83, y: height * 0.5, r: R * 0.24 },
-    { x: width * 0.17, y: height * 0.08, r: R * 0.17 },
-    { x: width * 0.83, y: height * 0.08, r: R * 0.17 },
-    { x: width * 0.17, y: height * 0.92, r: R * 0.17 },
-    { x: width * 0.83, y: height * 0.92, r: R * 0.17 },
-  ];
-  for (const s of spots) mandala(ctx, rnd, s.x, s.y, s.r);
-  // Loose paisley drops scattered over the ground between mandalas, each
-  // its own size and turn, so even the plain areas carry distinct shapes.
-  for (let i = 0; i < Math.round((width * height) / 60000); i++) {
+
+  // Ring bands: the base colour by distance from the centre.
+  const BANDS = ['#3f7f2a', '#5e9a34', '#c9a227', '#f3b23c', '#e8641c', '#d9822b', '#c9391f', '#a82a1a'];
+  const bandAt = (r: number) => BANDS[Math.min(BANDS.length - 1, Math.floor((r / R) * BANDS.length))];
+
+  const wedges = 28;
+  const half = Math.PI / wedges;
+  // Spokes between wedges: thin pale rays, each with its own dash rhythm.
+  for (let i = 0; i < wedges; i++) {
+    const a = i * 2 * half;
     ctx.save();
-    ctx.translate(rnd() * width, rnd() * height);
-    ctx.rotate(rnd() * Math.PI * 2);
-    const len = R * (0.05 + rnd() * 0.06);
-    teardrop(ctx, len * 0.5, len);
-    ctx.fillStyle = PETALS[Math.floor(rnd() * PETALS.length)];
-    ctx.globalAlpha = 0.9;
-    ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = OUTLINE; ctx.stroke();
+    ctx.translate(cx, cy);
+    ctx.rotate(a);
+    ctx.setLineDash([R * (0.02 + rnd() * 0.03), R * (0.01 + rnd() * 0.02)]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(255, 240, 214, 0.5)';
+    ctx.beginPath(); ctx.moveTo(R * 0.06, 0); ctx.lineTo(R, 0); ctx.stroke();
     ctx.restore();
   }
+  // Concentric rings at the band edges.
+  for (let b = 1; b < BANDS.length; b++) {
+    ctx.beginPath(); ctx.arc(cx, cy, (b / BANDS.length) * R, 0, Math.PI * 2);
+    ctx.lineWidth = 2; ctx.strokeStyle = OUTLINE; ctx.setLineDash([]); ctx.stroke();
+  }
+
+  // Each wedge: medallions marching outward along its middle radius, each
+  // sized to the wedge's width there, coloured by ring band and tinted by
+  // the wedge, with a motif no neighbour shares.
+  for (let i = 0; i < wedges; i++) {
+    const mid = i * 2 * half + half;
+    const wedgeTint = PETALS[Math.floor(rnd() * PETALS.length)];
+    const wedgeMotif = Math.floor(rnd() * 4); // the wedge's signature motif family
+    const wedgeSkew = (rnd() - 0.5) * 0.5; // the medallions sit a little off the wedge's centre line
+    let r = R * 0.07;
+    let k = 0;
+    while (r < R) {
+      const fit = r * Math.sin(half) * 0.92; // half the wedge's width at this radius
+      const rad = Math.min(fit, R * 0.028 + r * 0.055) * (0.85 + rnd() * 0.3);
+      const base = bandAt(r);
+      const x = cx + Math.cos(mid + wedgeSkew * half) * r;
+      const y = cy + Math.sin(mid + wedgeSkew * half) * r;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(mid + Math.PI / 2);
+      // Medallion: band colour, pale outline, a wedge-tinted inner shape.
+      ctx.beginPath(); ctx.arc(0, 0, rad, 0, Math.PI * 2);
+      ctx.fillStyle = base; ctx.fill();
+      ctx.lineWidth = Math.max(1.5, rad * 0.14); ctx.strokeStyle = OUTLINE; ctx.stroke();
+      ctx.fillStyle = wedgeTint === base ? '#f6e7c8' : wedgeTint;
+      const motif = (wedgeMotif + k) % 4; // the family rotates along the ray
+      if (motif === 0) { teardrop(ctx, rad * 0.9, rad * 1.3); ctx.fill(); }
+      else if (motif === 1) { ctx.beginPath(); ctx.arc(0, 0, rad * 0.55, 0, Math.PI * 2); ctx.lineWidth = Math.max(1.5, rad * 0.16); ctx.strokeStyle = ctx.fillStyle; ctx.stroke(); }
+      else if (motif === 2) { ctx.beginPath(); ctx.arc(0, 0, rad * 0.4, 0, Math.PI * 2); ctx.fill(); }
+      else { const pts = 5 + (i % 3); ctx.beginPath(); for (let p = 0; p < pts * 2; p++) { const rr = p % 2 ? rad * 0.3 : rad * 0.62; const a = (p * Math.PI) / pts; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.closePath(); ctx.fill(); }
+      // A small pale dot beside the medallion, on alternating sides, so the
+      // ray reads as a stitched chain like the cloth.
+      ctx.beginPath(); ctx.arc((k % 2 ? 1 : -1) * rad * 1.15, 0, Math.max(1.5, rad * 0.14), 0, Math.PI * 2);
+      ctx.fillStyle = OUTLINE; ctx.fill();
+      ctx.restore();
+      r += rad * 2.35 + R * 0.012;
+      k += 1;
+    }
+  }
+  // Centre medallion.
+  ctx.beginPath(); ctx.arc(cx, cy, R * 0.055, 0, Math.PI * 2); ctx.fillStyle = '#3f7f2a'; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = OUTLINE; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, R * 0.022, 0, Math.PI * 2); ctx.fillStyle = '#f6e7c8'; ctx.fill();
   return c.toDataURL('image/jpeg', 0.9);
 }
