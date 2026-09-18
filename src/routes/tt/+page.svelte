@@ -6,6 +6,7 @@
   import { onMount, tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
+  import type { ArViewerDiag } from '$lib/ar/arTabletop';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
   import { configureSfx, playSfx, setSfxEnabled, setSfxVolume, unlockSfx } from '$lib/sfx';
@@ -56,6 +57,25 @@
   let ar = $state<ArTabletop | undefined>(undefined);
   let arQrs = $state<Array<{ seat: Seat; url: string; image: string }>>([]);
   let arViewers = $state(0);
+  // Registration reports from phones in AR, by viewer id, kept while fresh
+  // (a phone that stops reporting drops out after 12 s).
+  type PhoneDiag = ArViewerDiag & { seat?: string; at: number };
+  let phoneDiags = $state<Record<string, PhoneDiag>>({});
+  const phoneDiagFor = (seat: Seat): PhoneDiag | undefined =>
+    Object.values(phoneDiags).filter((d) => d.seat === String(seat)).sort((a, b) => b.at - a.at)[0];
+  const diagWord = (d: PhoneDiag | undefined) =>
+    !d ? 'no phone' : d.state === 'tracked' ? 'locked' : d.state === 'emulated' ? 'holding' : d.state === 'lost' ? 'lost' : d.state === 'searching' ? 'searching' : d.state === 'no-tracking' ? 'no image tracking' : 'left AR';
+  const diagLine = (d: PhoneDiag) => {
+    const parts = [
+      `${d.tracked}/${d.frames} frames tracked${d.emulated ? `, ${d.emulated} held` : ''}`,
+      `${d.fps} fps`,
+      d.target >= 0 ? (d.target === 0 ? 'whole screen' : `patch ${d.target}`) : 'no target yet',
+      d.scale ? `scale ×${d.scale.toFixed(2)}` : '',
+      d.score ? `image ${d.score}` : '',
+      d.epoch != null ? `epoch ${d.epoch}` : ''
+    ].filter(Boolean);
+    return parts.join(' · ');
+  };
   // The AR phone is the way to sit down at this table. The upstream phone
   // controller (/hand, Firebase-driven) is a distinct offering; ?phone=1
   // brings its QR back for anyone who wants it, never both per player.
@@ -658,6 +678,14 @@
       };
       ar.previewFor = (kind) => (isGood(kind) ? salePreview(kind) : null); // AR-only sale preview
       ar.onViewersChanged = (n) => (arViewers = n);
+      ar.onViewerDiag = (viewerId, seat, report) => {
+        phoneDiags = { ...phoneDiags, [viewerId]: { ...report, seat, at: Date.now() } };
+      };
+      setInterval(() => {
+        const cutoff = Date.now() - 12000;
+        const fresh = Object.fromEntries(Object.entries(phoneDiags).filter(([, d]) => d.at > cutoff && d.state !== 'ended'));
+        if (Object.keys(fresh).length !== Object.keys(phoneDiags).length) phoneDiags = fresh;
+      }, 3000);
       ar.attach();
       arDiag = currentDiagInches();
       refreshPhysical();
@@ -2493,6 +2521,11 @@
         <h2>{player.displayName}</h2>
       </div>
       <strong class="turn-state">{isActive ? 'Your turn' : 'Waiting'}</strong>
+      {#if phoneDiagFor(seat)}
+        {@const pd = phoneDiagFor(seat)}
+        <!-- The seat's AR phone: how its registration is going, as a dot. -->
+        <span class={`ar-dot ${pd?.state}`} data-ar-dot={seat} data-ar-state={pd?.state} title={`AR phone ${diagWord(pd)} · ${pd ? diagLine(pd) : ''}`} aria-label={`AR phone ${diagWord(pd)}`}></span>
+      {/if}
       {#if scoring || lobby.round?.status === 'complete'}
         <span class="score-stack">
           {#if scoring && scoring.stage !== 'pending'}
@@ -3051,6 +3084,17 @@
         <dt>Pixel</dt><dd>{(physical.mPerCssPx * 1000).toFixed(3)} mm · ratio {physical.dpr.toFixed(2)} (browser zoom must be 100%)</dd>
         <dt>Phones</dt><dd>told the table image is {(physical.viewportM[0] * 100).toFixed(1)} cm wide; they re-enter AR to pick up a change.</dd>
       </dl>
+      <!-- What each AR phone reports about its registration (every 2 s). -->
+      <div class="ar-phones">
+        <strong>AR phones</strong>
+        {#if Object.keys(phoneDiags).length === 0}
+          <small>None in AR right now.</small>
+        {:else}
+          {#each Object.entries(phoneDiags) as [id, d] (id)}
+            <small data-ar-phone={id}><span class={`ar-dot ${d.state}`}></span> {d.seat ? `Player ${d.seat}` : 'Spectator'} · <b>{diagWord(d)}</b> · {diagLine(d)} · {Math.round((Date.now() - d.at) / 1000)}s ago</small>
+          {/each}
+        {/if}
+      </div>
       <div class="scale-actions">
         <button type="button" onclick={toggleFullscreen}>{physical.fullscreen ? 'Exit full screen' : 'Full screen'}</button>
         <button type="button" onclick={newTable}>New table</button>
@@ -3463,6 +3507,14 @@
   .scale-facts dt { font-weight: 700; color: #a6442d; }
   .scale-facts dd { margin: 0; }
   .scale-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
+  .ar-phones { display: grid; gap: 0.25rem; margin-top: 0.8rem; font-size: 0.85em; }
+  .ar-phones small { display: flex; align-items: center; gap: 0.35rem; line-height: 1.3; color: #5d5240; }
+  /* Registration dot: green locked, amber holding on a stale sighting, red searching or lost, grey otherwise. */
+  .ar-dot { display: inline-block; width: 0.55em; height: 0.55em; flex: 0 0 auto; border-radius: 50%; background: #9a9a9a; box-shadow: 0 0 0 2px #fffaf0; }
+  .ar-dot.tracked { background: #2f9e44; }
+  .ar-dot.emulated { background: #e0a100; }
+  .ar-dot.searching, .ar-dot.lost { background: #c92a2a; }
+  .turn-state + .ar-dot { margin-left: 0.4rem; vertical-align: middle; }
   .scale-panel .close-app { margin-left: auto; border-color: #a6442d; color: #a6442d; }
   .rejoin-codes { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: flex-start; margin-top: 0.9rem; padding-top: 0.7rem; border-top: 1px solid #d8ccb0; }
   .rejoin-codes figure { margin: 0; text-align: center; }

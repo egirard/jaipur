@@ -21,6 +21,14 @@
 
 import html2canvas from 'html2canvas';
 import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingPatch } from './arHost';
+
+/** What a phone reports about its registration every couple of seconds. */
+export type ArViewerDiag = {
+  state: 'searching' | 'tracked' | 'emulated' | 'lost' | 'no-tracking' | 'ended';
+  frames: number; tracked: number; emulated: number; fps: number;
+  seen: boolean; score: string | null; epoch: number | null;
+  target: number; targets: number; scale: number; sinceResultMs: number | null;
+};
 import type { Card, GameState } from '../jaipur-rules';
 
 export type ArJoinHandler = (seat: string, name: string) => void;
@@ -289,6 +297,8 @@ export class ArTabletop {
   private lastSeatAssetsJson = new Map<string, string>();
   viewers = 0;
   onViewersChanged: ((n: number) => void) | null = null;
+  /** A phone's registration report (see the API doc's `diag` action). */
+  onViewerDiag: ((viewerId: string, seat: string | undefined, report: ArViewerDiag) => void) | null = null;
   private seatNames = new Map<string, string>();
   private lastPlayers: GameState['players'] = [];
 
@@ -324,6 +334,10 @@ export class ArTabletop {
         if (a.action === 'select' && a.seat && typeof a.nodeId === 'string') {
           const m = /^(hand|herd):(.+)$/.exec(a.nodeId);
           if (m) this.onToggleReturn?.(a.seat, m[2]);
+        }
+        // Registration reports from phones in AR: shown, never answered.
+        if (a.action === 'diag' && a.viewerId && a.data && typeof a.data === 'object') {
+          this.onViewerDiag?.(a.viewerId, a.seat, a.data as ArViewerDiag);
         }
         // Host-defined phone buttons (scene.controls).
         if (a.action === 'control' && a.seat) {
