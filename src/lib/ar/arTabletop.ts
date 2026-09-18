@@ -20,7 +20,7 @@
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
 import html2canvas from 'html2canvas';
-import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene } from './arHost';
+import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingPatch } from './arHost';
 import type { Card, GameState } from '../jaipur-rules';
 
 export type ArJoinHandler = (seat: string, name: string) => void;
@@ -390,6 +390,30 @@ export class ArTabletop {
     this.onGeometryChanged?.();
   }
 
+  /** Smaller targets cut from the capture: the mat at each end of the
+   *  market band (between the rails and the cards), which stays clear of
+   *  pieces. A whole 55" screen cannot fit in a phone's view at arm's
+   *  length, and the image tracker only detects what it can mostly see;
+   *  a patch a quarter of the band wide can. */
+  private trackingPatches(canvas: HTMLCanvasElement, scale: number): ArTrackingPatch[] {
+    const band = document.querySelector('.shared-market')?.getBoundingClientRect();
+    if (!band || !this.mPerPx || band.width < 200 || band.height < 100) return [];
+    const patches: ArTrackingPatch[] = [];
+    const w = band.width * 0.3;
+    for (const left of [band.left, band.right - w]) {
+      const rect = { left, top: band.top, width: w, height: band.height };
+      const sx = Math.round(rect.left * scale), sy = Math.round(rect.top * scale);
+      const sw = Math.round(rect.width * scale), sh = Math.round(rect.height * scale);
+      if (sw < 32 || sh < 32) continue;
+      const c = document.createElement('canvas');
+      c.width = sw; c.height = sh;
+      c.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+      const { xM, zM } = this.toMeters(new DOMRect(rect.left, rect.top, rect.width, rect.height));
+      patches.push({ image: c.toDataURL('image/jpeg', 0.85), widthM: rect.width * this.mPerPx, xM, zM });
+    }
+    return patches;
+  }
+
   /** Re-capture the screen and republish it as the tracked image, debounced
    *  (a burst of state changes and their flight animations collapse into
    *  one capture once the screen has settled). */
@@ -436,7 +460,7 @@ export class ArTabletop {
       if (jpeg !== this.lastTrackingJpeg && this.attached) {
         this.lastTrackingJpeg = jpeg;
         this.trackingEpoch += 1;
-        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch);
+        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, this.trackingPatches(canvas, scale));
       }
     } catch (error) {
       console.warn('AR: screen capture failed', error);

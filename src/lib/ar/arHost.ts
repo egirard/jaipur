@@ -17,6 +17,12 @@
 
 export type ArAsset = { img: string; wM: number; hM: number };
 
+/** A smaller tracking target cut from the static layer: its pixels, its
+ *  physical width, and where its centre sits relative to the table centre
+ *  (metres; x right, z toward the bottom edge). A phone that cannot fit
+ *  the whole screen in view registers from whichever patch it sees. */
+export type ArTrackingPatch = { image: string; widthM: number; xM: number; zM: number };
+
 export type ArNode = {
   id: string;
   /** `badge`: a floating count marker with no piece under it (e.g. a herd's size). */
@@ -188,8 +194,8 @@ export class ArHost {
    *  pixels, no moving pieces) and its physical width in meters. Republish
    *  whenever the static layer or the physical scale changes. The layer must
    *  be feature-rich or phones will not lock — see the API doc. */
-  publishTracking(imageJpegDataUrl: string, widthM: number, epoch?: number): void {
-    this.tracking = { image: imageJpegDataUrl, widthM, ...(epoch != null ? { epoch } : {}) };
+  publishTracking(imageJpegDataUrl: string, widthM: number, epoch?: number, patches?: ArTrackingPatch[]): void {
+    this.tracking = { image: imageJpegDataUrl, widthM, ...(epoch != null ? { epoch } : {}), ...(patches?.length ? { patches } : {}) };
     this.send({ type: 'tracking', tracking: this.tracking });
   }
 
