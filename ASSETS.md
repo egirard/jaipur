@@ -51,7 +51,8 @@ follow the music mute button and volume slider.
 
 # Table mat
 
-`static/components/mat.jpg` is a photograph of a mandala tablecloth supplied
-by the project owner on 2026-09-18 (cropped to the cloth). It is the
+`static/components/mat.jpg` is the project owner's generated photograph of a
+mandala tablecloth (docs/ui-fixes/Gemini_Generated_Image_ovkvlkovkvlkovkv.jpg,
+2026-09-18), cropped to the cloth and scaled to 1600px wide. It is the
 tabletop's background and, being a real non-repeating cloth, the pattern
 the AR phones image-track.
