@@ -3253,9 +3253,9 @@
     /* The market pattern is the whole table's background (the mats, rails
        and market float on it). Lighter wash than upstream: AR phones
        image-track this pattern. */
-    background-image: linear-gradient(rgb(255 250 238 / 62%), rgb(255 250 238 / 62%)), var(--market-art);
+    background-image: var(--table-mat, linear-gradient(rgb(255 250 238 / 62%), rgb(255 250 238 / 62%)), var(--market-art));
     background-position: center;
-    background-size: auto, min(40vh, 28rem);
+    background-size: 100% 100%;
     background-color: #e9dcc1;
   }
   .edge, .shared-market {

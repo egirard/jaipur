@@ -20,6 +20,7 @@
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
 import html2canvas from 'html2canvas';
+import { drawTrackingMat } from './trackingMat';
 import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene } from './arHost';
 import type { Card, GameState } from '../jaipur-rules';
 
@@ -97,6 +98,15 @@ export function physicalInfo(diagIn = currentDiagInches()): PhysicalInfo {
 
 /** The game's own card art (static/components/*.webp), loaded once; until
  *  it arrives the art falls back to a plain colored card. */
+/** Everything play changes, left out of the tracked image (matched with
+ *  `Element.matches`, so a selector hits the element and hides its subtree). */
+const STATIC_CAPTURE_IGNORE = [
+  '.player-seat > *', '.join-seat > *', '.market-stage', '.market-prompt', '.help-icon', '.help-corner',
+  '.corner-log', '.music-control', '.options-gear', '.scale-panel', '.tutorial', '.tabletop-mark',
+  '.table-card-flight', '.table-token-flight', '[data-token-kind]', '.bonus-stack', '.seat-tokens',
+  '.score-stack', '.seat-seals', '.rejoin', '.shared-market > header'
+].join(', ');
+
 const cardImages = new Map<string, HTMLImageElement>();
 let cardImagesReady: Promise<void> | null = null;
 function loadCardImages(base: string): Promise<void> {
@@ -282,7 +292,9 @@ export class ArTabletop {
   private seatNames = new Map<string, string>();
   private lastPlayers: GameState['players'] = [];
 
+  private readonly base: string;
   constructor(session?: string, assetBase = '') {
+    this.base = assetBase;
     // Real card art arrives asynchronously; once it has, re-render the
     // assets (the key changes with the art generation) and republish.
     void loadCardImages(assetBase).then(() => {
@@ -333,6 +345,7 @@ export class ArTabletop {
     this.mPerPx = physicalInfo(readDiagInches()).mPerCssPx;
     this.attached = true;
     this.host.connect();
+    void this.refreshMat();
     this.refreshTracking(0);
     addEventListener('resize', this.onResize);
     // Browser zoom / moving to another monitor changes the pixel ratio.
@@ -359,6 +372,7 @@ export class ArTabletop {
   private onResize = () => {
     this.mPerPx = physicalInfo(currentDiagInches()).mPerCssPx;
     this.watchDpr();
+    void this.refreshMat();
     this.refreshTracking(300);
     this.onGeometryChanged?.();
   };
@@ -376,6 +390,18 @@ export class ArTabletop {
     this.lastTrackingJpeg = ''; // force a republish even if pixels match
     this.refreshTracking(200);
     this.onGeometryChanged?.();
+  }
+
+  /** The non-repeating background the phones track (see trackingMat.ts),
+   *  regenerated for the viewport size and handed to the page's CSS. */
+  private matKey = '';
+  private async refreshMat(): Promise<void> {
+    await loadCardImages(this.base);
+    const key = `${innerWidth}x${innerHeight}`;
+    if (key === this.matKey) return;
+    this.matKey = key;
+    const url = drawTrackingMat(cardImages.get('card-back'), innerWidth, innerHeight, Math.min(devicePixelRatio || 1, 1.5));
+    document.documentElement.style.setProperty('--table-mat', `url("${url}")`);
   }
 
   /** Re-capture the screen and republish it as the tracked image, debounced
@@ -413,11 +439,14 @@ export class ArTabletop {
         backgroundColor: '#f5ead3',
         logging: false,
         useCORS: true,
-        // In-flight pieces are transient; leave them out of the target.
-        ignoreElements: (el) =>
-          el.classList?.contains('table-card-flight') || el.classList?.contains('table-token-flight'),
+        // Only what never changes with play goes into the target: the mat,
+        // the panels and the rail headings. Cards, tokens, prompts, logs,
+        // QR codes and controls are left out, so the target stays valid for
+        // the whole game (a target that changed with every move had the
+        // phones re-registering, and the native tracker losing its lock).
+        ignoreElements: (el) => el.matches?.(STATIC_CAPTURE_IGNORE) ?? false,
       });
-      const jpeg = canvas.toDataURL('image/jpeg', 0.8);
+      const jpeg = canvas.toDataURL('image/jpeg', 0.85);
       if (jpeg !== this.lastTrackingJpeg && this.attached) {
         this.lastTrackingJpeg = jpeg;
         this.trackingEpoch += 1;
@@ -454,9 +483,6 @@ export class ArTabletop {
     if (!this.attached || !this.mPerPx) return;
     const shown = new Set(shownHandUids);
     this.lastPlayers = lobby.players;
-    // The screen just changed under the phones: refresh their target once
-    // the pieces have settled.
-    this.refreshTracking();
     const round = lobby.round;
     const sampleRect = document.querySelector('[data-market-card-id]')?.getBoundingClientRect();
     const wM = (sampleRect?.width ?? 60) * this.mPerPx;
