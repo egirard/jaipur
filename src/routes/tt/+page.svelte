@@ -3420,6 +3420,8 @@
     box-shadow: none;
   }
   .shared-market > header { position: absolute; z-index: 3; top: var(--market-edge-inset); left: 50%; display: flex; min-height: 36px; align-items: center; justify-content: center; gap: clamp(0.6rem, 2vw, 3rem); font-size: clamp(0.7rem, 1.5vmin, 1.5rem); transform: translateX(-50%); }
+  /* Labels that sit straight on the (dark) mat read from a cream pill. */
+  .shared-market > header > span, .deck-count { padding: 0.1em 0.6em; border-radius: 99rem; background: rgb(255 250 240 / 88%); }
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
   /* Each player's gear sits at their own edge of the market, on their left. */
@@ -3487,6 +3489,7 @@
   .orientation-toggle[aria-pressed='true'] { border-color: #a6442d; background: #fff4d6; color: #a6442d; }
   .deck { display: grid; grid-template-rows: clamp(1.8rem, 3.5vmin, 3.5rem) var(--table-market-card-size) clamp(1.8rem, 3.5vmin, 3.5rem); place-items: center; gap: clamp(0.25rem, 0.6vmin, 0.75rem); }
   .deck-count { display: flex; min-width: 3rem; align-items: baseline; justify-content: center; gap: 0.3rem; font-size: clamp(0.8rem, 1.4vmin, 1.5rem); }
+  .deck-count { padding: 0.1em 0.6em; border-radius: 99rem; background: rgb(255 250 240 / 88%); }
   .deck-count-top { transform: rotate(180deg); }
   .deck-card {
     width: var(--table-market-card-size);

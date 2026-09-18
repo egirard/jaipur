@@ -139,6 +139,7 @@ function drawCardArt(kind: string): string {
   c.width = 256;
   c.height = 256;
   const ctx = c.getContext('2d')!;
+  // Frame like the table's cards: rounded corners and a thin teal border.
   ctx.fillStyle = '#fffaf0';
   ctx.fillRect(0, 0, 256, 256);
   const img = cardImages.get(kind);
@@ -151,20 +152,20 @@ function drawCardArt(kind: string): string {
     const dh = ih * scale;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(12, 12, 232, 232);
+    ctx.roundRect(6, 6, 244, 244, 22);
     ctx.clip();
     ctx.drawImage(img, 128 - dw / 2, 128 - dh / 2, dw, dh);
     ctx.restore();
   } else {
     ctx.fillStyle = KIND_COLORS[kind] ?? '#888';
-    ctx.fillRect(12, 12, 232, 232);
+    ctx.beginPath(); ctx.roundRect(6, 6, 244, 244, 22); ctx.fill();
   }
-  ctx.strokeStyle = '#183a37';
-  ctx.lineWidth = 6;
-  ctx.strokeRect(12, 12, 232, 232);
+  ctx.strokeStyle = '#315f58';
+  ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.roundRect(6, 6, 244, 244, 22); ctx.stroke();
   // Label band: big, outlined text on a translucent strip.
   ctx.fillStyle = 'rgba(24, 58, 55, 0.55)';
-  ctx.fillRect(12, 190, 232, 54);
+  ctx.beginPath(); ctx.roundRect(8, 190, 240, 58, [0, 0, 20, 20]); ctx.fill();
   ctx.font = 'bold 44px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';

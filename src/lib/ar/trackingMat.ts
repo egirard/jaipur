@@ -1,17 +1,23 @@
 // The table's background as a tracking target. Phones (WebXR image tracking,
-// the native ORB tracker) register the screen by matching features against
-// a capture of it, and a feature matcher wants the opposite of what the
-// upstream table offered: it had tiled one four-fold-symmetric mandala under
-// a 62% white wash — every tile looked like every other (ambiguous matches
-// fail the ratio test) and the wash flattened the contrast (few features).
+// the native ORB tracker) register the screen by matching features against a
+// capture of it. What a feature matcher wants: large, bold, high-contrast
+// shapes (fine texture blurs away at a phone's viewing distance and scores
+// as "too plain"), and no two of them alike (a repeated motif yields
+// ambiguous matches that the ratio test throws out). What the upstream table
+// offered was the opposite: one four-fold-symmetric tile repeated under a
+// 62% white wash.
 //
-// This mat draws the same mandala art, but no two cells alike: each cell is
-// rotated, mirrored and tinted by a seeded generator, and unique ornaments
-// are scattered between them. Lighter wash. Deterministic for a given size,
-// so every render of the same viewport is pixel-identical (the capture must
-// match the screen).
+// This mat is a bazaar mandala cloth — deep maroon ground, rings of large
+// paisley teardrops in orange, gold, green and cream with pale outlines —
+// but with the symmetry broken on purpose: every petal in every ring has
+// its own colour, size and inner motif from a seeded generator, the rings
+// of each mandala start at their own phase, and the mandalas sit where the
+// mat shows between the panels. Deterministic for a given viewport, so the
+// capture always matches the screen.
 
-const PALETTE = ['#a6442d', '#315f58', '#d38b21', '#183a37', '#f0b44d', '#7a2f2a'];
+const GROUND = '#5e150f';
+const PETALS = ['#e8641c', '#f3b23c', '#c9391f', '#d9822b', '#3f7f2a', '#f6e7c8'];
+const OUTLINE = 'rgba(255, 240, 214, 0.85)';
 
 function seeded(seed: number): () => number {
   let s = seed >>> 0 || 1;
@@ -21,68 +27,114 @@ function seeded(seed: number): () => number {
   };
 }
 
+/** A paisley teardrop pointing up, tip at (0, -h/2). */
+function teardrop(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  ctx.beginPath();
+  ctx.moveTo(0, -h / 2);
+  ctx.bezierCurveTo(w * 0.62, -h * 0.18, w * 0.62, h * 0.42, 0, h / 2);
+  ctx.bezierCurveTo(-w * 0.62, h * 0.42, -w * 0.62, -h * 0.18, 0, -h / 2);
+  ctx.closePath();
+}
+
+function mandala(ctx: CanvasRenderingContext2D, rnd: () => number, cx: number, cy: number, radius: number) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  // Rings from the outside in; each ring's petal count and phase are its own.
+  const rings = [
+    { r: radius * 0.86, n: 14 + Math.floor(rnd() * 5), len: radius * 0.3, wid: radius * 0.13 },
+    { r: radius * 0.58, n: 10 + Math.floor(rnd() * 4), len: radius * 0.26, wid: radius * 0.12 },
+    { r: radius * 0.33, n: 7 + Math.floor(rnd() * 3), len: radius * 0.2, wid: radius * 0.1 },
+  ];
+  for (const ring of rings) {
+    const phase = rnd() * Math.PI * 2;
+    for (let i = 0; i < ring.n; i++) {
+      const a = phase + (i / ring.n) * Math.PI * 2;
+      const scale = 0.8 + rnd() * 0.45;
+      const fill = PETALS[Math.floor(rnd() * PETALS.length)];
+      const inner = PETALS[Math.floor(rnd() * PETALS.length)];
+      ctx.save();
+      ctx.rotate(a);
+      ctx.translate(0, -ring.r);
+      ctx.scale(scale, scale);
+      // Petal body with a pale outline (the cloth's white stitching).
+      teardrop(ctx, ring.wid, ring.len);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.lineWidth = Math.max(2, ring.wid * 0.12);
+      ctx.strokeStyle = OUTLINE;
+      ctx.stroke();
+      // Inner motif: a smaller drop, a ring, or a dot — never the same twice.
+      const motif = Math.floor(rnd() * 3);
+      ctx.fillStyle = inner === fill ? '#f6e7c8' : inner;
+      if (motif === 0) { teardrop(ctx, ring.wid * 0.5, ring.len * 0.55); ctx.fill(); }
+      else if (motif === 1) { ctx.beginPath(); ctx.arc(0, ring.len * 0.08, ring.wid * 0.28, 0, Math.PI * 2); ctx.lineWidth = Math.max(2, ring.wid * 0.1); ctx.strokeStyle = ctx.fillStyle; ctx.stroke(); }
+      else { ctx.beginPath(); ctx.arc(0, ring.len * 0.1, ring.wid * 0.2, 0, Math.PI * 2); ctx.fill(); }
+      ctx.restore();
+    }
+    // A thin band between rings, dotted at its own spacing.
+    ctx.beginPath();
+    ctx.arc(0, 0, ring.r - ring.len * 0.62, 0, Math.PI * 2);
+    ctx.lineWidth = Math.max(2, radius * 0.012);
+    ctx.strokeStyle = OUTLINE;
+    ctx.stroke();
+    const dots = Math.round(ring.n * (1.6 + rnd()));
+    for (let d = 0; d < dots; d++) {
+      const a = (d / dots) * Math.PI * 2 + rnd() * 0.1;
+      const rr = ring.r - ring.len * 0.62 - radius * 0.035;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * rr, Math.sin(a) * rr, Math.max(1.5, radius * 0.012), 0, Math.PI * 2);
+      ctx.fillStyle = PETALS[Math.floor(rnd() * PETALS.length)];
+      ctx.fill();
+    }
+  }
+  // Centre medallion.
+  ctx.beginPath(); ctx.arc(0, 0, radius * 0.12, 0, Math.PI * 2); ctx.fillStyle = '#3f7f2a'; ctx.fill();
+  ctx.lineWidth = Math.max(2, radius * 0.015); ctx.strokeStyle = OUTLINE; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 0, radius * 0.05, 0, Math.PI * 2); ctx.fillStyle = '#f6e7c8'; ctx.fill();
+  ctx.restore();
+}
+
 /** A data URL for a `width`×`height` CSS-pixel mat (drawn at `scale`). */
-export function drawTrackingMat(tile: HTMLImageElement | undefined, width: number, height: number, scale = 1): string {
+export function drawTrackingMat(_tile: HTMLImageElement | undefined, width: number, height: number, scale = 1): string {
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(width * scale));
   c.height = Math.max(1, Math.round(height * scale));
   const ctx = c.getContext('2d')!;
   ctx.scale(scale, scale);
-  ctx.fillStyle = '#e9dcc1';
+  const rnd = seeded(Math.round(width) * 7919 + Math.round(height) * 104729 + 23);
+  // Ground: maroon, a touch lighter toward the middle.
+  const g = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * 0.7);
+  g.addColorStop(0, '#7a1f16'); g.addColorStop(1, GROUND);
+  ctx.fillStyle = g;
   ctx.fillRect(0, 0, width, height);
-  const rnd = seeded(Math.round(width) * 7919 + Math.round(height) * 104729 + 17);
-  // Cells about a hand-card wide: dense enough that a phone's view of any
-  // part of the screen holds several distinct cells.
-  const cell = Math.max(90, Math.min(width, height) / 7);
-  const cols = Math.ceil(width / cell);
-  const rows = Math.ceil(height / cell);
-  for (let r = 0; r < rows; r++) {
-    for (let q = 0; q < cols; q++) {
-      const x = q * cell;
-      const y = r * cell;
-      ctx.save();
-      ctx.translate(x + cell / 2, y + cell / 2);
-      ctx.rotate((Math.floor(rnd() * 4) * Math.PI) / 2 + (rnd() - 0.5) * 0.35);
-      if (rnd() < 0.5) ctx.scale(-1, 1);
-      const zoom = 0.85 + rnd() * 0.5;
-      // Subtle tints: enough to tell cells apart, not enough to shout.
-      ctx.filter = `hue-rotate(${Math.round((rnd() - 0.5) * 24)}deg) saturate(${(0.85 + rnd() * 0.3).toFixed(2)}) brightness(${(0.9 + rnd() * 0.2).toFixed(2)})`;
-      const size = cell * zoom;
-      if (tile) ctx.drawImage(tile, -size / 2, -size / 2, size, size);
-      else { ctx.fillStyle = PALETTE[Math.floor(rnd() * PALETTE.length)]; ctx.fillRect(-size / 2, -size / 2, size, size); }
-      ctx.restore();
-    }
-  }
-  // Unique ornaments: rings, diamonds, stars and dots in the palette, each
-  // with its own size and orientation, so no region repeats another.
-  const marks = Math.round((width * height) / (cell * cell) * 1.1);
-  ctx.globalAlpha = 0.6;
-  for (let i = 0; i < marks; i++) {
-    const x = rnd() * width;
-    const y = rnd() * height;
-    const size = cell * (0.1 + rnd() * 0.18);
-    const color = PALETTE[Math.floor(rnd() * PALETTE.length)];
+  // Mandalas where the mat shows: the gutters beside the market band (the
+  // rails take ~14% each side, the band the middle 60%), the corners beside
+  // the seat mats, and one big one under the market whose outer rings peek
+  // out around the band and between the cards.
+  const R = Math.min(width, height);
+  const spots = [
+    { x: width * 0.5, y: height * 0.5, r: R * 0.62 },
+    { x: width * 0.17, y: height * 0.5, r: R * 0.24 },
+    { x: width * 0.83, y: height * 0.5, r: R * 0.24 },
+    { x: width * 0.17, y: height * 0.08, r: R * 0.17 },
+    { x: width * 0.83, y: height * 0.08, r: R * 0.17 },
+    { x: width * 0.17, y: height * 0.92, r: R * 0.17 },
+    { x: width * 0.83, y: height * 0.92, r: R * 0.17 },
+  ];
+  for (const s of spots) mandala(ctx, rnd, s.x, s.y, s.r);
+  // Loose paisley drops scattered over the ground between mandalas, each
+  // its own size and turn, so even the plain areas carry distinct shapes.
+  for (let i = 0; i < Math.round((width * height) / 60000); i++) {
     ctx.save();
-    ctx.translate(x, y);
+    ctx.translate(rnd() * width, rnd() * height);
     ctx.rotate(rnd() * Math.PI * 2);
-    ctx.lineWidth = Math.max(2, size * 0.18);
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    const kind = Math.floor(rnd() * 4);
-    ctx.beginPath();
-    if (kind === 0) { ctx.arc(0, 0, size / 2, 0, Math.PI * 2); ctx.stroke(); }
-    else if (kind === 1) { ctx.moveTo(0, -size / 2); ctx.lineTo(size / 2, 0); ctx.lineTo(0, size / 2); ctx.lineTo(-size / 2, 0); ctx.closePath(); ctx.fill(); }
-    else if (kind === 2) {
-      const points = 5 + Math.floor(rnd() * 3);
-      for (let p = 0; p < points * 2; p++) { const rad = p % 2 ? size / 4 : size / 2; const a = (p * Math.PI) / points; ctx.lineTo(Math.cos(a) * rad, Math.sin(a) * rad); }
-      ctx.closePath(); ctx.fill();
-    } else { ctx.arc(0, 0, size / 4, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(0, 0, size / 2, 0, Math.PI * 2); ctx.stroke(); }
+    const len = R * (0.05 + rnd() * 0.06);
+    teardrop(ctx, len * 0.5, len);
+    ctx.fillStyle = PETALS[Math.floor(rnd() * PETALS.length)];
+    ctx.globalAlpha = 0.9;
+    ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = OUTLINE; ctx.stroke();
     ctx.restore();
   }
-  ctx.globalAlpha = 1;
-  // A light wash keeps the table readable; lighter than before (62%) so the
-  // pattern keeps its contrast for the trackers.
-  ctx.fillStyle = 'rgba(255, 250, 238, 0.4)';
-  ctx.fillRect(0, 0, width, height);
   return c.toDataURL('image/jpeg', 0.9);
 }
