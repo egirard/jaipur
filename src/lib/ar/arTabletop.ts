@@ -38,7 +38,7 @@ import type { Card, GameState } from '../jaipur-rules';
 /** What the table last published for the phones to track: the regions
  *  (player mats, market band), each with its screen rectangle (CSS px)
  *  and its card slots, so the page can outline them in place. */
-export type ArTrackingTarget = { id: string; rect: { left: number; top: number; width: number; height: number }; widthM: number; heightM: number; xM: number; zM: number; slots?: { rect: { left: number; top: number; width: number; height: number } }[] };
+export type ArTrackingTarget = { id: string; seat?: string; rect: { left: number; top: number; width: number; height: number }; widthM: number; heightM: number; xM: number; zM: number; slots?: { rect: { left: number; top: number; width: number; height: number } }[] };
 export type ArTrackingTargets = { epoch: number; at: number; regions: ArTrackingTarget[] };
 
 export type ArJoinHandler = (seat: string, name: string) => void;
@@ -120,7 +120,10 @@ export function physicalInfo(diagIn = currentDiagInches()): PhysicalInfo {
 const STATIC_CAPTURE_IGNORE = [
   '.player-seat > :not(.mat-ornament)', '.join-seat > :not(.mat-ornament)', '.market-stage', '.market-prompt', '.help-icon', '.help-corner',
   '.corner-log', '.music-control', '.options-gear', '.scale-panel', '.tutorial', '.tabletop-mark',
-  '.table-card-flight', '.table-token-flight', '[data-token-kind]', '.bonus-stack', '.seat-tokens',
+  '.table-card-flight', '.table-token-flight', '.bonus-stack', '.seat-tokens',
+  // Token rails: the stack boxes, their art and names stay (the middle of a
+  // rail is a tracking region); the coins, counts and sale marks change.
+  '[data-supply-token-id]', '.rail-count', '.confirm-mark', '.empty-stack',
   '.score-stack', '.seat-seals', '.rejoin', '.shared-market > header',
   // Diagnostics overlays must never become part of the target they describe.
   '.ar-targets', '.ar-diag'
@@ -418,12 +421,14 @@ export class ArTabletop {
     this.onGeometryChanged?.();
   }
 
-  /** The regions the phones track, cut from the capture: each player's
-   *  mat (the ornamented panel, whose face-down cards the viewer draws in
-   *  for every possible count) and the market band (whose cards the
-   *  viewer draws from the shared scene). A player points the phone at
-   *  their own cards or at the market, never at the whole screen, and the
-   *  image tracker only detects what it can mostly see. */
+  /** The regions the phones track, cut from the capture, two per seat: the
+   *  player's mat (the ornamented panel, whose face-down cards the viewer
+   *  draws in for every possible count) and the middle of the player's
+   *  token rail, where they sell. A player points the phone at their own
+   *  cards or at their sell stacks, never at the whole screen or the
+   *  opponent's mat, and the image tracker only detects what it can mostly
+   *  see; each region is marked with its seat so the phone takes only its
+   *  own. */
   private trackingRegions(canvas: HTMLCanvasElement, scale: number, out: ArTrackingTarget[]): ArTrackingRegion[] {
     if (!this.mPerPx) return [];
     const regions: ArTrackingRegion[] = [];
@@ -437,25 +442,31 @@ export class ArTabletop {
       c.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
       return c.toDataURL('image/jpeg', 0.85);
     };
-    for (const seat of [1, 2] as const) {
-      const panel = document.querySelector<HTMLElement>(seat === 1 ? '.top-edge' : '.bottom-edge')?.getBoundingClientRect();
-      if (!panel || panel.width < 100 || panel.height < 50) continue;
-      const mat = crop(panel);
-      if (!mat) continue;
-      const { xM, zM } = this.toMeters(panel);
-      // Hand cells in DOM order; the table fills them from the end (empty
-      // slots sit before the fanned cards), later cells painted over earlier.
-      const cells = [...document.querySelectorAll<HTMLElement>(`[data-seat="${seat}"] [data-table-hand] .hand-cell`)].map((el) => el.getBoundingClientRect());
-      const slots = cells.map((r) => ({ ...this.toMeters(r), wM: r.width * this.mPerPx, hM: r.height * this.mPerPx, rotY: seat === 1 ? Math.PI : 0 }));
-      regions.push({ id: `seat:${seat}`, xM, zM, widthM: panel.width * this.mPerPx, heightM: panel.height * this.mPerPx, mat, compose: 'count', slots, fill: 'end', back: 'back-s' });
-      out.push({ id: `seat:${seat}`, rect: rectOf(panel), widthM: panel.width * this.mPerPx, heightM: panel.height * this.mPerPx, xM, zM, slots: cells.map((r) => ({ rect: rectOf(r) })) });
-    }
-    const band = document.querySelector<HTMLElement>('.shared-market')?.getBoundingClientRect();
-    const bandMat = band && band.width >= 200 && band.height >= 100 ? crop(band) : null;
-    if (band && bandMat) {
-      const { xM, zM } = this.toMeters(band);
-      regions.push({ id: 'market', xM, zM, widthM: band.width * this.mPerPx, heightM: band.height * this.mPerPx, mat: bandMat, compose: 'scene' });
-      out.push({ id: 'market', rect: rectOf(band), widthM: band.width * this.mPerPx, heightM: band.height * this.mPerPx, xM, zM });
+    for (const seatNo of [1, 2] as const) {
+      const seat = String(seatNo);
+      const panel = document.querySelector<HTMLElement>(seatNo === 1 ? '.top-edge' : '.bottom-edge')?.getBoundingClientRect();
+      const mat = panel && panel.width >= 100 && panel.height >= 50 ? crop(panel) : null;
+      if (panel && mat) {
+        const { xM, zM } = this.toMeters(panel);
+        // Hand cells in DOM order; the table fills them from the end (empty
+        // slots sit before the fanned cards), later cells painted over earlier.
+        const cells = [...document.querySelectorAll<HTMLElement>(`[data-seat="${seat}"] [data-table-hand] .hand-cell`)].map((el) => el.getBoundingClientRect());
+        const slots = cells.map((r) => ({ ...this.toMeters(r), wM: r.width * this.mPerPx, hM: r.height * this.mPerPx, rotY: seatNo === 1 ? Math.PI : 0 }));
+        regions.push({ id: `seat:${seat}`, seat, xM, zM, widthM: panel.width * this.mPerPx, heightM: panel.height * this.mPerPx, mat, compose: 'count', slots, fill: 'end', back: 'back-s' });
+        out.push({ id: `seat:${seat}`, seat, rect: rectOf(panel), widthM: panel.width * this.mPerPx, heightM: panel.height * this.mPerPx, xM, zM, slots: cells.map((r) => ({ rect: rectOf(r) })) });
+      }
+      // The middle 60% of the rail's height: the goods stacks, clear of the
+      // bonus tokens at one end and the rail's edge at the other.
+      const rail = document.querySelector<HTMLElement>(`[data-token-view-seat="${seat}"]`)?.getBoundingClientRect();
+      if (rail && rail.width >= 60 && rail.height >= 200) {
+        const r = new DOMRect(rail.left, rail.top + rail.height * 0.2, rail.width, rail.height * 0.6);
+        const sellMat = crop(r);
+        if (sellMat) {
+          const { xM, zM } = this.toMeters(r);
+          regions.push({ id: `sell:${seat}`, seat, xM, zM, widthM: r.width * this.mPerPx, heightM: r.height * this.mPerPx, mat: sellMat, compose: 'mat' });
+          out.push({ id: `sell:${seat}`, seat, rect: rectOf(r), widthM: r.width * this.mPerPx, heightM: r.height * this.mPerPx, xM, zM });
+        }
+      }
     }
     return regions;
   }
@@ -545,7 +556,7 @@ export class ArTabletop {
     // the panel (join QR ↔ player mat) and its card slots. Re-capture when
     // that geometry changes; hand counts do not change it (every slot
     // always has a cell), so play itself never triggers a capture.
-    const geometryKey = ['.top-edge', '.bottom-edge', '.shared-market'].map((sel) => {
+    const geometryKey = ['.top-edge', '.bottom-edge', '[data-token-view-seat="1"]', '[data-token-view-seat="2"]'].map((sel) => {
       const r = document.querySelector(sel)?.getBoundingClientRect();
       return r ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}` : '-';
     }).join('|') + '|' + [...document.querySelectorAll<HTMLElement>('[data-seat] [data-table-hand] .hand-cell')].map((el) => { const r = el.getBoundingClientRect(); return `${Math.round(r.left)},${Math.round(r.top)}`; }).join(';');

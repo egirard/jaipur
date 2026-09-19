@@ -18,19 +18,23 @@
 export type ArAsset = { img: string; wM: number; hM: number };
 
 /** A region of the screen the phones track, published instead of a
- *  screenshot of the whole table: a player's mat or the market band. `mat`
- *  is the region's static layer (JPEG data URL, everything play-varying
- *  left out); the viewer composes the actual target(s) from it. `count`:
- *  the region holds face-down cards in `slots` (filled from the `fill`
- *  end, drawn in slot order), and the viewer bakes one target per count;
- *  `scene`: the viewer draws the shared scene's nodes that lie inside the
- *  region. Positions are metres in the table frame (x right, z toward the
- *  bottom edge, origin at the screen centre). */
+ *  screenshot of the whole table: a player's mat, or the middle of their
+ *  token rail. `mat` is the region's static layer (JPEG data URL,
+ *  everything play-varying left out); the viewer composes the actual
+ *  target(s) from it. `count`: the region holds face-down cards in
+ *  `slots` (filled from the `fill` end, drawn in slot order), and the
+ *  viewer bakes one target per count; `scene`: the viewer draws the shared
+ *  scene's nodes that lie inside the region; `mat`: the static layer is the
+ *  target as it is. A region with `seat` is for that seat's phone only
+ *  (a player never points the phone at the opponent's mat); spectators
+ *  take every region. Positions are metres in the table frame (x right, z
+ *  toward the bottom edge, origin at the screen centre). */
 export type ArTrackingRegion = {
   id: string;
+  seat?: string;
   xM: number; zM: number; widthM: number; heightM: number;
   mat: string;
-  compose: 'count' | 'scene';
+  compose: 'count' | 'scene' | 'mat';
   slots?: { xM: number; zM: number; wM: number; hM: number; rotY: number }[];
   fill?: 'start' | 'end';
   /** Asset id of the back drawn in filled slots. */

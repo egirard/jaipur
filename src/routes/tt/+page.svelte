@@ -2568,10 +2568,6 @@
         <!-- The seat's AR phone: how its registration is going, as a dot. -->
         <span class={`ar-dot ${pd?.state}`} data-ar-dot={seat} data-ar-state={pd?.state} title={`AR phone ${diagWord(pd)} · ${pd ? diagLine(pd) : ''}`} aria-label={`AR phone ${diagWord(pd)}`}></span>
       {/if}
-      {#if showArDiag}
-        <!-- Diagnostics option: this seat's phone registration numbers, printed on the mat. -->
-        <pre class="ar-diag" data-ar-diag-seat={seat} aria-label={`AR diagnostics for Player ${seat}`}>{diagBlock(phoneDiagFor(seat))}</pre>
-      {/if}
       {#if scoring || lobby.round?.status === 'complete'}
         <span class="score-stack">
           {#if scoring && scoring.stage !== 'pending'}
@@ -2791,6 +2787,14 @@
     data-turn-facing-enabled={marketFacingEnabled}
     data-turn-phase={actionAnimating ? 'action' : turnPause ? 'pause' : turnTransitioning ? 'rotation' : 'ready'}
   >
+    <!-- Diagnostics option: each seat's phone registration numbers, at that
+         player's edge of the market (not on their mat: the mat is a tracking
+         target, and anything drawn on it would not be in the target). -->
+    {#if showArDiag}
+      {#each [1, 2] as const as diagSeat}
+        <pre class={`ar-diag for-seat-${diagSeat}`} data-ar-diag-seat={diagSeat} aria-label={`AR diagnostics for Player ${diagSeat}`}>{diagBlock(phoneDiagFor(diagSeat))}</pre>
+      {/each}
+    {/if}
     <!-- Options (gear) in each player's upper-left corner of the market. -->
     {#each [2, 1] as const as gearSeat}
       {@render optionsGear(gearSeat)}
@@ -3056,7 +3060,7 @@
       {#each arTargets.regions as r (r.id)}
         {@const live = targetLive(r.id)}
         <div class={`ar-target region ${live ? `live-${live}` : ''}`} style={`left:${r.rect.left}px;top:${r.rect.top}px;width:${r.rect.width}px;height:${r.rect.height}px`}>
-          <span class="ar-target-label">{r.id} · {cm(r.widthM)} × {cm(r.heightM)} · centre {signed(r.xM)}, {signed(r.zM)}{r.slots?.length ? ` · ${r.slots.length} slots` : ''} · epoch {arTargets.epoch}{phonesOnTarget(r.id).map((d) => ` · ${d.seat ? `P${d.seat}` : 'spectator'} ${d.state === 'tracked' ? 'locked' : 'holding'} (${d.targetId})`).join('')}</span>
+          <span class="ar-target-label">{r.id}{r.seat ? ` (Player ${r.seat}'s phone)` : ''} · {cm(r.widthM)} × {cm(r.heightM)} · centre {signed(r.xM)}, {signed(r.zM)}{r.slots?.length ? ` · ${r.slots.length} slots` : ''} · epoch {arTargets.epoch}{phonesOnTarget(r.id).map((d) => ` · ${d.seat ? `P${d.seat}` : 'spectator'} ${d.state === 'tracked' ? 'locked' : 'holding'} (${d.targetId})`).join('')}</span>
           {#each r.slots ?? [] as sl}
             <!-- Like the table's empty hand slots: three sides only, the edge under the next card left open (the top mat is rotated, so its open edge is on the left). -->
             <i class={`ar-slot ${r.id === 'seat:1' ? 'open-left' : 'open-right'}`} style={`left:${sl.rect.left - r.rect.left}px;top:${sl.rect.top - r.rect.top}px;width:${sl.rect.width}px;height:${sl.rect.height}px`}></i>
@@ -3097,11 +3101,11 @@
       </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArTargets} data-ar-targets-option onchange={(e) => setArDebug({ targets: (e.currentTarget as HTMLInputElement).checked })} /> Show AR tracking targets</label>
-        <small>Outlines the regions the phones track: each player's mat and the market band (red, with the card slots dotted). A region turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
+        <small>Outlines the regions each phone tracks: its player's mat (with the card slots dotted) and the middle of their token rail (red). A region turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
       </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArDiag} data-ar-diag-option onchange={(e) => setArDebug({ diag: (e.currentTarget as HTMLInputElement).checked })} /> Show AR diagnostics</label>
-        <small>Prints each phone's registration numbers on its player's mat (and on the phone itself). See docs/TRACKING-DIAGNOSTICS.md in ARViewer for what each number means.</small>
+        <small>Prints each phone's registration numbers at its player's edge of the market (and on the phone itself). See docs/TRACKING-DIAGNOSTICS.md in ARViewer for what each number means.</small>
       </div>
       <div class="facing-option sound-option">
         <button
@@ -3586,7 +3590,9 @@
   .ar-target.live-emulated { border-color: #e0a100; border-style: solid; background: rgb(224 161 0 / 10%); }
   .ar-target-label { position: absolute; left: 0.3rem; top: 0.3rem; padding: 0.15rem 0.45rem; border-radius: 0.4rem; background: rgb(255 250 240 / 92%); color: #183a37; font: 700 0.7rem/1.3 ui-monospace, Menlo, monospace; white-space: nowrap; }
   /* Diagnostics: a phone's registration numbers on its seat (never captured). */
-  .ar-diag { justify-self: start; margin: 0; padding: 0.25rem 0.5rem; border-radius: 0.5rem; background: rgb(255 250 240 / 88%); color: #183a37; font: 0.68rem/1.35 ui-monospace, Menlo, monospace; white-space: pre; pointer-events: none; }
+  .ar-diag { position: absolute; z-index: 3; margin: 0; padding: 0.25rem 0.5rem; border-radius: 0.5rem; background: rgb(255 250 240 / 88%); color: #183a37; font: 0.68rem/1.35 ui-monospace, Menlo, monospace; white-space: pre; pointer-events: none; }
+  .ar-diag.for-seat-2 { bottom: var(--market-edge-inset); left: calc(var(--market-edge-inset) + 8.5em); }
+  .ar-diag.for-seat-1 { top: var(--market-edge-inset); right: calc(var(--market-edge-inset) + 8.5em); transform: rotate(180deg); }
   .scale-panel .close-app { margin-left: auto; border-color: #a6442d; color: #a6442d; }
   .rejoin-codes { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: flex-start; margin-top: 0.9rem; padding-top: 0.7rem; border-top: 1px solid #d8ccb0; }
   .rejoin-codes figure { margin: 0; text-align: center; }
