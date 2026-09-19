@@ -17,11 +17,25 @@
 
 export type ArAsset = { img: string; wM: number; hM: number };
 
-/** A smaller tracking target cut from the static layer: its pixels, its
- *  physical width, and where its centre sits relative to the table centre
- *  (metres; x right, z toward the bottom edge). A phone that cannot fit
- *  the whole screen in view registers from whichever patch it sees. */
-export type ArTrackingPatch = { image: string; widthM: number; xM: number; zM: number };
+/** A region of the screen the phones track, published instead of a
+ *  screenshot of the whole table: a player's mat or the market band. `mat`
+ *  is the region's static layer (JPEG data URL, everything play-varying
+ *  left out); the viewer composes the actual target(s) from it. `count`:
+ *  the region holds face-down cards in `slots` (filled from the `fill`
+ *  end, drawn in slot order), and the viewer bakes one target per count;
+ *  `scene`: the viewer draws the shared scene's nodes that lie inside the
+ *  region. Positions are metres in the table frame (x right, z toward the
+ *  bottom edge, origin at the screen centre). */
+export type ArTrackingRegion = {
+  id: string;
+  xM: number; zM: number; widthM: number; heightM: number;
+  mat: string;
+  compose: 'count' | 'scene';
+  slots?: { xM: number; zM: number; wM: number; hM: number; rotY: number }[];
+  fill?: 'start' | 'end';
+  /** Asset id of the back drawn in filled slots. */
+  back?: string;
+};
 
 export type ArNode = {
   id: string;
@@ -112,7 +126,7 @@ export class ArHost {
 
   // Everything published is remembered so a reconnect (ours or the relay's
   // restart) can replay the full picture.
-  private tracking: { image: string; widthM: number; epoch?: number } | null = null;
+  private tracking: { image: string; widthM: number; epoch?: number; regions?: ArTrackingRegion[] } | null = null;
   private assets: Record<string, ArAsset> | null = null;
   private seatAssets = new Map<string, Record<string, ArAsset>>();
   private scene: ArScene | null = null;
@@ -198,8 +212,8 @@ export class ArHost {
    *  pixels, no moving pieces) and its physical width in meters. Republish
    *  whenever the static layer or the physical scale changes. The layer must
    *  be feature-rich or phones will not lock — see the API doc. */
-  publishTracking(imageJpegDataUrl: string, widthM: number, epoch?: number, patches?: ArTrackingPatch[]): void {
-    this.tracking = { image: imageJpegDataUrl, widthM, ...(epoch != null ? { epoch } : {}), ...(patches?.length ? { patches } : {}) };
+  publishTracking(imageJpegDataUrl: string, widthM: number, epoch?: number, regions?: ArTrackingRegion[]): void {
+    this.tracking = { image: imageJpegDataUrl, widthM, ...(epoch != null ? { epoch } : {}), ...(regions?.length ? { regions } : {}) };
     this.send({ type: 'tracking', tracking: this.tracking });
   }
 

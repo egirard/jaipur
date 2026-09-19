@@ -7,6 +7,7 @@
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
   import type { ArViewerDiag } from '$lib/ar/arTabletop';
+  import MatOrnament from '$lib/MatOrnament.svelte';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
   import { configureSfx, playSfx, setSfxEnabled, setSfxVolume, unlockSfx } from '$lib/sfx';
@@ -83,7 +84,7 @@
     const parts = [
       `${d.tracked}/${d.frames} frames tracked${d.emulated ? `, ${d.emulated} held` : ''}`,
       `${d.fps} fps`,
-      d.target >= 0 ? (d.target === 0 ? 'whole screen' : `patch ${d.target}`) : 'no target yet',
+      d.targetId ? `target ${d.targetId}` : 'no target yet',
       d.scale ? `scale ×${d.scale.toFixed(2)}` : '',
       d.score ? `image ${d.score}` : '',
       d.epoch != null ? `epoch ${d.epoch}` : ''
@@ -92,21 +93,21 @@
   };
   const cm = (m: number) => `${(m * 100).toFixed(1)} cm`;
   const signed = (m: number) => `${m < 0 ? '−' : '+'}${Math.abs(m).toFixed(3)} m`;
-  /** Which phones are registered from a given target right now (fresh reports only). */
-  const phonesOnTarget = (index: number) =>
-    Object.values(phoneDiags).filter((d) => d.target === index && (d.state === 'tracked' || d.state === 'emulated'));
-  const targetLive = (index: number) => {
-    const on = phonesOnTarget(index);
+  /** Which phones are registered from a given region right now (fresh
+   *  reports only). A target id is `region` or `region#variant`. */
+  const phonesOnTarget = (regionId: string) =>
+    Object.values(phoneDiags).filter((d) => (d.targetId ?? '').split('#')[0] === regionId && (d.state === 'tracked' || d.state === 'emulated'));
+  const targetLive = (regionId: string) => {
+    const on = phonesOnTarget(regionId);
     return on.some((d) => d.state === 'tracked') ? 'tracked' : on.length ? 'emulated' : '';
   };
   /** The numbers block printed on a seat when "Show AR diagnostics" is on. */
   const diagBlock = (d: PhoneDiag | undefined) => {
     if (!d) return 'AR phone: none reporting';
     const age = Math.round((Date.now() - d.at) / 1000);
-    const targetWord = d.target < 0 ? 'none yet' : d.target === 0 ? '0 (whole screen)' : `${d.target} (patch)`;
     return [
       `${d.state} · frames ${d.frames} · tracked ${d.tracked} · held ${d.emulated} · ${d.fps} fps · report ${age}s ago`,
-      `target ${targetWord} of ${d.targets} · scale ×${d.scale.toFixed(3)} · image ${d.score ?? 'unrated'} · epoch ${d.epoch ?? '?'} (table ${arTargets?.epoch ?? '?'})`,
+      `target ${d.targetId ?? 'none yet'} of ${d.targets} · scale ×${d.scale.toFixed(3)} · image ${d.score ?? 'unrated'} · epoch ${d.epoch ?? '?'} (table ${arTargets?.epoch ?? '?'})${d.stale ? ' · STALE' : ''}`,
       `seen ${d.seen ? 'yes' : 'no'} · last result ${d.sinceResultMs == null ? '—' : `${d.sinceResultMs} ms ago`}`
     ].join('\n');
   };
@@ -2388,6 +2389,7 @@
   {@const qr = seatQrs.find((candidate) => candidate.seat === seat)}
   {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
   <section class="join-seat" data-seat={seat} aria-label={`Player ${seat} join code`}>
+    {#each [0, 1, 2, 3] as const as corner}<MatOrnament {seat} {corner} />{/each}
     <div>
       <span class="seat-kicker">Player {seat}</span>
       <h2>Scan to sit here</h2>
@@ -2538,6 +2540,7 @@
     data-player-uid={player.uid}
     aria-label={`Player ${seat}, ${player.displayName}`}
   >
+    {#each [0, 1, 2, 3] as const as corner}<MatOrnament {seat} {corner} />{/each}
     {#if scoring?.winnerBanner && scoring.winnerUid === player.uid}
       <div class="round-winner-banner" data-round-winner-banner role="status">Round winner</div>
     {/if}
@@ -2768,7 +2771,7 @@
   <meta name="description" content="A shared two-player Jaipur tabletop." />
 </svelte:head>
 
-<main class="tabletop" data-e2e-tabletop data-e2e-layout style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg")`}>
+<main class="tabletop" data-e2e-tabletop data-e2e-layout style={`--market-art: url("${componentImage('card-back')}")`}>
   <div class="top-edge edge">
     <div class="inverted-content">
       {#if playerForSeat(1)}
@@ -3050,10 +3053,13 @@
   {#if showArTargets && arTargets}
     <!-- Diagnostics option: the tracking targets the phones were sent, outlined where they sit on the screen. -->
     <div class="ar-targets" aria-hidden="true" data-ar-targets={arTargets.epoch}>
-      {#each arTargets.targets as t (t.index)}
-        {@const live = targetLive(t.index)}
-        <div class={`ar-target ${t.index === 0 ? 'whole' : 'patch'} ${live ? `live-${live}` : ''}`} style={`left:${t.rect.left}px;top:${t.rect.top}px;width:${t.rect.width}px;height:${t.rect.height}px`}>
-          <span class="ar-target-label">Target {t.index} · {t.index === 0 ? 'whole screen' : 'patch'} · {cm(t.widthM)} × {cm(t.heightM)}{t.index === 0 ? ` · epoch ${arTargets.epoch}` : ` · centre ${signed(t.xM)}, ${signed(t.zM)}`}{phonesOnTarget(t.index).map((d) => ` · ${d.seat ? `P${d.seat}` : 'spectator'} ${d.state === 'tracked' ? 'locked' : 'holding'}`).join('')}</span>
+      {#each arTargets.regions as r (r.id)}
+        {@const live = targetLive(r.id)}
+        <div class={`ar-target region ${live ? `live-${live}` : ''}`} style={`left:${r.rect.left}px;top:${r.rect.top}px;width:${r.rect.width}px;height:${r.rect.height}px`}>
+          <span class="ar-target-label">{r.id} · {cm(r.widthM)} × {cm(r.heightM)} · centre {signed(r.xM)}, {signed(r.zM)}{r.slots?.length ? ` · ${r.slots.length} slots` : ''} · epoch {arTargets.epoch}{phonesOnTarget(r.id).map((d) => ` · ${d.seat ? `P${d.seat}` : 'spectator'} ${d.state === 'tracked' ? 'locked' : 'holding'} (${d.targetId})`).join('')}</span>
+          {#each r.slots ?? [] as sl}
+            <i class="ar-slot" style={`left:${sl.rect.left - r.rect.left}px;top:${sl.rect.top - r.rect.top}px;width:${sl.rect.width}px;height:${sl.rect.height}px`}></i>
+          {/each}
         </div>
       {/each}
     </div>
@@ -3090,7 +3096,7 @@
       </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArTargets} data-ar-targets-option onchange={(e) => setArDebug({ targets: (e.currentTarget as HTMLInputElement).checked })} /> Show AR tracking targets</label>
-        <small>Outlines what the phones are told to track: the whole screen (target 0, blue) and the mat patches cut from it (red). A target turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
+        <small>Outlines the regions the phones track: each player's mat and the market band (red, with the card slots dotted). A region turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
       </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArDiag} data-ar-diag-option onchange={(e) => setArDebug({ diag: (e.currentTarget as HTMLInputElement).checked })} /> Show AR diagnostics</label>
@@ -3344,22 +3350,25 @@
     padding: clamp(0.3rem, 0.8vmin, 0.65rem);
     overflow: hidden;
     /* The market pattern is the whole table's background (the mats, rails
-       and market float on it). Lighter wash than upstream: AR phones
-       image-track this pattern. */
-    /* The owner's mandala tablecloth photo (static/components/mat.jpg):
-       a real cloth is as non-repeating as backgrounds get for the phones'
-       image tracking, and it stays put through play. */
-    background-image: var(--table-mat);
+       and market float on it), under a light cream wash. The AR phones no
+       longer track the surface: they track the player mats and the market
+       band (see src/lib/ar/arTabletop.ts, regions). */
+    background-image: linear-gradient(rgb(255 250 238 / 62%), rgb(255 250 238 / 62%)), var(--market-art);
     background-position: center;
-    background-size: cover;
-    background-color: #5e150f;
+    background-size: auto, min(40vh, 28rem);
+    background-color: #f5ead3;
   }
   .edge, .shared-market {
     min-width: 0;
     min-height: 0;
     border: 1px solid #9e8a68;
     border-radius: clamp(0.55rem, 1.3vmin, 1rem);
-    background: #fffaf0;
+    /* The mats carry the card-back pattern too, small and faint under a
+       heavier wash, with the corner ornaments drawn over it: together they
+       give the phones' image tracker its keypoints around a player's cards. */
+    background-color: #fffaf0;
+    background-image: linear-gradient(rgb(255 250 240 / 80%), rgb(255 250 240 / 80%)), var(--market-art);
+    background-size: auto, clamp(5rem, 12vmin, 10rem);
     box-shadow: 0 0.25rem 0.8rem rgb(10 32 30 / 16%);
   }
   .top-edge { grid-column: 2; grid-row: 1; }
@@ -3377,6 +3386,7 @@
     align-items: center;
     gap: 1rem;
     padding: clamp(0.7rem, 1.8vmin, 1.4rem) clamp(5rem, 11vw, 10rem);
+    position: relative;
   }
   .join-seat h2, .player-seat h2 {
     margin: 0;
@@ -3394,12 +3404,12 @@
     height: 100%;
     grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0.25rem;
-    padding: clamp(0.3rem, 0.7vmin, 0.55rem) clamp(1.2rem, 2.6vw, 2.6rem);
+    padding: clamp(0.3rem, 0.7vmin, 0.55rem) clamp(3.6rem, 9vmin, 8rem);
     border: 3px solid transparent;
     border-radius: inherit;
     transition: border-color 180ms ease, background 180ms ease;
   }
-  .player-seat.active { border-color: #d38b21; background: #fff4d6; }
+  .player-seat.active { border-color: #d38b21; }
   .player-seat { position: relative; }
   .bot-thinking {
     position: absolute;
@@ -3516,8 +3526,6 @@
     box-shadow: none;
   }
   .shared-market > header { position: absolute; z-index: 3; top: var(--market-edge-inset); left: 50%; display: flex; min-height: 36px; align-items: center; justify-content: center; gap: clamp(0.6rem, 2vw, 3rem); font-size: clamp(0.7rem, 1.5vmin, 1.5rem); transform: translateX(-50%); }
-  /* Labels that sit straight on the (dark) mat read from a cream pill. */
-  .shared-market > header > span, .deck-count { padding: 0.1em 0.6em; border-radius: 99rem; background: rgb(255 250 240 / 88%); }
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
   /* Each player's gear sits at their own edge of the market, on their left. */
@@ -3569,11 +3577,11 @@
   /* Diagnostics: the tracking targets outlined on the screen (never captured). */
   .ar-targets { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
   .ar-target { position: absolute; box-sizing: border-box; border: 3px dashed #1c7ed6; border-radius: 4px; }
-  .ar-target.patch { border-color: #d6336c; background: rgb(214 51 108 / 8%); }
+  .ar-target.region { border-color: #d6336c; background: rgb(214 51 108 / 6%); }
+  .ar-slot { position: absolute; box-sizing: border-box; border: 1.5px dotted #d6336c; border-radius: 4px; }
   .ar-target.live-tracked { border-color: #2f9e44; border-style: solid; background: rgb(47 158 68 / 12%); }
   .ar-target.live-emulated { border-color: #e0a100; border-style: solid; background: rgb(224 161 0 / 10%); }
   .ar-target-label { position: absolute; left: 0.3rem; top: 0.3rem; padding: 0.15rem 0.45rem; border-radius: 0.4rem; background: rgb(255 250 240 / 92%); color: #183a37; font: 700 0.7rem/1.3 ui-monospace, Menlo, monospace; white-space: nowrap; }
-  .ar-target.whole > .ar-target-label { top: auto; bottom: 0.3rem; left: 50%; transform: translateX(-50%); }
   /* Diagnostics: a phone's registration numbers on its seat (never captured). */
   .ar-diag { justify-self: start; margin: 0; padding: 0.25rem 0.5rem; border-radius: 0.5rem; background: rgb(255 250 240 / 88%); color: #183a37; font: 0.68rem/1.35 ui-monospace, Menlo, monospace; white-space: pre; pointer-events: none; }
   .scale-panel .close-app { margin-left: auto; border-color: #a6442d; color: #a6442d; }
@@ -3605,7 +3613,6 @@
   .orientation-toggle[aria-pressed='true'] { border-color: #a6442d; background: #fff4d6; color: #a6442d; }
   .deck { display: grid; grid-template-rows: clamp(1.8rem, 3.5vmin, 3.5rem) var(--table-market-card-size) clamp(1.8rem, 3.5vmin, 3.5rem); place-items: center; gap: clamp(0.25rem, 0.6vmin, 0.75rem); }
   .deck-count { display: flex; min-width: 3rem; align-items: baseline; justify-content: center; gap: 0.3rem; font-size: clamp(0.8rem, 1.4vmin, 1.5rem); }
-  .deck-count { padding: 0.1em 0.6em; border-radius: 99rem; background: rgb(255 250 240 / 88%); }
   .deck-count-top { transform: rotate(180deg); }
   .deck-card {
     width: var(--table-market-card-size);

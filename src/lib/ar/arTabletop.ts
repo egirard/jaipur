@@ -20,7 +20,7 @@
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
 import html2canvas from 'html2canvas';
-import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingPatch } from './arHost';
+import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingRegion } from './arHost';
 
 /** What a phone reports about its registration every couple of seconds. */
 export type ArViewerDiag = {
@@ -28,14 +28,18 @@ export type ArViewerDiag = {
   frames: number; tracked: number; emulated: number; fps: number;
   seen: boolean; score: string | null; epoch: number | null;
   target: number; targets: number; scale: number; sinceResultMs: number | null;
+  /** The target registered from: `region` or `region#variant` (null before the first lock). */
+  targetId?: string | null;
+  /** The phone's composed targets no longer match the scene (it must re-enter AR to refresh them). */
+  stale?: boolean;
 };
 import type { Card, GameState } from '../jaipur-rules';
 
-/** What the table last published for the phones to track: the whole
- *  screen (target 0) and the patches cut from it (targets 1..n), each with
- *  its screen rectangle (CSS px) so the page can outline it in place. */
-export type ArTrackingTarget = { index: number; rect: { left: number; top: number; width: number; height: number }; widthM: number; heightM: number; xM: number; zM: number };
-export type ArTrackingTargets = { epoch: number; at: number; targets: ArTrackingTarget[] };
+/** What the table last published for the phones to track: the regions
+ *  (player mats, market band), each with its screen rectangle (CSS px)
+ *  and its card slots, so the page can outline them in place. */
+export type ArTrackingTarget = { id: string; rect: { left: number; top: number; width: number; height: number }; widthM: number; heightM: number; xM: number; zM: number; slots?: { rect: { left: number; top: number; width: number; height: number } }[] };
+export type ArTrackingTargets = { epoch: number; at: number; regions: ArTrackingTarget[] };
 
 export type ArJoinHandler = (seat: string, name: string) => void;
 /** A seated phone asks for a computer opponent of the given level. */
@@ -114,7 +118,7 @@ export function physicalInfo(diagIn = currentDiagInches()): PhysicalInfo {
 /** Everything play changes, left out of the tracked image (matched with
  *  `Element.matches`, so a selector hits the element and hides its subtree). */
 const STATIC_CAPTURE_IGNORE = [
-  '.player-seat > *', '.join-seat > *', '.market-stage', '.market-prompt', '.help-icon', '.help-corner',
+  '.player-seat > :not(.mat-ornament)', '.join-seat > :not(.mat-ornament)', '.market-stage', '.market-prompt', '.help-icon', '.help-corner',
   '.corner-log', '.music-control', '.options-gear', '.scale-panel', '.tutorial', '.tabletop-mark',
   '.table-card-flight', '.table-token-flight', '[data-token-kind]', '.bonus-stack', '.seat-tokens',
   '.score-stack', '.seat-seals', '.rejoin', '.shared-market > header',
@@ -150,46 +154,41 @@ function loadCardImages(base: string): Promise<void> {
 // faces (and the phone view's images) must be too — portrait art had been
 // squashed onto square planes in AR and drawn portrait on the phone.
 function drawCardArt(kind: string): string {
+  // Exactly the table's card presentation (`.market-card`: a 2px teal
+  // border, 0.55rem radius, a thin dark gap, the art cover-fitted), and no
+  // label band: the AR face lies on its physical counterpart and the
+  // phones compose their tracking targets from this same art, so it must
+  // be the pixels on the screen.
   const c = document.createElement('canvas');
   c.width = 256;
   c.height = 256;
   const ctx = c.getContext('2d')!;
-  // Frame like the table's cards: rounded corners and a thin teal border.
-  ctx.fillStyle = '#fffaf0';
-  ctx.fillRect(0, 0, 256, 256);
+  ctx.clearRect(0, 0, 256, 256);
+  ctx.fillStyle = '#183a37';
+  ctx.beginPath(); ctx.roundRect(2, 2, 252, 252, 19); ctx.fill();
   const img = cardImages.get(kind);
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(11, 11, 234, 234, 12); ctx.clip();
   if (img) {
-    // cover-fit the icon inside the border
     const iw = img.naturalWidth || 1;
     const ih = img.naturalHeight || 1;
-    const scale = Math.max(232 / iw, 232 / ih);
+    const scale = Math.max(234 / iw, 234 / ih);
     const dw = iw * scale;
     const dh = ih * scale;
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(6, 6, 244, 244, 22);
-    ctx.clip();
     ctx.drawImage(img, 128 - dw / 2, 128 - dh / 2, dw, dh);
-    ctx.restore();
   } else {
     ctx.fillStyle = KIND_COLORS[kind] ?? '#888';
-    ctx.beginPath(); ctx.roundRect(6, 6, 244, 244, 22); ctx.fill();
+    ctx.fillRect(11, 11, 234, 234);
+    ctx.fillStyle = '#fffbea';
+    ctx.font = 'bold 40px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(kind.toUpperCase(), 128, 128);
   }
+  ctx.restore();
   ctx.strokeStyle = '#315f58';
-  ctx.lineWidth = 5;
-  ctx.beginPath(); ctx.roundRect(6, 6, 244, 244, 22); ctx.stroke();
-  // Label band: big, outlined text on a translucent strip.
-  ctx.fillStyle = 'rgba(24, 58, 55, 0.55)';
-  ctx.beginPath(); ctx.roundRect(8, 190, 240, 58, [0, 0, 20, 20]); ctx.fill();
-  ctx.font = 'bold 44px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 8;
-  ctx.strokeStyle = '#07110f';
-  ctx.strokeText(kind.toUpperCase(), 128, 217);
-  ctx.fillStyle = '#fffbea';
-  ctx.fillText(kind.toUpperCase(), 128, 217);
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.roundRect(2, 2, 252, 252, 19); ctx.stroke();
   return c.toDataURL('image/png');
 }
 
@@ -289,6 +288,7 @@ export class ArTabletop {
   private capturing = false;
   private captureAgain = false;
   private lastTrackingJpeg = '';
+  private regionGeometryKey = '';
   private assetsKey = '';
   private artGeneration = 0;
   private lastSeatSceneJson = new Map<string, string>();
@@ -307,7 +307,7 @@ export class ArTabletop {
   onViewersChanged: ((n: number) => void) | null = null;
   /** A phone's registration report (see the API doc's `diag` action). */
   onViewerDiag: ((viewerId: string, seat: string | undefined, report: ArViewerDiag) => void) | null = null;
-  /** The tracking targets just published (whole screen + patches), with their screen rectangles. */
+  /** The tracking regions just published (player mats, market band), with their screen rectangles. */
   onTrackingPublished: ((targets: ArTrackingTargets) => void) | null = null;
   lastTargets: ArTrackingTargets | null = null;
   /** Diagnostics the phones should show (published as `scene.debug`). */
@@ -418,29 +418,46 @@ export class ArTabletop {
     this.onGeometryChanged?.();
   }
 
-  /** Smaller targets cut from the capture: the mat at each end of the
-   *  market band (between the rails and the cards), which stays clear of
-   *  pieces. A whole 55" screen cannot fit in a phone's view at arm's
-   *  length, and the image tracker only detects what it can mostly see;
-   *  a patch a quarter of the band wide can. */
-  private trackingPatches(canvas: HTMLCanvasElement, scale: number, rects: ArTrackingTarget[]): ArTrackingPatch[] {
-    const band = document.querySelector('.shared-market')?.getBoundingClientRect();
-    if (!band || !this.mPerPx || band.width < 200 || band.height < 100) return [];
-    const patches: ArTrackingPatch[] = [];
-    const w = band.width * 0.3;
-    for (const left of [band.left, band.right - w]) {
-      const rect = { left, top: band.top, width: w, height: band.height };
-      const sx = Math.round(rect.left * scale), sy = Math.round(rect.top * scale);
-      const sw = Math.round(rect.width * scale), sh = Math.round(rect.height * scale);
-      if (sw < 32 || sh < 32) continue;
+  /** The regions the phones track, cut from the capture: each player's
+   *  mat (the ornamented panel, whose face-down cards the viewer draws in
+   *  for every possible count) and the market band (whose cards the
+   *  viewer draws from the shared scene). A player points the phone at
+   *  their own cards or at the market, never at the whole screen, and the
+   *  image tracker only detects what it can mostly see. */
+  private trackingRegions(canvas: HTMLCanvasElement, scale: number, out: ArTrackingTarget[]): ArTrackingRegion[] {
+    if (!this.mPerPx) return [];
+    const regions: ArTrackingRegion[] = [];
+    const rectOf = (r: DOMRect) => ({ left: r.left, top: r.top, width: r.width, height: r.height });
+    const crop = (r: DOMRect): string | null => {
+      const sx = Math.round(r.left * scale), sy = Math.round(r.top * scale);
+      const sw = Math.round(r.width * scale), sh = Math.round(r.height * scale);
+      if (sw < 32 || sh < 32) return null;
       const c = document.createElement('canvas');
       c.width = sw; c.height = sh;
       c.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
-      const { xM, zM } = this.toMeters(new DOMRect(rect.left, rect.top, rect.width, rect.height));
-      patches.push({ image: c.toDataURL('image/jpeg', 0.85), widthM: rect.width * this.mPerPx, xM, zM });
-      rects.push({ index: rects.length + 1, rect, widthM: rect.width * this.mPerPx, heightM: rect.height * this.mPerPx, xM, zM });
+      return c.toDataURL('image/jpeg', 0.85);
+    };
+    for (const seat of [1, 2] as const) {
+      const panel = document.querySelector<HTMLElement>(seat === 1 ? '.top-edge' : '.bottom-edge')?.getBoundingClientRect();
+      if (!panel || panel.width < 100 || panel.height < 50) continue;
+      const mat = crop(panel);
+      if (!mat) continue;
+      const { xM, zM } = this.toMeters(panel);
+      // Hand cells in DOM order; the table fills them from the end (empty
+      // slots sit before the fanned cards), later cells painted over earlier.
+      const cells = [...document.querySelectorAll<HTMLElement>(`[data-seat="${seat}"] [data-table-hand] .hand-cell`)].map((el) => el.getBoundingClientRect());
+      const slots = cells.map((r) => ({ ...this.toMeters(r), wM: r.width * this.mPerPx, hM: r.height * this.mPerPx, rotY: seat === 1 ? Math.PI : 0 }));
+      regions.push({ id: `seat:${seat}`, xM, zM, widthM: panel.width * this.mPerPx, heightM: panel.height * this.mPerPx, mat, compose: 'count', slots, fill: 'end', back: 'back-s' });
+      out.push({ id: `seat:${seat}`, rect: rectOf(panel), widthM: panel.width * this.mPerPx, heightM: panel.height * this.mPerPx, xM, zM, slots: cells.map((r) => ({ rect: rectOf(r) })) });
     }
-    return patches;
+    const band = document.querySelector<HTMLElement>('.shared-market')?.getBoundingClientRect();
+    const bandMat = band && band.width >= 200 && band.height >= 100 ? crop(band) : null;
+    if (band && bandMat) {
+      const { xM, zM } = this.toMeters(band);
+      regions.push({ id: 'market', xM, zM, widthM: band.width * this.mPerPx, heightM: band.height * this.mPerPx, mat: bandMat, compose: 'scene' });
+      out.push({ id: 'market', rect: rectOf(band), widthM: band.width * this.mPerPx, heightM: band.height * this.mPerPx, xM, zM });
+    }
+    return regions;
   }
 
   /** Re-capture the screen and republish it as the tracked image, debounced
@@ -489,13 +506,10 @@ export class ArTabletop {
       if (jpeg !== this.lastTrackingJpeg && this.attached) {
         this.lastTrackingJpeg = jpeg;
         this.trackingEpoch += 1;
-        const rects: ArTrackingTarget[] = [];
-        const patches = this.trackingPatches(canvas, scale, rects);
-        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, patches);
-        this.lastTargets = {
-          epoch: this.trackingEpoch, at: Date.now(),
-          targets: [{ index: 0, rect: { left: 0, top: 0, width: innerWidth, height: innerHeight }, widthM: innerWidth * this.mPerPx, heightM: innerHeight * this.mPerPx, xM: 0, zM: 0 }, ...rects],
-        };
+        const out: ArTrackingTarget[] = [];
+        const regions = this.trackingRegions(canvas, scale, out);
+        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, regions);
+        this.lastTargets = { epoch: this.trackingEpoch, at: Date.now(), regions: out };
         this.onTrackingPublished?.(this.lastTargets);
       }
     } catch (error) {
@@ -527,6 +541,18 @@ export class ArTabletop {
    *  AR pieces sit exactly on their on-screen counterparts). */
   publishFromState(lobby: GameState, shownHandUids: readonly string[] = []): void {
     if (!this.attached || !this.mPerPx) return;
+    // The tracking regions follow the seats: a seat taken or left swaps
+    // the panel (join QR ↔ player mat) and its card slots. Re-capture when
+    // that geometry changes; hand counts do not change it (every slot
+    // always has a cell), so play itself never triggers a capture.
+    const geometryKey = ['.top-edge', '.bottom-edge', '.shared-market'].map((sel) => {
+      const r = document.querySelector(sel)?.getBoundingClientRect();
+      return r ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}` : '-';
+    }).join('|') + '|' + [...document.querySelectorAll<HTMLElement>('[data-seat] [data-table-hand] .hand-cell')].map((el) => { const r = el.getBoundingClientRect(); return `${Math.round(r.left)},${Math.round(r.top)}`; }).join(';');
+    if (geometryKey !== this.regionGeometryKey) {
+      this.regionGeometryKey = geometryKey;
+      this.refreshTracking(600);
+    }
     const shown = new Set(shownHandUids);
     this.lastPlayers = lobby.players;
     const round = lobby.round;
