@@ -3058,7 +3058,8 @@
         <div class={`ar-target region ${live ? `live-${live}` : ''}`} style={`left:${r.rect.left}px;top:${r.rect.top}px;width:${r.rect.width}px;height:${r.rect.height}px`}>
           <span class="ar-target-label">{r.id} · {cm(r.widthM)} × {cm(r.heightM)} · centre {signed(r.xM)}, {signed(r.zM)}{r.slots?.length ? ` · ${r.slots.length} slots` : ''} · epoch {arTargets.epoch}{phonesOnTarget(r.id).map((d) => ` · ${d.seat ? `P${d.seat}` : 'spectator'} ${d.state === 'tracked' ? 'locked' : 'holding'} (${d.targetId})`).join('')}</span>
           {#each r.slots ?? [] as sl}
-            <i class="ar-slot" style={`left:${sl.rect.left - r.rect.left}px;top:${sl.rect.top - r.rect.top}px;width:${sl.rect.width}px;height:${sl.rect.height}px`}></i>
+            <!-- Like the table's empty hand slots: three sides only, the edge under the next card left open (the top mat is rotated, so its open edge is on the left). -->
+            <i class={`ar-slot ${r.id === 'seat:1' ? 'open-left' : 'open-right'}`} style={`left:${sl.rect.left - r.rect.left}px;top:${sl.rect.top - r.rect.top}px;width:${sl.rect.width}px;height:${sl.rect.height}px`}></i>
           {/each}
         </div>
       {/each}
@@ -3578,7 +3579,9 @@
   .ar-targets { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
   .ar-target { position: absolute; box-sizing: border-box; border: 3px dashed #1c7ed6; border-radius: 4px; }
   .ar-target.region { border-color: #d6336c; background: rgb(214 51 108 / 6%); }
-  .ar-slot { position: absolute; box-sizing: border-box; border: 1.5px dotted #d6336c; border-radius: 4px; }
+  .ar-slot { position: absolute; box-sizing: border-box; border: 1.5px dotted #d6336c; }
+  .ar-slot.open-right { border-right: none; border-radius: 4px 0 0 4px; }
+  .ar-slot.open-left { border-left: none; border-radius: 0 4px 4px 0; }
   .ar-target.live-tracked { border-color: #2f9e44; border-style: solid; background: rgb(47 158 68 / 12%); }
   .ar-target.live-emulated { border-color: #e0a100; border-style: solid; background: rgb(224 161 0 / 10%); }
   .ar-target-label { position: absolute; left: 0.3rem; top: 0.3rem; padding: 0.15rem 0.45rem; border-radius: 0.4rem; background: rgb(255 250 240 / 92%); color: #183a37; font: 700 0.7rem/1.3 ui-monospace, Menlo, monospace; white-space: nowrap; }
