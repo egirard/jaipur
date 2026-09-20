@@ -108,8 +108,9 @@
     return [
       `${d.state} · frames ${d.frames} · tracked ${d.tracked} · held ${d.emulated} · ${d.fps} fps · report ${age}s ago`,
       `target ${d.targetId ?? 'none yet'} of ${d.targets} · scale ×${d.scale.toFixed(3)} · image ${d.score ?? 'unrated'} · epoch ${d.epoch ?? '?'} (table ${arTargets?.epoch ?? '?'})${d.stale ? ' · STALE' : ''}`,
-      `seen ${d.seen ? 'yes' : 'no'} · last result ${d.sinceResultMs == null ? '—' : `${d.sinceResultMs} ms ago`}`
-    ].join('\n');
+      `seen ${d.seen ? 'yes' : 'no'} · last result ${d.sinceResultMs == null ? '—' : `${d.sinceResultMs} ms ago`}`,
+      d.untrackable?.length ? `untrackable: ${d.untrackable.join(' ')}` : ''
+    ].filter(Boolean).join('\n');
   };
   // The AR phone is the way to sit down at this table. The upstream phone
   // controller (/hand, Firebase-driven) is a distinct offering; ?phone=1
@@ -3368,11 +3369,11 @@
     min-height: 0;
     border: 1px solid #9e8a68;
     border-radius: clamp(0.55rem, 1.3vmin, 1rem);
-    /* The mats carry the card-back pattern too, small and faint under a
-       heavier wash, with the corner ornaments drawn over it: together they
+    /* The mats carry the card-back pattern too, small, under the same wash
+       as the surface, with the corner ornaments drawn over it: together they
        give the phones' image tracker its keypoints around a player's cards. */
     background-color: #fffaf0;
-    background-image: linear-gradient(rgb(255 250 240 / 80%), rgb(255 250 240 / 80%)), var(--market-art);
+    background-image: linear-gradient(rgb(255 250 240 / 62%), rgb(255 250 240 / 62%)), var(--market-art);
     background-size: auto, clamp(5rem, 12vmin, 10rem);
     box-shadow: 0 0.25rem 0.8rem rgb(10 32 30 / 16%);
   }

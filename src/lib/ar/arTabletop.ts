@@ -32,6 +32,8 @@ export type ArViewerDiag = {
   targetId?: string | null;
   /** The phone's composed targets no longer match the scene (it must re-enter AR to refresh them). */
   stale?: boolean;
+  /** Target ids ARCore rated untrackable (`score` then reads "k/n trackable"). */
+  untrackable?: string[];
 };
 import type { Card, GameState } from '../jaipur-rules';
 
@@ -429,23 +431,29 @@ export class ArTabletop {
    *  opponent's mat, and the image tracker only detects what it can mostly
    *  see; each region is marked with its seat so the phone takes only its
    *  own. */
-  private trackingRegions(canvas: HTMLCanvasElement, scale: number, out: ArTrackingTarget[]): ArTrackingRegion[] {
+  private async trackingRegions(out: ArTrackingTarget[]): Promise<ArTrackingRegion[]> {
     if (!this.mPerPx) return [];
     const regions: ArTrackingRegion[] = [];
     const rectOf = (r: DOMRect) => ({ left: r.left, top: r.top, width: r.width, height: r.height });
-    const crop = (r: DOMRect): string | null => {
-      const sx = Math.round(r.left * scale), sy = Math.round(r.top * scale);
-      const sw = Math.round(r.width * scale), sh = Math.round(r.height * scale);
-      if (sw < 32 || sh < 32) return null;
-      const c = document.createElement('canvas');
-      c.width = sw; c.height = sh;
-      c.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
-      return c.toDataURL('image/jpeg', 0.85);
+    // Each region is captured on its own, at a scale that gives ARCore's
+    // image tracker at least ~450 px on the region's shorter side (its
+    // guidance is 300 px or more; the 1280 px screen capture left a mat
+    // 200 px tall and a rail 180 px wide, both rated untrackable).
+    const crop = async (r: DOMRect): Promise<string | null> => {
+      if (r.width < 32 || r.height < 32) return null;
+      const scale = Math.min(3, Math.max(1, 450 / Math.min(r.width, r.height)));
+      const c = await html2canvas(document.body, {
+        scale, x: r.left, y: r.top, width: r.width, height: r.height,
+        scrollX: 0, scrollY: 0, windowWidth: innerWidth, windowHeight: innerHeight,
+        backgroundColor: '#f5ead3', logging: false, useCORS: true,
+        ignoreElements: (el) => el.matches?.(STATIC_CAPTURE_IGNORE) ?? false,
+      });
+      return c.toDataURL('image/jpeg', 0.88);
     };
     for (const seatNo of [1, 2] as const) {
       const seat = String(seatNo);
       const panel = document.querySelector<HTMLElement>(seatNo === 1 ? '.top-edge' : '.bottom-edge')?.getBoundingClientRect();
-      const mat = panel && panel.width >= 100 && panel.height >= 50 ? crop(panel) : null;
+      const mat = panel && panel.width >= 100 && panel.height >= 50 ? await crop(panel) : null;
       if (panel && mat) {
         const { xM, zM } = this.toMeters(panel);
         // Hand cells in DOM order; the table fills them from the end (empty
@@ -460,7 +468,7 @@ export class ArTabletop {
       const rail = document.querySelector<HTMLElement>(`[data-token-view-seat="${seat}"]`)?.getBoundingClientRect();
       if (rail && rail.width >= 60 && rail.height >= 200) {
         const r = new DOMRect(rail.left, rail.top + rail.height * 0.2, rail.width, rail.height * 0.6);
-        const sellMat = crop(r);
+        const sellMat = await crop(r);
         if (sellMat) {
           const { xM, zM } = this.toMeters(r);
           regions.push({ id: `sell:${seat}`, seat, xM, zM, widthM: r.width * this.mPerPx, heightM: r.height * this.mPerPx, mat: sellMat, compose: 'mat' });
@@ -518,7 +526,7 @@ export class ArTabletop {
         this.lastTrackingJpeg = jpeg;
         this.trackingEpoch += 1;
         const out: ArTrackingTarget[] = [];
-        const regions = this.trackingRegions(canvas, scale, out);
+        const regions = await this.trackingRegions(out);
         this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, regions);
         this.lastTargets = { epoch: this.trackingEpoch, at: Date.now(), regions: out };
         this.onTrackingPublished?.(this.lastTargets);
