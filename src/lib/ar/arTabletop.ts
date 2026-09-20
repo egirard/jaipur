@@ -120,7 +120,7 @@ export function physicalInfo(diagIn = currentDiagInches()): PhysicalInfo {
 /** Everything play changes, left out of the tracked image (matched with
  *  `Element.matches`, so a selector hits the element and hides its subtree). */
 const STATIC_CAPTURE_IGNORE = [
-  '.player-seat > :not(.mat-ornament)', '.join-seat > :not(.mat-ornament)', '.market-stage', '.market-prompt', '.help-icon', '.help-corner',
+  '.player-seat > :not(.mat-art)', '.join-seat > :not(.mat-art)', '.market-stage', '.market-prompt', '.help-icon', '.help-corner',
   '.corner-log', '.music-control', '.options-gear', '.scale-panel', '.tutorial', '.tabletop-mark',
   '.table-card-flight', '.table-token-flight', '.bonus-stack', '.seat-tokens',
   // Token rails: the stack boxes, their art and names stay (the middle of a

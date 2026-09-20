@@ -7,7 +7,7 @@
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
   import type { ArViewerDiag } from '$lib/ar/arTabletop';
-  import MatOrnament from '$lib/MatOrnament.svelte';
+  import MatArt from '$lib/MatArt.svelte';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
   import { configureSfx, playSfx, setSfxEnabled, setSfxVolume, unlockSfx } from '$lib/sfx';
@@ -2390,7 +2390,7 @@
   {@const qr = seatQrs.find((candidate) => candidate.seat === seat)}
   {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
   <section class="join-seat" data-seat={seat} aria-label={`Player ${seat} join code`}>
-    {#each [0, 1, 2, 3] as const as corner}<MatOrnament {seat} {corner} />{/each}
+    <MatArt {seat} />
     <div>
       <span class="seat-kicker">Player {seat}</span>
       <h2>Scan to sit here</h2>
@@ -2541,7 +2541,7 @@
     data-player-uid={player.uid}
     aria-label={`Player ${seat}, ${player.displayName}`}
   >
-    {#each [0, 1, 2, 3] as const as corner}<MatOrnament {seat} {corner} />{/each}
+    <MatArt {seat} />
     {#if scoring?.winnerBanner && scoring.winnerUid === player.uid}
       <div class="round-winner-banner" data-round-winner-banner role="status">Round winner</div>
     {/if}
@@ -3369,12 +3369,10 @@
     min-height: 0;
     border: 1px solid #9e8a68;
     border-radius: clamp(0.55rem, 1.3vmin, 1rem);
-    /* The mats carry the card-back pattern too, small, under the same wash
-       as the surface, with the corner ornaments drawn over it: together they
-       give the phones' image tracker its keypoints around a player's cards. */
-    background-color: #fffaf0;
-    background-image: linear-gradient(rgb(255 250 240 / 62%), rgb(255 250 240 / 62%)), var(--market-art);
-    background-size: auto, clamp(5rem, 12vmin, 10rem);
+    /* Plain cream: the mat's decoration is one non-repeating bitmap drawn
+       under everything (MatArt) — the AR phones image-track the mats, and a
+       tiled pattern was rated untrackable (every tile matches every other). */
+    background: #fffaf0;
     box-shadow: 0 0.25rem 0.8rem rgb(10 32 30 / 16%);
   }
   .top-edge { grid-column: 2; grid-row: 1; }
