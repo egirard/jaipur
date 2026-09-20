@@ -2504,8 +2504,8 @@
     onclick={() => { scalePanelOpen = !scalePanelOpen; refreshPhysical(); }}
   ><span class="scale-gear" aria-hidden="true">
       <svg viewBox="0 0 48 48" width="1em" height="1em">
-        <path fill="currentColor" d="M24 4l3 4.5 5.3-1.4 1.4 5.3L38.5 15 36 20l4 3.6-4 3.6 2.5 5-4.8 2.6-1.4 5.3-5.3-1.4L24 44l-3-4.5-5.3 1.4-1.4-5.3L9.5 33 12 28l-4-3.6 4-3.6-2.5-5 4.8-2.6 1.4-5.3 5.3 1.4z" opacity="0.28"/>
-        <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M15 33L33 15M15 33h5m-5 0v-5M33 15h-5m5 0v5"/>
+        <path class="gear-outline" fill="currentColor" d="M24 4l3 4.5 5.3-1.4 1.4 5.3L38.5 15 36 20l4 3.6-4 3.6 2.5 5-4.8 2.6-1.4 5.3-5.3-1.4L24 44l-3-4.5-5.3 1.4-1.4-5.3L9.5 33 12 28l-4-3.6 4-3.6-2.5-5 4.8-2.6 1.4-5.3 5.3 1.4z" opacity="0.28"/>
+        <path class="gear-arrow" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M15 33L33 15M15 33h5m-5 0v-5M33 15h-5m5 0v5"/>
       </svg>
       <b>{arDiag}″</b>
     </span></button>
@@ -3357,10 +3357,13 @@
        it). The AR phones register from static patches of this cloth (see
        src/lib/ar/arTabletop.ts, trackingRegions): a real cloth is as
        non-repeating as backgrounds get, and it stays put through play. */
-    background-image: var(--table-mat);
+    /* Muted by a quarter: a dark wash over the photo. (The AR phones
+       track this cloth; the wash lowers brightness, not the contrast the
+       feature matcher works from — rescored with arcoreimg.) */
+    background-image: linear-gradient(rgb(20 8 4 / 25%), rgb(20 8 4 / 25%)), var(--table-mat);
     background-position: center;
     background-size: cover;
-    background-color: #5e150f;
+    background-color: #46100b;
   }
   .edge, .shared-market {
     min-width: 0;
@@ -3530,7 +3533,13 @@
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
   /* Each player's gear sits at their own edge of the market, on their left. */
-  .options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); }
+  /* A bare gear on the cloth (no pill, no border), a little larger, its
+     outline dark so it reads without a background. */
+  .orientation-toggle.options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); min-width: 0; min-height: 0; padding: 0.15rem; border: none; border-radius: 0; background: none; box-shadow: none; color: #183a37; }
+  .options-gear .scale-gear { font-size: 2.7em; }
+  .options-gear .scale-gear .gear-outline { opacity: 0.55; stroke: #0d1f1d; stroke-width: 1.6; paint-order: stroke; }
+  .options-gear .scale-gear .gear-arrow { stroke: #0d1f1d; stroke-width: 2.6; }
+  .options-gear .scale-gear b { color: #fffaf0; text-shadow: 0 0 3px #0d1f1d, 0 0 3px #0d1f1d, 0 0 5px #0d1f1d; }
   .options-gear.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: var(--market-edge-inset); transform: rotate(180deg); }
   /* The speaker sits beside each player's gear; a muted one dims. */
   .music-control { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: calc(var(--market-edge-inset) + 3.6em); display: flex; align-items: center; gap: 0.4rem; }
@@ -3732,7 +3741,7 @@
   .corner-log li small { display: block; margin-top: 0.1rem; font-size: 0.62rem; color: #5d5240; }
   .corner-log li + li { margin-top: 0.18rem; }
   /* The "?" floating to the right of the prompt pill; while the guide shows it carries a small × to dismiss. */
-  .help-icon { position: absolute; left: calc(100% + 0.45rem); top: 50%; display: grid; width: 2.3rem; height: 2.3rem; place-items: center; padding: 0; border: 2px solid #fffaf0; border-radius: 50%; background: #2b6cd4; color: #fff; font: inherit; font-size: 1.25rem; font-weight: 900; line-height: 1; box-shadow: 0 0.2rem 0.6rem rgb(10 32 30 / 35%); transform: translateY(-50%); cursor: pointer; }
+  .help-icon { position: absolute; left: calc(100% + 0.45rem); top: 50%; display: grid; width: 2.3rem; height: 2.3rem; place-items: center; padding: 0; border: 1.5px solid rgb(255 250 240 / 55%); border-radius: 50%; background: #4a6a9c; color: #f1f4f8; font: inherit; font-size: 1.15rem; font-weight: 800; line-height: 1; box-shadow: 0 0.15rem 0.4rem rgb(10 32 30 / 25%); transform: translateY(-50%); cursor: pointer; }
   .help-corner { left: auto; top: auto; right: var(--market-edge-inset); bottom: var(--market-edge-inset); z-index: 3; transform: none; }
   .help-corner.for-top { right: auto; bottom: auto; left: var(--market-edge-inset); top: var(--market-edge-inset); transform: rotate(180deg); }
   .help-icon.active::after { content: '×'; position: absolute; right: -0.35rem; top: -0.35rem; display: grid; width: 1.1rem; height: 1.1rem; place-items: center; border-radius: 50%; background: #a6442d; color: #fff; font-size: 0.8rem; line-height: 1; }

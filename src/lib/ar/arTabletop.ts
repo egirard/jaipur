@@ -557,6 +557,11 @@ export class ArTabletop {
         backgroundColor: '#5e150f',
         logging: false,
         useCORS: true,
+        // The screen mutes the cloth under a dark wash; the targets are
+        // captured without it. The phone's camera auto-exposes the screen,
+        // so what it sees is the cloth's contrast, not its brightness, and
+        // the washed capture scored half with arcoreimg (band 100 → 45–60).
+        onclone: (doc) => { const t = doc.querySelector<HTMLElement>('.tabletop'); if (t) t.style.backgroundImage = 'var(--table-mat)'; },
         // Only what never changes with play goes into the target: the mat,
         // the panels and the rail headings. Cards, tokens, prompts, logs,
         // QR codes and controls are left out, so the target stays valid for
