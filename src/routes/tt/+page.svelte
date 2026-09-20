@@ -7,7 +7,6 @@
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
   import type { ArViewerDiag } from '$lib/ar/arTabletop';
-  import MatArt from '$lib/MatArt.svelte';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
   import { configureSfx, playSfx, setSfxEnabled, setSfxVolume, unlockSfx } from '$lib/sfx';
@@ -107,7 +106,7 @@
     const age = Math.round((Date.now() - d.at) / 1000);
     return [
       `${d.state} · frames ${d.frames} · tracked ${d.tracked} · held ${d.emulated} · ${d.fps} fps · report ${age}s ago`,
-      `target ${d.targetId ?? 'none yet'} of ${d.targets} · scale ×${d.scale.toFixed(3)} · image ${d.score ?? 'unrated'} · epoch ${d.epoch ?? '?'} (table ${arTargets?.epoch ?? '?'})${d.stale ? ' · STALE' : ''}`,
+      `target ${d.targetId ?? 'none yet'} of ${d.targets} · scale ×${d.scale.toFixed(3)} · image ${d.score ?? 'unrated'} · epoch ${d.epoch ?? '?'} (table ${arTargets?.epoch ?? '?'})`,
       `seen ${d.seen ? 'yes' : 'no'} · last result ${d.sinceResultMs == null ? '—' : `${d.sinceResultMs} ms ago`}`,
       d.untrackable?.length ? `untrackable: ${d.untrackable.join(' ')}` : ''
     ].filter(Boolean).join('\n');
@@ -1809,6 +1808,10 @@
     (window as unknown as { __jaipurDev?: unknown }).__jaipurDev = {
       sit: (seat: number, name = 'Tester') => joinFromAr(String(seat), name),
       viewerUrl: (seat: 1 | 2) => ar?.arViewerUrl(seat),
+      // The tracking payload as published (whole-screen image, regions
+      // with their JPEGs) and the regions' screen rectangles, so a test
+      // can score the exact targets the phones get (arcoreimg).
+      arTracking: () => ({ tracking: ar?.host.lastTracking ?? null, targets: ar?.lastTargets ?? null }),
       // Play one move for whoever is active (the apprentice heuristic
       // stands in for a human), or run the whole game to its summary —
       // used to capture screens for the progress log.
@@ -2390,7 +2393,6 @@
   {@const qr = seatQrs.find((candidate) => candidate.seat === seat)}
   {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
   <section class="join-seat" data-seat={seat} aria-label={`Player ${seat} join code`}>
-    <MatArt {seat} />
     <div>
       <span class="seat-kicker">Player {seat}</span>
       <h2>Scan to sit here</h2>
@@ -2541,7 +2543,6 @@
     data-player-uid={player.uid}
     aria-label={`Player ${seat}, ${player.displayName}`}
   >
-    <MatArt {seat} />
     {#if scoring?.winnerBanner && scoring.winnerUid === player.uid}
       <div class="round-winner-banner" data-round-winner-banner role="status">Round winner</div>
     {/if}
@@ -2768,7 +2769,7 @@
   <meta name="description" content="A shared two-player Jaipur tabletop." />
 </svelte:head>
 
-<main class="tabletop" data-e2e-tabletop data-e2e-layout style={`--market-art: url("${componentImage('card-back')}")`}>
+<main class="tabletop" data-e2e-tabletop data-e2e-layout style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg")`}>
   <div class="top-edge edge">
     <div class="inverted-content">
       {#if playerForSeat(1)}
@@ -3061,11 +3062,7 @@
       {#each arTargets.regions as r (r.id)}
         {@const live = targetLive(r.id)}
         <div class={`ar-target region ${live ? `live-${live}` : ''}`} style={`left:${r.rect.left}px;top:${r.rect.top}px;width:${r.rect.width}px;height:${r.rect.height}px`}>
-          <span class="ar-target-label">{r.id}{r.seat ? ` (Player ${r.seat}'s phone)` : ''} · {cm(r.widthM)} × {cm(r.heightM)} · centre {signed(r.xM)}, {signed(r.zM)}{r.slots?.length ? ` · ${r.slots.length} slots` : ''} · epoch {arTargets.epoch}{phonesOnTarget(r.id).map((d) => ` · ${d.seat ? `P${d.seat}` : 'spectator'} ${d.state === 'tracked' ? 'locked' : 'holding'} (${d.targetId})`).join('')}</span>
-          {#each r.slots ?? [] as sl}
-            <!-- Like the table's empty hand slots: three sides only, the edge under the next card left open (the top mat is rotated, so its open edge is on the left). -->
-            <i class={`ar-slot ${r.id === 'seat:1' ? 'open-left' : 'open-right'}`} style={`left:${sl.rect.left - r.rect.left}px;top:${sl.rect.top - r.rect.top}px;width:${sl.rect.width}px;height:${sl.rect.height}px`}></i>
-          {/each}
+          <span class="ar-target-label">{r.id}{r.seat ? ` (Player ${r.seat}'s phone)` : ' (every phone)'} · {cm(r.widthM)} × {cm(r.heightM)} · centre {signed(r.xM)}, {signed(r.zM)} · epoch {arTargets.epoch}{phonesOnTarget(r.id).map((d) => ` · ${d.seat ? `P${d.seat}` : 'spectator'} ${d.state === 'tracked' ? 'locked' : 'holding'} (${d.targetId})`).join('')}</span>
         </div>
       {/each}
     </div>
@@ -3102,7 +3099,7 @@
       </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArTargets} data-ar-targets-option onchange={(e) => setArDebug({ targets: (e.currentTarget as HTMLInputElement).checked })} /> Show AR tracking targets</label>
-        <small>Outlines the regions each phone tracks: its player's mat (with the card slots dotted) and the middle of their token rail (red). A region turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
+        <small>Outlines the static cloth patches the phones register from: three across the market band (every phone) and two on each token rail (that player's phone only). A patch turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
       </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArDiag} data-ar-diag-option onchange={(e) => setArDebug({ diag: (e.currentTarget as HTMLInputElement).checked })} /> Show AR diagnostics</label>
@@ -3355,23 +3352,21 @@
     gap: clamp(0.25rem, 0.7vmin, 0.55rem);
     padding: clamp(0.3rem, 0.8vmin, 0.65rem);
     overflow: hidden;
-    /* The market pattern is the whole table's background (the mats, rails
-       and market float on it), under a light cream wash. The AR phones no
-       longer track the surface: they track the player mats and the market
-       band (see src/lib/ar/arTabletop.ts, regions). */
-    background-image: linear-gradient(rgb(255 250 238 / 62%), rgb(255 250 238 / 62%)), var(--market-art);
+    /* The owner's mandala tablecloth photo (static/components/mat.jpg) is
+       the whole table's background (the mats, rails and market float on
+       it). The AR phones register from static patches of this cloth (see
+       src/lib/ar/arTabletop.ts, trackingRegions): a real cloth is as
+       non-repeating as backgrounds get, and it stays put through play. */
+    background-image: var(--table-mat);
     background-position: center;
-    background-size: auto, min(40vh, 28rem);
-    background-color: #f5ead3;
+    background-size: cover;
+    background-color: #5e150f;
   }
   .edge, .shared-market {
     min-width: 0;
     min-height: 0;
     border: 1px solid #9e8a68;
     border-radius: clamp(0.55rem, 1.3vmin, 1rem);
-    /* Plain cream: the mat's decoration is one non-repeating bitmap drawn
-       under everything (MatArt) — the AR phones image-track the mats, and a
-       tiled pattern was rated untrackable (every tile matches every other). */
     background: #fffaf0;
     box-shadow: 0 0.25rem 0.8rem rgb(10 32 30 / 16%);
   }
@@ -3408,12 +3403,12 @@
     height: 100%;
     grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0.25rem;
-    padding: clamp(0.3rem, 0.7vmin, 0.55rem) clamp(3.6rem, 9vmin, 8rem);
+    padding: clamp(0.3rem, 0.7vmin, 0.55rem) clamp(1.2rem, 2.6vw, 2.6rem);
     border: 3px solid transparent;
     border-radius: inherit;
     transition: border-color 180ms ease, background 180ms ease;
   }
-  .player-seat.active { border-color: #d38b21; }
+  .player-seat.active { border-color: #d38b21; background: #fff4d6; }
   .player-seat { position: relative; }
   .bot-thinking {
     position: absolute;
@@ -3530,6 +3525,8 @@
     box-shadow: none;
   }
   .shared-market > header { position: absolute; z-index: 3; top: var(--market-edge-inset); left: 50%; display: flex; min-height: 36px; align-items: center; justify-content: center; gap: clamp(0.6rem, 2vw, 3rem); font-size: clamp(0.7rem, 1.5vmin, 1.5rem); transform: translateX(-50%); }
+  /* Labels that sit straight on the (dark) cloth read from a cream pill. */
+  .shared-market > header > span, .deck-count { padding: 0.1em 0.6em; border-radius: 99rem; background: rgb(255 250 240 / 88%); }
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
   /* Each player's gear sits at their own edge of the market, on their left. */
@@ -3582,11 +3579,11 @@
   .ar-targets { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
   .ar-target { position: absolute; box-sizing: border-box; border: 3px dashed #1c7ed6; border-radius: 4px; }
   .ar-target.region { border-color: #d6336c; background: rgb(214 51 108 / 6%); }
-  .ar-slot { position: absolute; box-sizing: border-box; border: 1.5px dotted #d6336c; }
-  .ar-slot.open-right { border-right: none; border-radius: 4px 0 0 4px; }
-  .ar-slot.open-left { border-left: none; border-radius: 0 4px 4px 0; }
   .ar-target.live-tracked { border-color: #2f9e44; border-style: solid; background: rgb(47 158 68 / 12%); }
   .ar-target.live-emulated { border-color: #e0a100; border-style: solid; background: rgb(224 161 0 / 10%); }
+  /* The band's columns overlap; stagger their labels so all three read. */
+  .ar-target:nth-child(2) .ar-target-label { top: 1.6rem; }
+  .ar-target:nth-child(3) .ar-target-label { top: 2.9rem; }
   .ar-target-label { position: absolute; left: 0.3rem; top: 0.3rem; padding: 0.15rem 0.45rem; border-radius: 0.4rem; background: rgb(255 250 240 / 92%); color: #183a37; font: 700 0.7rem/1.3 ui-monospace, Menlo, monospace; white-space: nowrap; }
   /* Diagnostics: a phone's registration numbers on its seat (never captured). */
   .ar-diag { position: absolute; z-index: 3; margin: 0; padding: 0.25rem 0.5rem; border-radius: 0.5rem; background: rgb(255 250 240 / 88%); color: #183a37; font: 0.68rem/1.35 ui-monospace, Menlo, monospace; white-space: pre; pointer-events: none; }

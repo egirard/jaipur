@@ -1,11 +1,15 @@
 // AR bridge for the tabletop page (GPLv3, part of this fork).
 //
 // Owns everything AR about /tt so the page itself only needs a few calls:
-// - registration: phones image-track the WHOLE tabletop screen. The page
-//   captures itself (html2canvas) and publishes the capture as the tracked
-//   image, re-capturing whenever the table changes so the phone's target
-//   never drifts from the glass. The game's own panels (cards, QR codes,
-//   text) carry the features — no synthetic pattern is drawn,
+// - registration: phones register from static patches of the tablecloth
+//   (three columns of the market band for every phone, the rows of a
+//   player's own token rail for that player), captured with html2canvas
+//   with everything play-varying left out and published as `tracking`
+//   regions; the whole-screen capture goes along for the native apps.
+//   Nothing in a target changes with play, so a phone's targets stay
+//   valid for the whole game; only a layout change (resize, diagonal, a
+//   seat taken or left) republishes them with a new epoch. See ARViewer
+//   docs/PLAN-jaipur-registration.md,
 // - physical scale from a screen-diagonal setting (?diag=27, persisted),
 // - artwork + scene projection: market/deck mapped from their real DOM
 //   rects so AR pieces sit on their on-screen counterparts; hands laid
@@ -21,6 +25,7 @@
 
 import html2canvas from 'html2canvas';
 import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingRegion } from './arHost';
+import { captureScale, centreMeters, overlappingColumns, pieces, type Rect } from './trackingGeometry';
 
 /** What a phone reports about its registration every couple of seconds. */
 export type ArViewerDiag = {
@@ -28,20 +33,18 @@ export type ArViewerDiag = {
   frames: number; tracked: number; emulated: number; fps: number;
   seen: boolean; score: string | null; epoch: number | null;
   target: number; targets: number; scale: number; sinceResultMs: number | null;
-  /** The target registered from: `region` or `region#variant` (null before the first lock). */
+  /** The target registered from, by region id (null before the first lock). */
   targetId?: string | null;
-  /** The phone's composed targets no longer match the scene (it must re-enter AR to refresh them). */
-  stale?: boolean;
   /** Target ids ARCore rated untrackable (`score` then reads "k/n trackable"). */
   untrackable?: string[];
 };
 import type { Card, GameState } from '../jaipur-rules';
 
-/** What the table last published for the phones to track: the regions
- *  (player mats, market band), each with its screen rectangle (CSS px)
- *  and its card slots, so the page can outline them in place. */
-export type ArTrackingTarget = { id: string; seat?: string; rect: { left: number; top: number; width: number; height: number }; widthM: number; heightM: number; xM: number; zM: number; slots?: { rect: { left: number; top: number; width: number; height: number } }[] };
-export type ArTrackingTargets = { epoch: number; at: number; regions: ArTrackingTarget[] };
+/** What the table last published for the phones to track: the static
+ *  patches (band columns, rail rows), each with its screen rectangle
+ *  (CSS px), so the page can outline them in place. */
+export type ArTrackingTarget = { id: string; seat?: string; rect: Rect; widthM: number; heightM: number; xM: number; zM: number };
+export type ArTrackingTargets = { epoch: number; at: number; captureMs: number; bytes: number; regions: ArTrackingTarget[] };
 
 export type ArJoinHandler = (seat: string, name: string) => void;
 /** A seated phone asks for a computer opponent of the given level. */
@@ -60,6 +63,20 @@ const KIND_COLORS: Record<string, string> = {
   leather: '#8a5a34',
   camel: '#d8b26a',
 };
+
+/** A rail row is kept squarer than the general 2:1 limit: its stack art
+ *  is sparser than the cloth (coins cover half of it on screen), so give
+ *  the tracker compact pieces. Measured with arcoreimg (see the plan). */
+const RAIL_MAX_ASPECT = 1.5;
+/** The band's columns: three, each 40% of the band wide, overlapping their
+ *  neighbours by a fifth of their width (the sizes and scores are in the plan). */
+const BAND_COLUMNS = 3;
+const BAND_COLUMN_FRACTION = 0.4;
+/** Baked size of a target's short side. ARCore asks for 300 px or more;
+ *  arcoreimg scored the band columns 65–80 at 508 px and 90–100 at ~890,
+ *  so the bands get more, the rails (whose art is soft) the minimum. */
+const BAND_MIN_PX = 720;
+const RAIL_MIN_PX = 450;
 
 const DIAG_KEY = 'jaipur:ar:diag';
 export const DIAG_MIN = 5;
@@ -120,16 +137,31 @@ export function physicalInfo(diagIn = currentDiagInches()): PhysicalInfo {
 /** Everything play changes, left out of the tracked image (matched with
  *  `Element.matches`, so a selector hits the element and hides its subtree). */
 const STATIC_CAPTURE_IGNORE = [
-  '.player-seat > :not(.mat-art)', '.join-seat > :not(.mat-art)', '.market-stage', '.market-prompt', '.help-icon', '.help-corner',
-  '.corner-log', '.music-control', '.options-gear', '.scale-panel', '.tutorial', '.tabletop-mark',
+  // The mats: the cream panel stays, everything on it changes with play.
+  '.player-seat > *', '.join-seat > *',
+  // The market band: only the cloth (and its border) is the target; the
+  // deck, cards, return slots, prompts, overlays and labels all move.
+  '.market-stage', '.market-prompt', '.table-exchange-target', '.scoring-overlay', '.end-overlay',
+  '.help-icon', '.help-corner', '.corner-log', '.music-control', '.options-gear', '.scale-panel', '.tutorial', '.tabletop-mark',
   '.table-card-flight', '.table-token-flight', '.bonus-stack', '.seat-tokens',
-  // Token rails: the stack boxes, their art and names stay (the middle of a
-  // rail is a tracking region); the coins, counts and sale marks change.
+  // Token rails: the stack boxes, their art and names stay (a rail's rows
+  // are tracking regions); the coins, counts and sale marks change.
   '[data-supply-token-id]', '.rail-count', '.confirm-mark', '.empty-stack',
   '.score-stack', '.seat-seals', '.rejoin', '.shared-market > header',
   // Diagnostics overlays must never become part of the target they describe.
   '.ar-targets', '.ar-diag'
 ].join(', ');
+
+/** The goods stacks of a player's token rail (the bonus-token stacks at
+ *  the rail's end are left out of the capture and would make a blank
+ *  target). */
+function goodsStacksRect(seat: string): Rect | null {
+  const stacks = [...document.querySelectorAll<HTMLElement>(`[data-token-view-seat="${seat}"] [data-token-kind]`)].map((el) => el.getBoundingClientRect());
+  if (!stacks.length) return null;
+  const left = Math.min(...stacks.map((r) => r.left)), top = Math.min(...stacks.map((r) => r.top));
+  const right = Math.max(...stacks.map((r) => r.right)), bottom = Math.max(...stacks.map((r) => r.bottom));
+  return { left, top, width: right - left, height: bottom - top };
+}
 
 const cardImages = new Map<string, HTMLImageElement>();
 let cardImagesReady: Promise<void> | null = null;
@@ -312,7 +344,7 @@ export class ArTabletop {
   onViewersChanged: ((n: number) => void) | null = null;
   /** A phone's registration report (see the API doc's `diag` action). */
   onViewerDiag: ((viewerId: string, seat: string | undefined, report: ArViewerDiag) => void) | null = null;
-  /** The tracking regions just published (player mats, market band), with their screen rectangles. */
+  /** The tracking regions just published (band columns, rail rows), with their screen rectangles. */
   onTrackingPublished: ((targets: ArTrackingTargets) => void) | null = null;
   lastTargets: ArTrackingTargets | null = null;
   /** Diagnostics the phones should show (published as `scene.debug`). */
@@ -423,60 +455,69 @@ export class ArTabletop {
     this.onGeometryChanged?.();
   }
 
-  /** The regions the phones track, cut from the capture, two per seat: the
-   *  player's mat (the ornamented panel, whose face-down cards the viewer
-   *  draws in for every possible count) and the middle of the player's
-   *  token rail, where they sell. A player points the phone at their own
-   *  cards or at their sell stacks, never at the whole screen or the
-   *  opponent's mat, and the image tracker only detects what it can mostly
-   *  see; each region is marked with its seat so the phone takes only its
-   *  own. */
-  private async trackingRegions(out: ArTrackingTarget[]): Promise<ArTrackingRegion[]> {
+  /** The static patches the phones register from: the market band cut
+   *  into three columns (every phone: the band lies right beside each
+   *  hand and is what a phone over the cards or the market sees) and each
+   *  player's token rail cut into rows (that player's phone only: where
+   *  they sell). Each is captured on its own with everything play-varying
+   *  left out, at a scale giving ARCore's tracker at least ~450 px on the
+   *  short side, and kept under 2:1 (longer targets score 0 with
+   *  arcoreimg). Pieces that move over a patch during play are occlusion.
+   *  The mats themselves are plain cream and carry nothing static to
+   *  match, and the cloth beside them is too small to be detected from
+   *  arm's length (see ARViewer docs/PLAN-jaipur-registration.md). */
+  private trackingRegions(canvas: HTMLCanvasElement, scale: number, out: ArTrackingTarget[]): ArTrackingRegion[] {
     if (!this.mPerPx) return [];
     const regions: ArTrackingRegion[] = [];
-    const rectOf = (r: DOMRect) => ({ left: r.left, top: r.top, width: r.width, height: r.height });
-    // Each region is captured on its own, at a scale that gives ARCore's
-    // image tracker at least ~450 px on the region's shorter side (its
-    // guidance is 300 px or more; the 1280 px screen capture left a mat
-    // 200 px tall and a rail 180 px wide, both rated untrackable).
-    const crop = async (r: DOMRect): Promise<string | null> => {
-      if (r.width < 32 || r.height < 32) return null;
-      const scale = Math.min(3, Math.max(1, 450 / Math.min(r.width, r.height)));
-      const c = await html2canvas(document.body, {
-        scale, x: r.left, y: r.top, width: r.width, height: r.height,
-        scrollX: 0, scrollY: 0, windowWidth: innerWidth, windowHeight: innerHeight,
-        backgroundColor: '#f5ead3', logging: false, useCORS: true,
-        ignoreElements: (el) => el.matches?.(STATIC_CAPTURE_IGNORE) ?? false,
-      });
-      return c.toDataURL('image/jpeg', 0.88);
+    const viewport: [number, number] = [innerWidth, innerHeight];
+    const publish = (id: string, seat: string | undefined, r: Rect, minPx: number) => {
+      const sx = Math.round(r.left * scale), sy = Math.round(r.top * scale);
+      const sw = Math.round(r.width * scale), sh = Math.round(r.height * scale);
+      if (sw < 32 || sh < 32) return;
+      // Each target at its own scale (~450 px on the short side): the
+      // capture is at the narrowest region's scale, and a band column at
+      // that scale would be a 200 KB JPEG that helps the tracker not at all.
+      const own = captureScale(r, minPx) / scale;
+      const c = document.createElement('canvas');
+      c.width = Math.round(sw * own); c.height = Math.round(sh * own);
+      const ctx = c.getContext('2d')!;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      const mat = c.toDataURL('image/jpeg', 0.88);
+      const { xM, zM } = centreMeters(r, viewport, this.mPerPx);
+      const widthM = r.width * this.mPerPx;
+      const heightM = r.height * this.mPerPx;
+      regions.push({ id, ...(seat ? { seat } : {}), xM, zM, widthM, heightM, mat });
+      out.push({ id, ...(seat ? { seat } : {}), rect: { left: r.left, top: r.top, width: r.width, height: r.height }, widthM, heightM, xM, zM });
     };
+    const band = document.querySelector<HTMLElement>('.shared-market')?.getBoundingClientRect();
+    if (band && band.width >= 300 && band.height >= 100) {
+      const cols = overlappingColumns(band, BAND_COLUMNS, BAND_COLUMN_FRACTION);
+      publish('band:L', undefined, cols[0], BAND_MIN_PX);
+      publish('band:C', undefined, cols[1], BAND_MIN_PX);
+      publish('band:R', undefined, cols[2], BAND_MIN_PX);
+    }
     for (const seatNo of [1, 2] as const) {
       const seat = String(seatNo);
-      const panel = document.querySelector<HTMLElement>(seatNo === 1 ? '.top-edge' : '.bottom-edge')?.getBoundingClientRect();
-      const mat = panel && panel.width >= 100 && panel.height >= 50 ? await crop(panel) : null;
-      if (panel && mat) {
-        const { xM, zM } = this.toMeters(panel);
-        // Hand cells in DOM order; the table fills them from the end (empty
-        // slots sit before the fanned cards), later cells painted over earlier.
-        const cells = [...document.querySelectorAll<HTMLElement>(`[data-seat="${seat}"] [data-table-hand] .hand-cell`)].map((el) => el.getBoundingClientRect());
-        const slots = cells.map((r) => ({ ...this.toMeters(r), wM: r.width * this.mPerPx, hM: r.height * this.mPerPx, rotY: seatNo === 1 ? Math.PI : 0 }));
-        regions.push({ id: `seat:${seat}`, seat, xM, zM, widthM: panel.width * this.mPerPx, heightM: panel.height * this.mPerPx, mat, compose: 'count', slots, fill: 'end', back: 'back-s' });
-        out.push({ id: `seat:${seat}`, seat, rect: rectOf(panel), widthM: panel.width * this.mPerPx, heightM: panel.height * this.mPerPx, xM, zM, slots: cells.map((r) => ({ rect: rectOf(r) })) });
-      }
-      // The middle 60% of the rail's height: the goods stacks, clear of the
-      // bonus tokens at one end and the rail's edge at the other.
-      const rail = document.querySelector<HTMLElement>(`[data-token-view-seat="${seat}"]`)?.getBoundingClientRect();
-      if (rail && rail.width >= 60 && rail.height >= 200) {
-        const r = new DOMRect(rail.left, rail.top + rail.height * 0.2, rail.width, rail.height * 0.6);
-        const sellMat = await crop(r);
-        if (sellMat) {
-          const { xM, zM } = this.toMeters(r);
-          regions.push({ id: `sell:${seat}`, seat, xM, zM, widthM: r.width * this.mPerPx, heightM: r.height * this.mPerPx, mat: sellMat, compose: 'mat' });
-          out.push({ id: `sell:${seat}`, seat, rect: rectOf(r), widthM: r.width * this.mPerPx, heightM: r.height * this.mPerPx, xM, zM });
-        }
-      }
+      const stacks = goodsStacksRect(seat);
+      if (!stacks || stacks.width < 60 || stacks.height < 120) continue;
+      for (const [i, r] of pieces(stacks, RAIL_MAX_ASPECT).entries()) publish(`rail:${seat}:${i + 1}`, seat, r, RAIL_MIN_PX);
     }
     return regions;
+  }
+
+  /** The scale of the one capture the targets are cut from: enough for
+   *  ARCore's ~450 px on the narrowest region's short side (the rails),
+   *  capped at 3×. */
+  private captureScaleForRegions(): number {
+    let scale = 1;
+    const band = document.querySelector('.shared-market')?.getBoundingClientRect();
+    if (band) scale = Math.max(scale, captureScale(band, BAND_MIN_PX));
+    for (const seat of ['1', '2']) {
+      const r = goodsStacksRect(seat);
+      if (r) scale = Math.max(scale, captureScale(r, RAIL_MIN_PX));
+    }
+    return scale;
   }
 
   /** Re-capture the screen and republish it as the tracked image, debounced
@@ -497,10 +538,12 @@ export class ArTabletop {
       return;
     }
     this.capturing = true;
+    const started = performance.now();
     try {
-      // ~1280px wide keeps the JPEG small over the relay while leaving the
-      // card art and QR modules sharp enough to match features against.
-      const scale = Math.min(1, 1280 / innerWidth);
+      // One capture serves both the whole-screen image (native apps; scaled
+      // down to ~1280 px wide, small over the relay) and the regions (cut
+      // from it at a scale giving ARCore ~450 px on their short side).
+      const scale = this.captureScaleForRegions();
       const canvas = await html2canvas(document.body, {
         scale,
         width: innerWidth,
@@ -511,7 +554,7 @@ export class ArTabletop {
         scrollY: 0,
         windowWidth: innerWidth,
         windowHeight: innerHeight,
-        backgroundColor: '#f5ead3',
+        backgroundColor: '#5e150f',
         logging: false,
         useCORS: true,
         // Only what never changes with play goes into the target: the mat,
@@ -521,14 +564,21 @@ export class ArTabletop {
         // phones re-registering, and the native tracker losing its lock).
         ignoreElements: (el) => el.matches?.(STATIC_CAPTURE_IGNORE) ?? false,
       });
-      const jpeg = canvas.toDataURL('image/jpeg', 0.85);
+      const whole = document.createElement('canvas');
+      whole.width = Math.min(canvas.width, 1280);
+      whole.height = Math.round((canvas.height * whole.width) / canvas.width);
+      const wctx = whole.getContext('2d')!;
+      wctx.imageSmoothingQuality = 'high';
+      wctx.drawImage(canvas, 0, 0, whole.width, whole.height);
+      const jpeg = whole.toDataURL('image/jpeg', 0.85);
       if (jpeg !== this.lastTrackingJpeg && this.attached) {
         this.lastTrackingJpeg = jpeg;
         this.trackingEpoch += 1;
         const out: ArTrackingTarget[] = [];
-        const regions = await this.trackingRegions(out);
+        const regions = this.trackingRegions(canvas, scale, out);
         this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, regions);
-        this.lastTargets = { epoch: this.trackingEpoch, at: Date.now(), regions: out };
+        const bytes = jpeg.length + regions.reduce((n, r) => n + r.mat.length, 0);
+        this.lastTargets = { epoch: this.trackingEpoch, at: Date.now(), captureMs: Math.round(performance.now() - started), bytes, regions: out };
         this.onTrackingPublished?.(this.lastTargets);
       }
     } catch (error) {
@@ -560,14 +610,12 @@ export class ArTabletop {
    *  AR pieces sit exactly on their on-screen counterparts). */
   publishFromState(lobby: GameState, shownHandUids: readonly string[] = []): void {
     if (!this.attached || !this.mPerPx) return;
-    // The tracking regions follow the seats: a seat taken or left swaps
-    // the panel (join QR ↔ player mat) and its card slots. Re-capture when
-    // that geometry changes; hand counts do not change it (every slot
-    // always has a cell), so play itself never triggers a capture.
-    const geometryKey = ['.top-edge', '.bottom-edge', '[data-token-view-seat="1"]', '[data-token-view-seat="2"]'].map((sel) => {
-      const r = document.querySelector(sel)?.getBoundingClientRect();
-      return r ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}` : '-';
-    }).join('|') + '|' + [...document.querySelectorAll<HTMLElement>('[data-seat] [data-table-hand] .hand-cell')].map((el) => { const r = el.getBoundingClientRect(); return `${Math.round(r.left)},${Math.round(r.top)}`; }).join(';');
+    // The tracking regions are cut from the band and the rails; only their
+    // rectangles matter. Re-capture when one moves (a resize, the diagonal,
+    // a seat taken or left that reflows the grid); play never moves them,
+    // so a game of forty moves publishes no new targets.
+    const rectKey = (r: Rect | DOMRect | null | undefined) => (r ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}` : '-');
+    const geometryKey = [rectKey(document.querySelector('.shared-market')?.getBoundingClientRect()), rectKey(goodsStacksRect('1')), rectKey(goodsStacksRect('2'))].join('|');
     if (geometryKey !== this.regionGeometryKey) {
       this.regionGeometryKey = geometryKey;
       this.refreshTracking(600);

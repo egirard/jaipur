@@ -17,28 +17,20 @@
 
 export type ArAsset = { img: string; wM: number; hM: number };
 
-/** A region of the screen the phones track, published instead of a
- *  screenshot of the whole table: a player's mat, or the middle of their
- *  token rail. `mat` is the region's static layer (JPEG data URL,
- *  everything play-varying left out); the viewer composes the actual
- *  target(s) from it. `count`: the region holds face-down cards in
- *  `slots` (filled from the `fill` end, drawn in slot order), and the
- *  viewer bakes one target per count; `scene`: the viewer draws the shared
- *  scene's nodes that lie inside the region; `mat`: the static layer is the
- *  target as it is. A region with `seat` is for that seat's phone only
- *  (a player never points the phone at the opponent's mat); spectators
- *  take every region. Positions are metres in the table frame (x right, z
- *  toward the bottom edge, origin at the screen centre). */
+/** A static patch of the screen the phones register from, published
+ *  alongside the whole-screen image: a column of the market band, or a
+ *  row of a player's token rail. `mat` is the patch's static layer (JPEG
+ *  data URL, everything play-varying left out) and IS the tracked image;
+ *  pieces that move over it during play are occlusion the tracker
+ *  tolerates. A region with `seat` is for that seat's phone only (a
+ *  player sells on their own rail and never looks at the opponent's);
+ *  spectators take every region. Positions are metres in the table frame
+ *  (x right, z toward the bottom edge, origin at the screen centre). */
 export type ArTrackingRegion = {
   id: string;
   seat?: string;
   xM: number; zM: number; widthM: number; heightM: number;
   mat: string;
-  compose: 'count' | 'scene' | 'mat';
-  slots?: { xM: number; zM: number; wM: number; hM: number; rotY: number }[];
-  fill?: 'start' | 'end';
-  /** Asset id of the back drawn in filled slots. */
-  back?: string;
 };
 
 export type ArNode = {
@@ -216,6 +208,9 @@ export class ArHost {
    *  pixels, no moving pieces) and its physical width in meters. Republish
    *  whenever the static layer or the physical scale changes. The layer must
    *  be feature-rich or phones will not lock — see the API doc. */
+  /** What was last published as `tracking` (dev hooks and tests read it). */
+  get lastTracking(): { image: string; widthM: number; epoch?: number; regions?: ArTrackingRegion[] } | null { return this.tracking; }
+
   publishTracking(imageJpegDataUrl: string, widthM: number, epoch?: number, regions?: ArTrackingRegion[]): void {
     this.tracking = { image: imageJpegDataUrl, widthM, ...(epoch != null ? { epoch } : {}), ...(regions?.length ? { regions } : {}) };
     this.send({ type: 'tracking', tracking: this.tracking });
