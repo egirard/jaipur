@@ -195,6 +195,7 @@
   let arDiag = $state(55);
   let localStore = $state(false);
   let scalePanelOpen = $state(false);
+  let scalePanelSeat = $state<Seat>(2); // the panel faces whoever opened it
   let physical = $state<PhysicalInfo | null>(null);
 
   function refreshPhysical() {
@@ -582,6 +583,13 @@
       if (scoring?.key === key && scoring.stage !== 'final') scoring = null;
     }
   }
+  // Tokens a sale has just awarded stay invisible on the mat until their
+  // flight lands there (one by one, as the flights are staggered); the
+  // state shows them at once, which put them on the mat as the cards were
+  // still flying.
+  let arrivingTokenIds = $state<Set<string>>(new Set());
+  const tokenLanded = (id: string) => { if (arrivingTokenIds.has(id)) { const s = new Set(arrivingTokenIds); s.delete(id); arrivingTokenIds = s; } };
+  const allTokenIds = (state: GameState | null | undefined) => [...Object.values(state?.round?.ownedGoodsTokens ?? {}).flat(), ...Object.values(state?.round?.ownedBonusTokens ?? {}).flat()].map(({ id }) => id);
   let tokenFlights = $state<Array<{
     inverted?: boolean;
     reveal?: boolean; // face-down bonus token flips to its value in flight
@@ -718,9 +726,16 @@
           if (scoring?.stage === 'final' && (next.round?.status !== 'complete' || scoringKey() !== scoring.key)) scoring = null;
           for (const activity of next.activity) knownActivityIds.add(activity.id);
           repositoryReady = true;
+          if (repositoryReady && newActivities.some((a) => a.type === 'cards/sold')) {
+            const had = new Set(allTokenIds(previous));
+            const fresh = allTokenIds(next).filter((id) => !had.has(id));
+            if (fresh.length) arrivingTokenIds = new Set([...arrivingTokenIds, ...fresh]);
+          }
           const actionAnimation = newActivities.length > 0
             ? animateActivities(newActivities, previous, next)
             : Promise.resolve();
+          // Whatever did not get a flight (no destination box) shows once the move's animation is over.
+          if (arrivingTokenIds.size) void actionAnimation.then(() => { if (arrivingTokenIds.size) arrivingTokenIds = new Set(); });
           if (roundJustEnded) {
             const key = `${next.epoch}:${next.round?.number}`;
             claimRoundScoring(key);
@@ -1006,6 +1021,25 @@
    *  (unless the tap is inside it or on a gear), a staged sale lapses unless
    *  the tap is on a token stack or the sale prompt, and a draw awaiting
    *  confirmation is undone unless the tap is on the prompt or the card. */
+  // A finger that presses a control which re-renders under it (a market
+  // card becoming its own ✓ confirm button, a loaded card becoming the
+  // trade confirm) must not have its release counted as the confirming
+  // tap: the browser dispatches the touch's click to whatever is under the
+  // finger when it lifts, and tapDown only swallows clicks on the node it
+  // pressed. Remember what was pressed; a click within 700 ms whose
+  // pressed element is no longer in the document is the tail of that press.
+  let pressedEl: Element | null = null;
+  let pressedAt = 0;
+  function notePress(event: PointerEvent) {
+    pressedEl = event.target as Element | null;
+    pressedAt = performance.now();
+  }
+  function ghostClickGuard(event: MouseEvent) {
+    if (pressedEl && !document.contains(pressedEl) && performance.now() - pressedAt < 700) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }
   function tapElsewhere(event: PointerEvent) {
     const target = event.target as Element | null;
     const within = (selector: string) => Boolean(target?.closest?.(selector));
@@ -2435,7 +2469,7 @@
         delay,
         speed
       }];
-      setTimeout(() => tokenFlights = tokenFlights.filter((flight) => flight.key !== key), 1000 * speed + delay);
+      setTimeout(() => { tokenFlights = tokenFlights.filter((flight) => flight.key !== key); tokenLanded(token.id); }, 1000 * speed + delay);
     });
     for (const activity of activities) {
       if (activity.type !== 'cards/sold' || tokenMovements.length === 0) continue;
@@ -2536,6 +2570,8 @@
 {/snippet}
 
 <svelte:window
+  onpointerdowncapture={notePress}
+  onclickcapture={ghostClickGuard}
   onpointerdown={(e) => { startMusic(); closeVolumeOutside(e); tapElsewhere(e); }}
   onkeydown={startMusic}
   onfocus={onWindowFocusChange}
@@ -2591,7 +2627,7 @@
     aria-expanded={scalePanelOpen}
     aria-label="Table options and AR screen scale"
     data-ar-diag={arDiag}
-    onclick={() => { scalePanelOpen = !scalePanelOpen; refreshPhysical(); }}
+    onclick={() => { scalePanelSeat = seat; scalePanelOpen = !scalePanelOpen; refreshPhysical(); }}
   ><span class="scale-gear" aria-hidden="true">
       <svg viewBox="0 0 48 48" width="1em" height="1em">
         <path class="gear-outline" fill="currentColor" d="M24 4l3 4.5 5.3-1.4 1.4 5.3L38.5 15 36 20l4 3.6-4 3.6 2.5 5-4.8 2.6-1.4 5.3-5.3-1.4L24 44l-3-4.5-5.3 1.4-1.4-5.3L9.5 33 12 28l-4-3.6 4-3.6-2.5-5 4.8-2.6 1.4-5.3 5.3 1.4z" opacity="0.28"/>
@@ -2796,13 +2832,14 @@
         <span>Herd</span>
       </div>
     </div>
-    <div class="seat-tokens" data-table-tokens={player.uid} aria-label={`${player.displayName}'s earned tokens`}>
+    <div class="seat-tokens" class:dense={ownedTokens(player.uid).length > 18} data-table-tokens={player.uid} aria-label={`${player.displayName}'s earned tokens`}>
       {#each lobby.round?.ownedGoodsTokens[player.uid] ?? [] as token (token.id)}
-        <span class="earned" data-owned-token-id={token.id}><TokenChip {token} /></span>
+        <span class="earned" class:arriving={arrivingTokenIds.has(token.id)} data-owned-token-id={token.id}><TokenChip {token} /></span>
       {/each}
       {#each lobby.round?.ownedBonusTokens[player.uid] ?? [] as token (token.id)}
         <span
           class="earned bonus"
+          class:arriving={arrivingTokenIds.has(token.id)}
           class:peeking={revealedTokenIds.includes(token.id)}
           data-owned-token-id={token.id}
           data-owned-bonus={token.id}
@@ -2833,15 +2870,13 @@
       {:else}
         <span>Game log</span>
       {/if}
-      {#if !open}
-        <button type="button" class="log-toggle" aria-label="Show the full game log" onclick={() => (logOpen = { ...logOpen, [side]: true })}>+</button>
-      {/if}
+      <!-- One toggle, in one place: + opens the full log above the pill, − (in the same spot) closes it. -->
+      <button type="button" class="log-toggle" aria-label={open ? 'Hide the game log' : 'Show the full game log'} aria-expanded={open} onclick={() => (logOpen = { ...logOpen, [side]: !open })}>{open ? '−' : '+'}</button>
     </div>
     {#if open}
       <div class="log-panel" data-log-panel>
         <div class="log-head">
           <strong>Game log</strong> <span>{lobby.activity.length}</span>
-          <button type="button" class="log-toggle" aria-label="Hide the game log" onclick={() => (logOpen = { ...logOpen, [side]: false })}>−</button>
         </div>
         <ol use:scrollToEnd>
           {#each lobby.activity as activity (activity.id)}
@@ -3159,7 +3194,7 @@
   {#if scalePanelOpen && physical}
     {@const cardW = 0.0856 / physical.mPerCssPx}
     {@const cardH = 0.05398 / physical.mPerCssPx}
-    <section class="scale-panel" aria-label="AR screen scale">
+    <section class="scale-panel" class:for-top={scalePanelSeat === 1} aria-label="AR screen scale">
       <header>
         <strong>Table options · Tabletop <span class="table-id">{gameId || '•••••'}</span></strong>
         <button type="button" onclick={() => (scalePanelOpen = false)} aria-label="Close">✕</button>
@@ -3631,8 +3666,14 @@
   /* An empty herd shows where the camels will go. */
   .herd-pile .table-herd-card.shadow { opacity: 0.28; filter: grayscale(1); border-style: dashed; }
   .herd-pile .table-herd-card.selected { transform: rotate(calc((var(--pile-index) - 2) * 2deg)) translateY(-14%); }
-  .seat-tokens { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 99rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
-  .seat-tokens .earned { width: clamp(1.4rem, 3.2vmin, 3.6rem); height: clamp(1.4rem, 3.2vmin, 3.6rem); flex: 0 0 auto; }
+  /* Earned tokens wrap onto a second line and never a third (the mat is a
+     fixed 25vh, and a third line went off the screen's edge on the 55"
+     table): past eighteen they shrink so two lines hold a whole round's
+     worth. A token still in flight is kept invisible here (`arriving`). */
+  .seat-tokens { --earned-size: clamp(1.4rem, 3.2vmin, 3.6rem); display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); max-height: calc(2 * var(--earned-size) + 0.2rem + 0.3rem + 2px); overflow: hidden; padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 1.4rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
+  .seat-tokens.dense { --earned-size: clamp(1.1rem, 2.5vmin, 2.8rem); }
+  .seat-tokens .earned { width: var(--earned-size); height: var(--earned-size); flex: 0 0 auto; }
+  .seat-tokens .earned.arriving { visibility: hidden; }
   .seat-tokens .earned.bonus { filter: saturate(0.7); touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer; }
   .seat-tokens .earned.bonus.peeking { filter: none; z-index: 2; transform: scale(1.35); box-shadow: 0 0 0 3px #ffd27a; border-radius: 50%; transition: transform 160ms ease; }
   /* Empty hand slots sit to the left of the fanned cards; only the edges
@@ -3696,6 +3737,7 @@
     padding: 0.9rem 1.1rem; border: 1px solid #8e826b; border-radius: 0.9rem;
     background: #fffaf0; box-shadow: 0 1rem 2.4rem rgb(10 32 30 / 35%); font-size: clamp(0.8rem, 1.6vmin, 1.1rem);
   }
+  .scale-panel.for-top { transform: translate(-50%, -50%) rotate(180deg); }
   .scale-panel > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
   .scale-panel button { min-width: 44px; min-height: 44px; padding: 0.3rem 0.7rem; border: 1px solid #8e826b; border-radius: 0.6rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
   .scale-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
@@ -3755,7 +3797,8 @@
   .bot-seat-button small { display: block; font-weight: 400; font-size: 0.75em; opacity: 0.75; }
   .bot-seat-button { min-height: 44px; padding: 0.4rem 0.9rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
   .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
-  .rejoin img { width: clamp(3.4rem, 8vh, 7rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
+  /* No taller than the header's own line (name + turn pill): the QR must not take the mat height the tokens' second line needs. */
+  .rejoin img { width: clamp(2.6rem, 5vh, 3.4rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
   .rejoin small { max-width: 8rem; color: #a6442d; font-weight: 700; line-height: 1.15; }
   .orientation-toggle {
     min-width: 44px;
@@ -3882,7 +3925,6 @@
   .log-panel { position: absolute; right: 0; bottom: calc(100% + 0.35rem); z-index: 1; display: grid; width: 100%; max-height: min(72vh, 40rem); grid-template-rows: auto minmax(0, 1fr); border: 1px solid #8e826b; border-radius: 0.7rem; background: #fffaf0; box-shadow: 0 0.7rem 1.2rem rgb(10 32 30 / 24%); }
   .log-head { display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.4rem 0.4rem 0.7rem; border-bottom: 1px solid #e4d8bd; font-size: 0.75rem; }
   .log-head span { display: grid; min-width: 1.4rem; min-height: 1.4rem; place-items: center; border-radius: 99rem; background: #315f58; color: white; font-weight: 700; }
-  .log-head .log-toggle { margin-left: auto; }
   .corner-log ol { min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0; padding: 0.55rem; list-style: none; }
   .corner-log li { padding: 0.22rem 0.3rem; border-radius: 0.25rem; background: #f2e8d3; font-size: 0.7rem; }
   .corner-log li small { display: block; margin-top: 0.1rem; font-size: 0.62rem; color: #5d5240; }
@@ -3965,7 +4007,9 @@
     box-shadow: 0 1rem 3rem rgb(10 32 30 / 35%), 0 0 0 1rem rgb(255 244 214 / 55%);
     text-align: center; transition: transform 900ms ease;
   }
-  .scoring-disc.compact { transform: scale(0.62); }
+  /* While the zones fill, the stage disc is small enough to leave the
+     band's two halves to them (one player's zones each side). */
+  .scoring-disc.compact { transform: scale(0.4); }
   @keyframes scoring-grow { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   .scoring-disc strong { font-family: 'Cormorant Garamond', serif; font-size: clamp(1.5rem, 4.6vmin, 4.2rem); line-height: 1; color: #a6442d; letter-spacing: 0.05em; }
   .scoring-disc .facing { max-width: 88%; margin: 0; font-size: clamp(0.8rem, 1.9vmin, 1.6rem); line-height: 1.25; color: #183a37; font-weight: 700; }
@@ -3999,11 +4043,18 @@
   .score-total small { font-size: 0.45em; font-weight: 700; opacity: 0.8; }
   /* Landing zones stack upward from the total (which stays where it is);
      they overhang the mat into the market, above everything on the table. */
-  .score-stack { position: relative; display: inline-grid; justify-items: center; }
+  /* position: static — the zones are placed against the mat (position:
+     relative), not the total they used to hang above. */
+  .score-stack { position: static; display: inline-grid; justify-items: center; }
   /* width: max-content — an absolutely positioned box inside the narrow
      score total would otherwise shrink to its min-width and stack the
      landed tokens three to a row however many arrive. */
-  .score-zones { position: absolute; bottom: calc(100% + 0.4rem); left: 50%; z-index: 7; display: flex; flex-direction: column-reverse; gap: 0.5rem; width: max-content; translate: -50% 0; }
+  /* The zones hang above the mat at the player's right, flush with the
+     band's edge (the mat is 62% of the column, so the cloth beside it is
+     19/62 of the mat's width): the stage disc in the centre no longer
+     covers the counting, and the two players' stacks take opposite sides
+     (the top mat's content is rotated, so its right is the screen's left). */
+  .score-zones { position: absolute; bottom: calc(100% + 0.4rem); right: -30.6%; z-index: 7; display: flex; flex-direction: column-reverse; align-items: flex-end; gap: 0.5rem; width: max-content; }
   .score-zone {
     display: grid; grid-template-columns: auto minmax(4.4rem, 1fr) auto; align-items: center; gap: 0.7rem; box-sizing: border-box;
     min-width: clamp(18rem, 44vmin, 32rem); min-height: clamp(3.4rem, 8vmin, 6rem); padding: 0.3rem 1rem;
@@ -4013,13 +4064,14 @@
   .score-zone.filled { border-style: solid; border-color: #d38b21; background: #fffaf0; }
   .score-zone.wrap { grid-template-columns: min-content minmax(4.4rem, 1fr) auto; }
   .score-zone.wrap small { white-space: normal; text-align: center; line-height: 1.05; }
-  .score-zone.wrap .zone-chips { max-width: clamp(12rem, 40vmin, 30rem); }
+  .score-zone.wrap .zone-chips { max-width: clamp(12rem, 24vmin, 20rem); }
   .score-zone small { font-size: clamp(1.1rem, 2.4vmin, 1.7rem); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
   .score-zone b { min-width: 1.6em; padding: 0.05em 0.4em; border-radius: 99rem; background: #183a37; color: #fffaf0; font-size: clamp(1.6rem, 3.8vmin, 3rem); text-align: center; }
   /* Landed tokens sit in wrapping rows at a fixed round size (like the mat's
      earned tokens), so a full zone grows taller instead of squashing them. */
-  .zone-chips { display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: 0.2rem; min-width: clamp(2.4rem, 6vmin, 4.4rem); min-height: clamp(2.4rem, 6vmin, 4.4rem); max-width: clamp(8rem, 26vmin, 20rem); }
-  .zone-chip { display: block; flex: 0 0 auto; width: clamp(2.4rem, 6vmin, 4.4rem); height: clamp(2.4rem, 6vmin, 4.4rem); animation: zone-chip-land 350ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
+  .zone-chips { display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: 0.2rem; min-width: clamp(1.8rem, 4.2vmin, 3.2rem); min-height: clamp(1.8rem, 4.2vmin, 3.2rem); max-width: clamp(12rem, 24vmin, 20rem); }
+  /* Smaller than the mat's tokens: a zone beside the stage disc has about 260 px for chips, and a full round's goods must stay a few rows. */
+  .zone-chip { display: block; flex: 0 0 auto; width: clamp(1.8rem, 4.2vmin, 3.2rem); height: clamp(1.8rem, 4.2vmin, 3.2rem); animation: zone-chip-land 350ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
   .zone-chip :global(.token-chip) { width: 100%; height: 100%; }
   @keyframes zone-chip-land { from { transform: scale(1.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   .tabletop-herd.scoring-glow .herd-pile { animation: herd-glow 1400ms ease-in-out infinite; }
