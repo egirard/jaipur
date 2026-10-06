@@ -6,7 +6,7 @@
   import { onMount, tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
-  import type { ArViewerDiag } from '$lib/ar/arTabletop';
+  import type { ArRegCheckReport, ArRegCheckStep, ArViewerDiag } from '$lib/ar/arTabletop';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
   import { configureSfx, playSfx, setSfxEnabled, setSfxVolume, unlockSfx } from '$lib/sfx';
@@ -68,13 +68,53 @@
   let showArTargets = $state(false);
   let showArDiag = $state(false);
   let arTargets = $state<ArTrackingTargets | null>(null);
+  // Registration check: Table options asks a seat's phone to walk through
+  // a scripted set of poses (the phone gives every instruction, countdown
+  // and buzz — the table has no input) and report what registered; the
+  // latest report per seat is shown in the panel.
+  type RegReport = ArRegCheckReport & { at: number };
+  let regCheck = $state<{ seat: Seat; id: string; at: number } | null>(null);
+  let regReports = $state<Partial<Record<Seat, RegReport>>>({});
+  function publishArDebug() {
+    if (!ar) return;
+    ar.debug = { targets: showArTargets, diag: showArDiag, ...(regCheck ? { regcheck: { seat: String(regCheck.seat), id: regCheck.id } } : {}) };
+    publishAr();
+  }
   function setArDebug(next: { targets?: boolean; diag?: boolean }) {
     if (next.targets !== undefined) showArTargets = next.targets;
     if (next.diag !== undefined) showArDiag = next.diag;
     localStorage.setItem('jaipur:tabletop:ar-targets', showArTargets ? 'on' : 'off');
     localStorage.setItem('jaipur:tabletop:ar-diag', showArDiag ? 'on' : 'off');
-    if (ar) { ar.debug = { targets: showArTargets, diag: showArDiag }; publishAr(); }
+    publishArDebug();
   }
+  function startRegCheck(seat: Seat) {
+    regCheck = { seat, id: `${Date.now().toString(36)}-${seat}`, at: Date.now() };
+    regReports = { ...regReports, [seat]: { id: regCheck.id, seat: String(seat), status: 'armed', step: -1, stepId: null, totalSteps: 0, steps: [], at: Date.now() } };
+    publishArDebug();
+  }
+  function stopRegCheck() {
+    regCheck = null;
+    publishArDebug();
+  }
+  const pct = (st: ArRegCheckStep) => (st.frames ? Math.round((100 * st.tracked) / st.frames) : 0);
+  const secs = (ms: number | null | undefined) => (ms == null ? null : `${(ms / 1000).toFixed(1)} s`);
+  /** One line per step of a finished (or running) check. */
+  const regStepLine = (st: ArRegCheckStep): string => {
+    const seen = st.targets.length ? ` (${st.targets.join(', ')})` : '';
+    switch (st.id) {
+      case 'lock': return `first lock from the market: ${st.lockMs == null ? 'none within the step' : st.lockMs === 0 ? 'already locked' : secs(st.lockMs)}${seen}`;
+      case 'hand': return `over the hand: ${pct(st)}% tracked${seen}`;
+      case 'rail': return `over the rail: ${pct(st)}% tracked${seen}`;
+      case 'away': return `looking away: ${st.emulated ? 'held' : 'dropped'}`;
+      case 'back': return `re-lock over the hand: ${st.firstTrackedMs == null ? 'none within the step' : secs(st.firstTrackedMs)}${seen}`;
+      default: return `${st.id}: ${pct(st)}% tracked`;
+    }
+  };
+  const regStatusLine = (r: RegReport): string =>
+    r.status === 'armed' ? 'waiting for the phone to enter AR (the phone says what to do)'
+      : r.status === 'running' ? `step ${r.step + 1} of ${r.totalSteps}: ${r.stepTitle ?? r.stepId ?? ''}`
+      : r.status === 'aborted' ? `the phone left AR during step ${r.step + 1}`
+      : `done${r.score ? ` · images ${r.score}` : ''}${r.epoch != null ? ` · epoch ${r.epoch}` : ''}`;
   const phoneDiagFor = (seat: Seat): PhoneDiag | undefined =>
     Object.values(phoneDiags).filter((d) => d.seat === String(seat)).sort((a, b) => b.at - a.at)[0];
   const diagWord = (d: PhoneDiag | undefined) =>
@@ -719,6 +759,13 @@
         phoneDiags = { ...phoneDiags, [viewerId]: { ...report, seat, at: Date.now() } };
       };
       ar.onTrackingPublished = (targets) => (arTargets = targets);
+      ar.onViewerRegCheck = (_viewerId, seat, report) => {
+        const s = Number(seat ?? report.seat) as Seat;
+        if (s !== 1 && s !== 2) return;
+        regReports = { ...regReports, [s]: { ...report, at: Date.now() } };
+        // The request is spent once the phone finishes or gives up.
+        if ((report.status === 'done' || report.status === 'aborted') && regCheck?.id === report.id) { regCheck = null; publishArDebug(); }
+      };
       ar.debug = { targets: showArTargets, diag: showArDiag };
       setInterval(() => {
         const cutoff = Date.now() - 12000;
@@ -3105,6 +3152,33 @@
         <label><input type="checkbox" checked={showArDiag} data-ar-diag-option onchange={(e) => setArDebug({ diag: (e.currentTarget as HTMLInputElement).checked })} /> Show AR diagnostics</label>
         <small>Prints each phone's registration numbers at its player's edge of the market (and on the phone itself). See docs/TRACKING-DIAGNOSTICS.md in ARViewer for what each number means.</small>
       </div>
+      <div class="facing-option diag-option reg-option">
+        <div class="reg-controls">
+          <span>Registration check</span>
+          {#if regCheck}
+            <button type="button" class="orientation-toggle" data-reg-stop onclick={stopRegCheck}>Stop (Player {regCheck.seat})</button>
+          {:else}
+            <button type="button" class="orientation-toggle" data-reg-check="1" onclick={() => startRegCheck(1)}>Player 1</button>
+            <button type="button" class="orientation-toggle" data-reg-check="2" onclick={() => startRegCheck(2)}>Player 2</button>
+          {/if}
+        </div>
+        <small>Asks that player's phone to run a short walk-through: it restarts AR cold, then tells the player where to point and for how long (market, own cards, token rail, away, back), buzzing at each step, and sends back how fast it locked and how much of each pose was tracked. Nothing to do on this screen while it runs.</small>
+      </div>
+      {#each [1, 2] as const as regSeat}
+        {@const r = regReports[regSeat]}
+        {#if r}
+          <div class="reg-report" data-reg-report={regSeat}>
+            <small><b>Player {regSeat}</b> · {regStatusLine(r)} · {Math.round((Date.now() - r.at) / 1000)}s ago</small>
+            {#if r.steps.length}
+              <ul>
+                {#each r.steps as st (st.id)}
+                  <li>{regStepLine(st)}</li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+        {/if}
+      {/each}
       <div class="facing-option sound-option">
         <button
           type="button"
@@ -3533,13 +3607,15 @@
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
   /* Each player's gear sits at their own edge of the market, on their left. */
-  /* A bare gear on the cloth (no pill, no border), a little larger, its
-     outline dark so it reads without a background. */
-  .orientation-toggle.options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); min-width: 0; min-height: 0; padding: 0.15rem; border: none; border-radius: 0; background: none; box-shadow: none; color: #183a37; }
-  .options-gear .scale-gear { font-size: 2.7em; }
-  .options-gear .scale-gear .gear-outline { opacity: 0.55; stroke: #0d1f1d; stroke-width: 1.6; paint-order: stroke; }
-  .options-gear .scale-gear .gear-arrow { stroke: #0d1f1d; stroke-width: 2.6; }
-  .options-gear .scale-gear b { color: #fffaf0; text-shadow: 0 0 3px #0d1f1d, 0 0 3px #0d1f1d, 0 0 5px #0d1f1d; }
+  /* A bare gear on the cloth (no pill, no border), the height of the
+     speaker button beside it, drawn solid in the table's own palette: a
+     cream gear with a rust outline, like the cream pills with rust borders
+     everywhere else, so it reads as one of the controls, not a watermark. */
+  .orientation-toggle.options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); min-width: 0; min-height: 0; padding: 0.15rem; border: none; border-radius: 0; background: none; box-shadow: none; color: #a6442d; }
+  .options-gear .scale-gear { font-size: 2.5em; filter: drop-shadow(0 0.08rem 0.25rem rgb(10 32 30 / 45%)); }
+  .options-gear .scale-gear .gear-outline { opacity: 1; fill: #fff4d6; stroke: #a6442d; stroke-width: 2.4; paint-order: stroke; }
+  .options-gear .scale-gear .gear-arrow { stroke: #a6442d; stroke-width: 2.6; }
+  .options-gear .scale-gear b { color: #a6442d; text-shadow: 0 0 3px #fff4d6, 0 0 3px #fff4d6, 0 0 5px #fff4d6; }
   .options-gear.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: var(--market-edge-inset); transform: rotate(180deg); }
   /* The speaker sits beside each player's gear; a muted one dims. */
   .music-control { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: calc(var(--market-edge-inset) + 3.6em); display: flex; align-items: center; gap: 0.4rem; }
@@ -3584,6 +3660,13 @@
   .turn-state + .ar-dot { margin-left: 0.4rem; vertical-align: middle; }
   .scale-panel .diag-option label { display: flex; flex: 0 0 auto; align-items: center; gap: 0.45rem; font-weight: 700; color: #183a37; }
   .scale-panel .diag-option input { width: 1.2em; height: 1.2em; accent-color: #a6442d; }
+  .scale-panel .reg-option { align-items: flex-start; }
+  .scale-panel .reg-controls { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0.4rem; max-width: 11rem; font-weight: 700; color: #183a37; }
+  .scale-panel .reg-controls > span { flex: 1 0 100%; }
+  .scale-panel .reg-controls .orientation-toggle { min-width: 0; min-height: 0; padding: 0.25rem 0.7rem; font-size: 0.85em; }
+  .scale-panel .reg-report { margin: -0.2rem 0 0.6rem; padding: 0.35rem 0.6rem; border-radius: 0.5rem; background: rgb(24 58 55 / 7%); color: #183a37; }
+  .scale-panel .reg-report small { line-height: 1.3; }
+  .scale-panel .reg-report ul { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.8em; line-height: 1.3; }
   /* Diagnostics: the tracking targets outlined on the screen (never captured). */
   .ar-targets { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
   .ar-target { position: absolute; box-sizing: border-box; border: 3px dashed #1c7ed6; border-radius: 4px; }

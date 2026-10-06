@@ -75,9 +75,14 @@ export type ArScene = {
   controls?: { id: string; label: string }[];
   /** Diagnostics the host asks viewers to show (shared scene only):
    *  `targets` outlines the tracking targets in AR, `diag` prints the
-   *  viewer's registration numbers on screen. */
-  debug?: { targets?: boolean; diag?: boolean };
+   *  viewer's registration numbers on screen, `regcheck` asks the named
+   *  seat's phone to run the registration walk-through (a new `id` per
+   *  request; the phone reports `regcheck` actions back). */
+  debug?: ArDebugFlags;
 };
+
+/** Diagnostics flags published to the phones in the shared scene. */
+export type ArDebugFlags = { targets?: boolean; diag?: boolean; regcheck?: { seat: string; id: string } | null };
 
 /** An action forwarded by the relay; viewerId/seat are relay-stamped. */
 export type ArAction = {

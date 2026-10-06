@@ -24,7 +24,7 @@
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
 import html2canvas from 'html2canvas';
-import { ArHost, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingRegion } from './arHost';
+import { ArHost, type ArDebugFlags, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingRegion } from './arHost';
 import { captureScale, centreMeters, overlappingColumns, pieces, type Rect } from './trackingGeometry';
 
 /** What a phone reports about its registration every couple of seconds. */
@@ -37,6 +37,29 @@ export type ArViewerDiag = {
   targetId?: string | null;
   /** Target ids ARCore rated untrackable (`score` then reads "k/n trackable"). */
   untrackable?: string[];
+};
+
+/** One step of a phone's registration walk-through, as the phone measured it. */
+export type ArRegCheckStep = {
+  id: 'lock' | 'hand' | 'rail' | 'away' | 'back' | string;
+  /** How long the step ran. */
+  ms: number | null;
+  frames: number; tracked: number; emulated: number;
+  /** 'lock' step: time to the first lock (0 = already locked; null = none within the step). */
+  lockMs: number | null;
+  /** Time to the first direct sighting in the step (the re-lock time for 'back'). */
+  firstTrackedMs: number | null;
+  /** Region ids seen directly during the step. */
+  targets: string[];
+  timedOut?: boolean;
+};
+/** A phone's progress report for a registration check the table requested. */
+export type ArRegCheckReport = {
+  id: string; seat?: string | null;
+  status: 'armed' | 'running' | 'done' | 'aborted';
+  step: number; stepId: string | null; stepTitle?: string | null; totalSteps: number;
+  steps: ArRegCheckStep[];
+  score?: string | null; epoch?: number | null; targets?: number;
 };
 import type { Card, GameState } from '../jaipur-rules';
 
@@ -347,8 +370,10 @@ export class ArTabletop {
   /** The tracking regions just published (band columns, rail rows), with their screen rectangles. */
   onTrackingPublished: ((targets: ArTrackingTargets) => void) | null = null;
   lastTargets: ArTrackingTargets | null = null;
+  /** A phone's registration-check progress (see the API doc's `regcheck` action). */
+  onViewerRegCheck: ((viewerId: string, seat: string | undefined, report: ArRegCheckReport) => void) | null = null;
   /** Diagnostics the phones should show (published as `scene.debug`). */
-  debug: { targets?: boolean; diag?: boolean } | null = null;
+  debug: ArDebugFlags | null = null;
   get epoch(): number { return this.trackingEpoch; }
   private seatNames = new Map<string, string>();
   private lastPlayers: GameState['players'] = [];
@@ -389,6 +414,10 @@ export class ArTabletop {
         // Registration reports from phones in AR: shown, never answered.
         if (a.action === 'diag' && a.viewerId && a.data && typeof a.data === 'object') {
           this.onViewerDiag?.(a.viewerId, a.seat, a.data as ArViewerDiag);
+        }
+        // Registration walk-through progress and results.
+        if (a.action === 'regcheck' && a.viewerId && a.data && typeof a.data === 'object') {
+          this.onViewerRegCheck?.(a.viewerId, a.seat, a.data as ArRegCheckReport);
         }
         // Host-defined phone buttons (scene.controls).
         if (a.action === 'control' && a.seat) {
