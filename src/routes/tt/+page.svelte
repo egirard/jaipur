@@ -3001,13 +3001,11 @@
       </div>
       <div class="market-stage">
         <span class="deck" aria-label={`Deck, ${lobby.round.deck.length} cards`}>
-          <span class="deck-count deck-count-top" aria-hidden="true">
-            <span>Deck</span><b>{lobby.round.deck.length}</b>
-          </span>
           <img class="deck-card" src={componentImage('card-back')} alt="" />
-          <span class="deck-count" aria-hidden="true">
-            <span>Deck</span><b>{lobby.round.deck.length}</b>
-          </span>
+          <!-- The count sits in a corner of the deck, once for each player
+               (the top player's reads the right way up from their side). -->
+          <b class="deck-badge for-top" aria-hidden="true" data-deck-count>{lobby.round.deck.length}</b>
+          <b class="deck-badge" aria-hidden="true" data-deck-count>{lobby.round.deck.length}</b>
         </span>
         <div class="market-cards">
           <StableMarketLayout>
@@ -3470,7 +3468,7 @@
        so the market pattern shows on either side of them. */
     --edge-size: minmax(0, 25vh);
     --hand-card-size: clamp(3.4rem, 8.4vh, 10rem);
-    --mat-width: 78%;
+    --mat-width: 62%; /* was 78%: a fifth narrower, pieces unchanged — only the whitespace between them went */
     position: fixed;
     inset: 0;
     display: grid;
@@ -3514,7 +3512,7 @@
     grid-auto-columns: auto;
     align-items: center;
     gap: 1rem;
-    padding: clamp(0.7rem, 1.8vmin, 1.4rem) clamp(5rem, 11vw, 10rem);
+    padding: clamp(0.7rem, 1.8vmin, 1.4rem) clamp(2.5rem, 5.5vw, 5rem);
     position: relative;
   }
   .join-seat h2, .player-seat h2 {
@@ -3533,7 +3531,7 @@
     height: 100%;
     grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0.25rem;
-    padding: clamp(0.3rem, 0.7vmin, 0.55rem) clamp(1.2rem, 2.6vw, 2.6rem);
+    padding: clamp(0.3rem, 0.7vmin, 0.55rem) clamp(0.8rem, 1.3vw, 1.5rem);
     border: 3px solid transparent;
     border-radius: inherit;
     transition: border-color 180ms ease, background 180ms ease;
@@ -3569,9 +3567,10 @@
     grid-auto-flow: column;
     grid-auto-columns: auto;
     align-items: center;
-    gap: clamp(0.55rem, 1.5vw, 1.4rem);
+    gap: clamp(0.45rem, 0.9vw, 1rem);
   }
-  .player-seat > header > div { display: flex; align-items: baseline; gap: 0.45rem; }
+  .player-seat > header > div { display: flex; min-width: 0; align-items: baseline; gap: 0.45rem; }
+  .player-seat > header h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .turn-state { padding: 0.2rem 0.55rem; border-radius: 99rem; background: #e9dcc1; }
   .active .turn-state { background: #a6442d; color: white; }
   .seat-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) clamp(5rem, 9vw, 14rem); align-items: center; gap: 0.5rem; }
@@ -3643,7 +3642,7 @@
   .shared-market {
     --table-market-card-size: clamp(4rem, min(18vh, 10.5vw), 20rem);
     --table-target-height: clamp(2.7rem, 6.5vh, 7rem);
-    --stable-market-gap: clamp(0.2rem, 0.5vw, 0.9rem);
+    --stable-market-gap: clamp(0.3rem, 0.73vw, 1rem); /* the gap BETWEEN market cards (14 px on the 55" screen: half of what the stretched grid left) */
     --market-edge-inset: clamp(0.9rem, 1.6vmin, 2.5rem);
     position: relative;
     grid-column: 2;
@@ -3656,7 +3655,7 @@
   }
   .shared-market > header { position: absolute; z-index: 3; top: var(--market-edge-inset); left: 50%; display: flex; min-height: 36px; align-items: center; justify-content: center; gap: clamp(0.6rem, 2vw, 3rem); font-size: clamp(0.7rem, 1.5vmin, 1.5rem); transform: translateX(-50%); }
   /* Labels that sit straight on the (dark) cloth read from a cream pill. */
-  .shared-market > header > span, .deck-count { padding: 0.1em 0.6em; border-radius: 99rem; background: rgb(255 250 240 / 88%); }
+  .shared-market > header > span { padding: 0.1em 0.6em; border-radius: 99rem; background: rgb(255 250 240 / 88%); }
   .shared-market[data-market-facing-seat='1'] > header { top: auto; bottom: var(--market-edge-inset); transform: translateX(-50%) rotate(180deg); }
   .shared-market[data-market-facing-seat='1'] :global(.score-review) { padding-top: 0.5rem; padding-bottom: calc(var(--market-edge-inset) + 1.6rem); }
   /* Each player's gear sits at their own edge of the market, on their left. */
@@ -3769,9 +3768,9 @@
     font-weight: 700;
   }
   .orientation-toggle[aria-pressed='true'] { border-color: #a6442d; background: #fff4d6; color: #a6442d; }
-  .deck { display: grid; grid-template-rows: clamp(1.8rem, 3.5vmin, 3.5rem) var(--table-market-card-size) clamp(1.8rem, 3.5vmin, 3.5rem); place-items: center; gap: clamp(0.25rem, 0.6vmin, 0.75rem); }
-  .deck-count { display: flex; min-width: 3rem; align-items: baseline; justify-content: center; gap: 0.3rem; font-size: clamp(0.8rem, 1.4vmin, 1.5rem); }
-  .deck-count-top { transform: rotate(180deg); }
+  .deck { position: relative; display: grid; grid-template-rows: var(--table-market-card-size); place-items: center; }
+  .deck-badge { position: absolute; z-index: 2; right: -0.4rem; bottom: -0.4rem; min-width: 2em; padding: 0.12em 0.5em; border: 1.5px solid #315f58; border-radius: 99rem; background: rgb(255 250 240 / 96%); color: #183a37; font-size: clamp(0.8rem, 1.5vmin, 1.5rem); font-weight: 800; line-height: 1.2; text-align: center; box-shadow: 0 0.1rem 0.3rem rgb(10 32 30 / 35%); }
+  .deck-badge.for-top { right: auto; bottom: auto; left: -0.4rem; top: -0.4rem; transform: rotate(180deg); }
   .deck-card {
     width: var(--table-market-card-size);
     height: var(--table-market-card-size);
@@ -3786,16 +3785,20 @@
     height: 100%;
     min-width: 0;
     min-height: 0;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto auto;
+    justify-content: center;
     align-items: center;
-    gap: clamp(0.45rem, 1.1vw, 1rem);
+    gap: clamp(0.45rem, 1.3vw, 1.6rem); /* deck to the first card: unchanged (25 px on the 55" screen) */
     padding: clamp(3rem, 7vh, 7rem) 0;
   }
+  /* The five cards sit at their own width with a fixed gap, not spread
+     over the band: the market is narrower, centred, and the width it gave
+     up is cloth (nothing else grows into it). */
   .market-cards {
     display: grid;
-    width: 100%;
+    width: auto;
     min-width: 0;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(5, auto);
     place-items: center;
     gap: var(--stable-market-gap);
   }

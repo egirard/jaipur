@@ -148,11 +148,13 @@ test('a fresh tabletop seats two QR-joined players around one touch market', asy
   expect(Math.abs(
     deckBox!.y + deckBox!.height / 2 - (marketCardBox!.y + marketCardBox!.height / 2)
   )).toBeLessThanOrEqual(1);
-  await expect(page.locator('.deck-count')).toHaveCount(2);
-  const deckCountLabels = await page.locator('.deck-count').allTextContents();
+  // The count sits in a corner of the deck, once per player (the top
+  // player's rotated to read from their side).
+  await expect(page.locator('.deck-badge')).toHaveCount(2);
+  const deckCountLabels = await page.locator('.deck-badge').allTextContents();
   expect(deckCountLabels[0]).toBe(deckCountLabels[1]);
-  expect(deckCountLabels[0]).toMatch(/^Deck\d+$/);
-  const invertedDeckCount = await page.locator('.deck-count-top').evaluate(
+  expect(deckCountLabels[0]).toMatch(/^\d+$/);
+  const invertedDeckCount = await page.locator('.deck-badge.for-top').evaluate(
     (element) => getComputedStyle(element).transform
   );
   expect(invertedDeckCount).toMatch(/^matrix\(-1, 0, 0, -1,/);
@@ -555,7 +557,7 @@ test('a fresh tabletop seats two QR-joined players around one touch market', asy
       {
         spec: 'The draw pile sits left of the market row with a count readable from each seat',
         check: async () => {
-          await expect(page.locator('.deck-count')).toHaveCount(2);
+          await expect(page.locator('.deck-badge')).toHaveCount(2);
           expect(invertedDeckCount).toMatch(/^matrix\(-1, 0, 0, -1,/);
           expect(deckBox!.x + deckBox!.width).toBeLessThan(marketCardBox!.x);
         }
