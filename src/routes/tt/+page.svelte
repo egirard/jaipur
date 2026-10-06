@@ -2595,7 +2595,7 @@
   ><span class="scale-gear" aria-hidden="true">
       <svg viewBox="0 0 48 48" width="1em" height="1em">
         <path class="gear-outline" fill="currentColor" d="M24 4l3 4.5 5.3-1.4 1.4 5.3L38.5 15 36 20l4 3.6-4 3.6 2.5 5-4.8 2.6-1.4 5.3-5.3-1.4L24 44l-3-4.5-5.3 1.4-1.4-5.3L9.5 33 12 28l-4-3.6 4-3.6-2.5-5 4.8-2.6 1.4-5.3 5.3 1.4z" opacity="0.28"/>
-        <path class="gear-arrow" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M15 33L33 15M15 33h5m-5 0v-5M33 15h-5m5 0v5"/>
+        <path class="gear-arrow" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M12.5 35.5l5-5M12.5 35.5h5m-5 0v-5M35.5 12.5l-5 5M35.5 12.5h-5m5 0v5"/>
       </svg>
       <b>{arDiag}″</b>
     </span></button>
@@ -3664,12 +3664,16 @@
      speaker button beside it, drawn solid in the table's own palette: a
      cream gear with a rust outline, like the cream pills with rust borders
      everywhere else, so it reads as one of the controls, not a watermark. */
-  .orientation-toggle.options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); min-width: 0; min-height: 0; padding: 0.15rem; border: none; border-radius: 0; background: none; box-shadow: none; color: #a6442d; }
+  /* The gear (48 px) is centred on the speaker button beside it (36 px
+     tall, bottom-anchored on the same inset): its box starts 6 px lower.
+     The diagonal label sits small in the gear's middle; the resize arrows
+     move into the two free corners around it. */
+  .orientation-toggle.options-gear { position: absolute; z-index: 3; bottom: calc(var(--market-edge-inset) - 0.375rem); left: var(--market-edge-inset); min-width: 0; min-height: 0; padding: 0; line-height: 0; border: none; border-radius: 0; background: none; box-shadow: none; color: #a6442d; }
   .options-gear .scale-gear { font-size: 3em; filter: drop-shadow(0 0.08rem 0.25rem rgb(10 32 30 / 45%)); }
   .options-gear .scale-gear .gear-outline { opacity: 1; fill: #fff4d6; stroke: #a6442d; stroke-width: 2.4; paint-order: stroke; }
-  .options-gear .scale-gear .gear-arrow { stroke: #a6442d; stroke-width: 2.6; }
-  .options-gear .scale-gear b { color: #a6442d; text-shadow: 0 0 3px #fff4d6, 0 0 3px #fff4d6, 0 0 5px #fff4d6; }
-  .options-gear.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: var(--market-edge-inset); transform: rotate(180deg); }
+  .options-gear .scale-gear .gear-arrow { stroke: #a6442d; stroke-width: 2.4; }
+  .options-gear .scale-gear b { font-size: 0.25em; line-height: 1; letter-spacing: -0.02em; color: #a6442d; text-shadow: none; }
+  .options-gear.for-top { bottom: auto; left: auto; top: calc(var(--market-edge-inset) - 0.375rem); right: var(--market-edge-inset); transform: rotate(180deg); }
   /* The speaker sits beside each player's gear; a muted one dims. */
   .music-control { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: calc(var(--market-edge-inset) + 3.6em); display: flex; align-items: center; gap: 0.4rem; }
   .music-control.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: calc(var(--market-edge-inset) + 3.6em); transform: rotate(180deg); }
