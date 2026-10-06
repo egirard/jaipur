@@ -87,6 +87,43 @@
     localStorage.setItem('jaipur:tabletop:ar-diag', showArDiag ? 'on' : 'off');
     publishArDebug();
   }
+  // Every finished check is kept (localStorage, newest first, the last
+  // twenty) with the table's side of the picture — screen size, viewport,
+  // the published targets and their rectangles — so a run can be read
+  // back later and compared against the next tuning change. "Copy
+  // results" puts the whole history on the clipboard as JSON; the dev
+  // hook `__jaipurDev.regChecks()` returns it.
+  type RegRecord = { at: string; table: { diagIn: number; viewport: [number, number]; mPerPx: number; epoch: number | null; targets: ArTrackingTargets['regions'] | null; session: string | null }; report: ArRegCheckReport };
+  const REG_HISTORY_KEY = 'jaipur:tabletop:regchecks';
+  const loadRegHistory = (): RegRecord[] => { try { const v = JSON.parse(localStorage.getItem(REG_HISTORY_KEY) ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+  let regHistory = $state<RegRecord[]>([]);
+  let regCopied = $state(false);
+  function recordRegCheck(report: ArRegCheckReport) {
+    const rec: RegRecord = {
+      at: new Date().toISOString(),
+      table: { diagIn: currentDiagInches(), viewport: [innerWidth, innerHeight], mPerPx: physical?.mPerCssPx ?? 0, epoch: ar?.epoch ?? null, targets: arTargets?.regions ?? null, session: ar?.host.session ?? null },
+      report
+    };
+    regHistory = [rec, ...regHistory].slice(0, 20);
+    try { localStorage.setItem(REG_HISTORY_KEY, JSON.stringify(regHistory)); } catch { /* storage full or blocked: the table's copy is the relay's anyway */ }
+  }
+  async function copyRegHistory() {
+    try { await navigator.clipboard.writeText(JSON.stringify(regHistory, null, 1)); regCopied = true; setTimeout(() => (regCopied = false), 2000); } catch { regCopied = false; }
+  }
+  const regRecordLine = (rec: RegRecord): string => {
+    const r = rec.report; const f = (id: string) => r.steps.find((st) => st.id === id);
+    const lock = f('lock'); const hand = f('hand'); const rail = f('rail'); const back = f('back');
+    return [
+      new Date(rec.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      `P${r.seat ?? '?'}`,
+      r.status === 'aborted' ? 'aborted' : '',
+      lock ? `lock ${lock.lockMs == null ? '—' : lock.lockMs === 0 ? 'had' : secs(lock.lockMs)}` : '',
+      hand ? `hand ${pct(hand)}%` : '',
+      rail ? `rail ${pct(rail)}%` : '',
+      back ? `re-lock ${back.firstTrackedMs == null ? '—' : secs(back.firstTrackedMs)}` : '',
+      `${rec.table.diagIn}″`
+    ].filter(Boolean).join(' · ');
+  };
   function startRegCheck(seat: Seat) {
     regCheck = { seat, id: `${Date.now().toString(36)}-${seat}`, at: Date.now() };
     regReports = { ...regReports, [seat]: { id: regCheck.id, seat: String(seat), status: 'armed', step: -1, stepId: null, totalSteps: 0, steps: [], at: Date.now() } };
@@ -600,6 +637,7 @@
       if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
       showArTargets = localStorage.getItem('jaipur:tabletop:ar-targets') === 'on';
       showArDiag = localStorage.getItem('jaipur:tabletop:ar-diag') === 'on';
+      regHistory = loadRegHistory();
       const pageParams = new URLSearchParams(location.search);
       // The Firebase channel is disabled for this AR fork: the table is
       // the only writer (phones join and watch over the AR relay), so the
@@ -763,8 +801,11 @@
         const s = Number(seat ?? report.seat) as Seat;
         if (s !== 1 && s !== 2) return;
         regReports = { ...regReports, [s]: { ...report, at: Date.now() } };
-        // The request is spent once the phone finishes or gives up.
-        if ((report.status === 'done' || report.status === 'aborted') && regCheck?.id === report.id) { regCheck = null; publishArDebug(); }
+        // The request is spent once the phone finishes or gives up; the run is kept.
+        if (report.status === 'done' || report.status === 'aborted') {
+          recordRegCheck(report);
+          if (regCheck?.id === report.id) { regCheck = null; publishArDebug(); }
+        }
       };
       ar.debug = { targets: showArTargets, diag: showArDiag };
       setInterval(() => {
@@ -1859,6 +1900,8 @@
       // with their JPEGs) and the regions' screen rectangles, so a test
       // can score the exact targets the phones get (arcoreimg).
       arTracking: () => ({ tracking: ar?.host.lastTracking ?? null, targets: ar?.lastTargets ?? null }),
+      // The registration checks phones have run against this table (newest first).
+      regChecks: () => regHistory,
       // Play one move for whoever is active (the apprentice heuristic
       // stands in for a human), or run the whole game to its summary —
       // used to capture screens for the progress log.
@@ -3179,6 +3222,16 @@
           </div>
         {/if}
       {/each}
+      {#if regHistory.length}
+        <div class="reg-history" data-reg-history>
+          <small><b>Past checks</b> ({regHistory.length}, kept on this table) <button type="button" class="orientation-toggle" data-reg-copy onclick={copyRegHistory}>{regCopied ? 'Copied' : 'Copy results'}</button></small>
+          <ul>
+            {#each regHistory.slice(0, 6) as rec (rec.at)}
+              <li>{regRecordLine(rec)}</li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
       <div class="facing-option sound-option">
         <button
           type="button"
@@ -3612,7 +3665,7 @@
      cream gear with a rust outline, like the cream pills with rust borders
      everywhere else, so it reads as one of the controls, not a watermark. */
   .orientation-toggle.options-gear { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: var(--market-edge-inset); min-width: 0; min-height: 0; padding: 0.15rem; border: none; border-radius: 0; background: none; box-shadow: none; color: #a6442d; }
-  .options-gear .scale-gear { font-size: 2.5em; filter: drop-shadow(0 0.08rem 0.25rem rgb(10 32 30 / 45%)); }
+  .options-gear .scale-gear { font-size: 3em; filter: drop-shadow(0 0.08rem 0.25rem rgb(10 32 30 / 45%)); }
   .options-gear .scale-gear .gear-outline { opacity: 1; fill: #fff4d6; stroke: #a6442d; stroke-width: 2.4; paint-order: stroke; }
   .options-gear .scale-gear .gear-arrow { stroke: #a6442d; stroke-width: 2.6; }
   .options-gear .scale-gear b { color: #a6442d; text-shadow: 0 0 3px #fff4d6, 0 0 3px #fff4d6, 0 0 5px #fff4d6; }
@@ -3667,6 +3720,10 @@
   .scale-panel .reg-report { margin: -0.2rem 0 0.6rem; padding: 0.35rem 0.6rem; border-radius: 0.5rem; background: rgb(24 58 55 / 7%); color: #183a37; }
   .scale-panel .reg-report small { line-height: 1.3; }
   .scale-panel .reg-report ul { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.8em; line-height: 1.3; }
+  .scale-panel .reg-history { margin: -0.2rem 0 0.6rem; padding: 0.35rem 0.6rem; border-radius: 0.5rem; background: rgb(24 58 55 / 7%); color: #183a37; }
+  .scale-panel .reg-history small { display: flex; align-items: center; gap: 0.5rem; line-height: 1.3; }
+  .scale-panel .reg-history .orientation-toggle { min-width: 0; min-height: 0; padding: 0.15rem 0.6rem; font-size: 0.85em; }
+  .scale-panel .reg-history ul { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.78em; line-height: 1.3; font-variant-numeric: tabular-nums; }
   /* Diagnostics: the tracking targets outlined on the screen (never captured). */
   .ar-targets { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
   .ar-target { position: absolute; box-sizing: border-box; border: 3px dashed #1c7ed6; border-radius: 4px; }
