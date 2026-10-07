@@ -1706,10 +1706,13 @@
   }
 
   // The newest seal stays hidden in its seat while the round summary shows it
-  // (and while it is flying down); it appears when the flight lands.
+  // (and while it is flying down); it appears when the flight lands. This
+  // holds for the game-winning second seal too (it used to show at once
+  // because the game's winner was already set); a page reloaded after the
+  // sequence has no scoring running and shows the seal straight away.
   const sealStillOnSummary = (uid: string) =>
     arrivingSealUid === uid ||
-    (lobby.round?.status === 'complete' && !lobby.winnerUid && lobby.round.winnerUid === uid && deliveredSealKey !== scoringKey());
+    (lobby.round?.status === 'complete' && lobby.round.winnerUid === uid && scoring != null && scoring.key === scoringKey() && deliveredSealKey !== scoring.key);
 
   // The seal shown on the round summary flies down to the winner's seat
   // as the next market opens; the seat's new seal appears when it lands.
