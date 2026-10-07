@@ -1751,10 +1751,11 @@
   }
 
   function quitTable() {
-    // Leave the tabletop: back to the site's front page (a new table can be
-    // opened from there; this one stays resumable from its game id).
+    // Leave the game: a fresh table with both seats open to join (the
+    // site's front page is the upstream lobby, not part of this table's
+    // flow). The finished game stays resumable from its game id.
     if (document.fullscreenElement) void document.exitFullscreen();
-    location.href = `${base}/`;
+    location.href = `${base}/tt/?new=1`;
   }
 
   async function rematch() {

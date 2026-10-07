@@ -25,14 +25,13 @@
     onSell: (kind: Good) => void | Promise<void>;
   } = $props();
 
-  // Coins overlap slightly (the most valuable, leftmost coin on top) so a
-  // stack of up to five fits on one line; six or more split into two
-  // lines with the larger line on top. The top of the stack comes first.
-  const rows = (tokens: RoundState['goodsTokens'][Good]) => {
-    if (tokens.length <= 5) return [tokens];
-    const top = Math.ceil(tokens.length / 2);
-    return [tokens.slice(0, top), tokens.slice(top)];
-  };
+  // One wrapping row: the coins are sized so five fit the rail's width
+  // side by side (see .chip), and a sixth and more wrap onto further
+  // lines. They used to overlap by a fifth and split 5/4 by count, which
+  // on a wide-CSS-pixel 55" screen (the rail's width is capped in rem,
+  // the coins grew with vmin) ran the coins off the stack's edge. The top
+  // of the stack comes first.
+  const rows = (tokens: RoundState['goodsTokens'][Good]) => [tokens];
 </script>
 
 <aside
@@ -168,6 +167,7 @@
     gap: 0.1rem;
     padding: 0.15rem 0.2rem;
     overflow: hidden;
+    container-type: inline-size; /* the coins size themselves to this width (cqw) */
     border: 1px solid #b7aa8d;
     border-radius: 0.6rem;
     background:
@@ -190,8 +190,10 @@
   .rail-head { display: flex; gap: 0.35rem; align-items: baseline; font-weight: 800; text-shadow: 0 0 4px #fffaf0, 0 0 4px #fffaf0; }
   .rail-count { padding: 0 0.4rem; border-radius: 99rem; background: #183a37; color: #fffaf0; text-shadow: none; }
   .rail-chip { display: grid; width: 100%; min-width: 0; justify-items: center; gap: 0.12rem; }
-  .chip-row { display: flex; justify-content: center; padding-left: calc(var(--chip) * 0.22); }
-  .chip { position: relative; z-index: var(--z); width: var(--chip); height: var(--chip); flex: 0 0 auto; margin-left: calc(var(--chip) * -0.22); }
+  .chip-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.12rem; }
+  /* No bigger than a fifth of the stack's width (minus the gaps), so five
+     coins always sit side by side without overlapping; the rest wrap. */
+  .chip { position: relative; width: min(var(--chip), calc((100cqw - 0.4rem - 4 * 0.12rem) / 5)); height: min(var(--chip), calc((100cqw - 0.4rem - 4 * 0.12rem) / 5)); flex: 0 0 auto; }
   .empty-stack { font-style: italic; opacity: 0.7; }
   .empty-rail {
     align-self: center;
