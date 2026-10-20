@@ -6,6 +6,7 @@
   import { onMount, tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
+  import OnScreenKeyboard from '$lib/OnScreenKeyboard.svelte';
   import type { ArRegCheckReport, ArRegCheckStep, ArViewerDiag } from '$lib/ar/arTabletop';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
@@ -1367,6 +1368,10 @@
   // with no phone to show them their cards — so Show hands defaults on
   // for them (see showHands) and hold-to-peek is always there.
   let seatNameEntry = $state<{ seat: Seat; name: string } | null>(null);
+  // The table's own keyboard, brought up by a tap on the name field (a
+  // kiosk screen has no system keyboard; inputmode=none keeps a tablet's
+  // from doubling it). Done sits the player, like Enter.
+  let nameKeyboardOpen = $state(false);
   const tableSeatUid = (seat: Seat) => `table-${gameId}-${seat}`;
   async function joinWithoutPhone(seat: Seat) {
     if (!repository || !gameId || playerForSeat(seat) || busy) return;
@@ -1374,6 +1379,7 @@
     if (lobby.players.some((player) => player.uid === uid)) return;
     const name = (seatNameEntry?.seat === seat ? seatNameEntry.name : '').trim().slice(0, 32) || `Player ${seat}`;
     seatNameEntry = null;
+    nameKeyboardOpen = false;
     await repository.append('player/joined', { displayName: name, seat, playerUid: uid });
     await repository.append('player/ready', { playerUid: uid, ready: true });
   }
@@ -2517,57 +2523,73 @@
   }
 </script>
 
+{#snippet plusMark()}<svg class="plus-mark" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v13M3.5 10h13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" /></svg>{/snippet}
+
 {#snippet joinSeat(seat: Seat)}
   {@const qr = seatQrs.find((candidate) => candidate.seat === seat)}
   {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
+  <!-- The mat is a size container: the copy, the QR and the seat buttons
+       take their sizes from it (see .join-seat), not from the viewport. -->
   <section class="join-seat" data-seat={seat} aria-label={`Player ${seat} join code`}>
-    <div>
-      <span class="seat-kicker">Player {seat}</span>
-      <h2>Scan to sit here</h2>
-      <p>Scan with the AR viewer and enter your name. The market opens when both seats join.</p>
-    </div>
-    {#if arQr}
-      <div class="ar-join">
-        <a href={arQr.url} class="qr-frame ar-frame" aria-label={`Sit here with the AR viewer as Player ${seat}`}>
-          <img src={arQr.image} alt={`QR code to sit here with the AR viewer as Player ${seat}`} />
-        </a>
-        <span data-ar-session={ar?.host.session}>AR viewer{arViewers > 0 ? ` · ${arViewers} phone${arViewers === 1 ? '' : 's'}` : ''}</span>
+    <div class="join-grid">
+      <div class="join-copy">
+        <span class="seat-kicker">Player {seat}</span>
+        <h2>Scan to sit here</h2>
+        <p>Scan with the AR viewer and enter your name. The market opens when both seats join.</p>
       </div>
-    {:else}
-      <span class="qr-placeholder" aria-hidden="true"></span>
-    {/if}
-    <!-- Sit here from the table itself: no phone, cards shown face up (Show hands). -->
-    {#if seatNameEntry?.seat === seat}
-      <form class="no-phone-join" data-no-phone-form={seat} onsubmit={(e) => { e.preventDefault(); void joinWithoutPhone(seat); }}>
-        <!-- svelte-ignore a11y_autofocus -->
-        <input type="text" maxlength="32" placeholder={`Player ${seat}`} autocapitalize="words" autofocus bind:value={seatNameEntry.name} aria-label="Your trader name" />
-        <button type="submit" disabled={!repository || busy} data-no-phone-sit={seat}>Sit here</button>
-        <button type="button" class="quiet" onclick={() => (seatNameEntry = null)}>Cancel</button>
-      </form>
-    {:else}
-      <button type="button" class="bot-seat-button no-phone-button" data-no-phone-seat={seat} disabled={!repository || busy} onclick={() => (seatNameEntry = { seat, name: '' })}>
-        Play without phone <small>Your cards lie face up on the table</small>
-      </button>
-    {/if}
-    {#if legacyPhone && qr}
-      <a href={qr.url} class="qr-frame" aria-label={`Join tabletop ${gameId} as Player ${seat} with the phone controller`}>
-        <img src={qr.image} alt={`QR code to join as Player ${seat} with the phone controller`} />
-      </a>
-    {/if}
-    {#if !lobby.bot}
-      <div class="bot-seat-buttons" role="group" aria-label="Seat a computer opponent here">
-        {#each botLevels as level (level.difficulty)}
-          <button
-            type="button"
-            class="bot-seat-button"
-            data-bot-seat={seat}
-            data-bot-level={level.difficulty}
-            disabled={!repository || busy}
-            onclick={() => addBot(seat, level.difficulty)}
-          >
-            Play as {level.name} <small>{level.blurb}</small>
+      {#if arQr}
+        <div class="ar-join">
+          <a href={arQr.url} class="qr-frame ar-frame" aria-label={`Sit here with the AR viewer as Player ${seat}`}>
+            <img src={arQr.image} alt={`QR code to sit here with the AR viewer as Player ${seat}`} />
+          </a>
+          <span data-ar-session={ar?.host.session}>AR viewer{arViewers > 0 ? ` · ${arViewers} phone${arViewers === 1 ? '' : 's'}` : ''}</span>
+        </div>
+      {:else}
+        <span class="qr-placeholder" aria-hidden="true"></span>
+      {/if}
+      {#if legacyPhone && qr}
+        <a href={qr.url} class="qr-frame" aria-label={`Join tabletop ${gameId} as Player ${seat} with the phone controller`}>
+          <img src={qr.image} alt={`QR code to join as Player ${seat} with the phone controller`} />
+        </a>
+      {/if}
+      <div class="seat-options" role="group" aria-label="Sit here from the table">
+        <!-- Sit here from the table itself: no phone, cards shown face up (Show hands). -->
+        {#if seatNameEntry?.seat === seat}
+          <form class="no-phone-join" data-no-phone-form={seat} onsubmit={(e) => { e.preventDefault(); void joinWithoutPhone(seat); }}>
+            <!-- svelte-ignore a11y_autofocus -->
+            <input type="text" maxlength="32" placeholder={`Player ${seat}`} autocapitalize="words" inputmode="none" autofocus bind:value={seatNameEntry.name} aria-label="Your trader name" onpointerdown={() => (nameKeyboardOpen = true)} />
+            <button type="submit" disabled={!repository || busy} data-no-phone-sit={seat}>Sit here</button>
+            <button type="button" class="quiet" onclick={() => { seatNameEntry = null; nameKeyboardOpen = false; }}>Cancel</button>
+          </form>
+        {:else}
+          <button type="button" class="bot-seat-button no-phone-button" data-no-phone-seat={seat} disabled={!repository || busy} onclick={() => { seatNameEntry = { seat, name: '' }; nameKeyboardOpen = false; }}>
+            Play without phone <small>Your cards lie face up on the table</small>
           </button>
-        {/each}
+        {/if}
+        {#if !lobby.bot}
+          {#each botLevels as level (level.difficulty)}
+            <button
+              type="button"
+              class="bot-seat-button"
+              data-bot-seat={seat}
+              data-bot-level={level.difficulty}
+              disabled={!repository || busy}
+              onclick={() => addBot(seat, level.difficulty)}
+            >
+              Play as {level.name} <small>{level.blurb}</small>
+            </button>
+          {/each}
+        {/if}
+      </div>
+    </div>
+    {#if seatNameEntry?.seat === seat && nameKeyboardOpen}
+      <div class="name-keyboard" data-name-keyboard={seat}>
+        <OnScreenKeyboard
+          value={seatNameEntry.name}
+          onInput={(name) => (seatNameEntry = { seat, name })}
+          onDone={() => { if (repository && !busy) void joinWithoutPhone(seat); }}
+          label={`Keyboard for Player ${seat}'s name`}
+        />
       </div>
     {/if}
   </section>
@@ -3130,7 +3152,7 @@
                     data-card-arriving={arrivingCardIds.includes(loadedReturnId) || undefined}
                   />
                 {:else}
-                  <span aria-hidden="true">＋</span>
+                  {@render plusMark()}
                   <small>Return</small>
                 {/if}
               </button>
@@ -3143,7 +3165,7 @@
                 aria-hidden="true"
                 tabindex="-1"
                 data-return-seat={marketFacingSeat}
-              >{#if fake && fake !== 'camel'}<span aria-hidden="true">＋</span><small>Return</small>{/if}</button>
+              >{#if fake && fake !== 'camel'}{@render plusMark()}<small>Return</small>{/if}</button>
             {/if}
           </div>
           {/snippet}
@@ -3480,11 +3502,6 @@
 </main>
 
 <style>
-  /* AR QR sits beside the hand QR at the identical footprint. */
-  .ar-join { display: grid; justify-items: center; align-content: center; gap: 0.3rem; font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.9; }
-  .qr-frame { display: block; height: min(22vh, 11rem); aspect-ratio: 1; }
-  .qr-frame img { width: 100%; height: 100%; border-radius: 0.65rem; }
-  .ar-frame img { border: 2px solid #0d2622; }
 
   :global(*) { box-sizing: border-box; }
   :global(html), :global(body) {
@@ -3542,27 +3559,76 @@
   /* Above the market section, so the scoring zones overhanging a mat are not painted under it. */
   .edge { position: relative; z-index: 6; width: var(--mat-width); justify-self: center; }
   .inverted-content { width: 100%; height: 100%; transform: rotate(180deg); }
+  /* The join mat sizes its own contents: it is a size container, and the
+     copy, the QR and the seat buttons are measured in cqh/cqw (shares of
+     the mat), so they fit it the same way on a 55" screen, a laptop and a
+     tablet. On a 16:9 screen the mat is about 3.2:1 (25vh by 62% of the
+     column); the squarish case (a portrait tablet) stacks the copy above. */
   .join-seat {
-    display: grid;
+    container-type: size;
+    position: relative;
     width: 100%;
     height: 100%;
+  }
+  /* (cq units on the container itself would measure the viewport: every
+     mat-relative size lives on this inner grid and its descendants.) */
+  .join-grid {
+    display: grid;
+    height: 100%;
+    font-size: max(0.6rem, 6.2cqh); /* the buttons and the name field inherit this */
     grid-template-columns: minmax(0, 1fr);
     grid-auto-flow: column;
-    grid-auto-columns: auto;
+    grid-auto-columns: max-content;
     align-items: center;
-    gap: 1rem;
-    padding: clamp(0.7rem, 1.8vmin, 1.4rem) clamp(2.5rem, 5.5vw, 5rem);
-    position: relative;
+    gap: clamp(0.4rem, 4cqh, 2rem);
+    padding: 4cqh clamp(0.5rem, 5cqh, 3rem);
   }
+  .join-copy { min-width: 0; }
   .join-seat h2, .player-seat h2 {
     margin: 0;
     font-family: 'Cormorant Garamond', serif;
     font-size: clamp(1.2rem, 2.8vmin, 2rem);
   }
-  .join-seat p { max-width: 34rem; margin: 0.25rem 0 0; font-size: clamp(0.7rem, 1.6vmin, 1rem); }
-  .join-seat a { display: block; height: min(22vh, 11rem); aspect-ratio: 1; }
-  .join-seat img { width: 100%; height: 100%; border: 2px solid #315f58; border-radius: 0.65rem; }
-  .qr-placeholder { width: min(22vh, 11rem); aspect-ratio: 1; border-radius: 0.65rem; background: #e9dcc1; }
+  .join-seat h2 { font-size: max(0.9rem, 12cqh); line-height: 1.05; }
+  .join-seat p { margin: 0.3em 0 0; font-size: max(0.55rem, 5.2cqh); line-height: 1.3; }
+  .join-seat .seat-kicker { font-size: max(0.5rem, 4.4cqh); }
+  /* AR QR beside the (legacy) hand QR at the identical footprint. */
+  .ar-join { display: grid; justify-items: center; align-content: center; gap: 1.5cqh; font-size: max(0.5rem, 4.6cqh); letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.9; white-space: nowrap; }
+  .qr-frame, .qr-placeholder { display: block; height: min(60cqh, 24cqw); aspect-ratio: 1; border-radius: 0.65rem; }
+  .qr-frame img { width: 100%; height: 100%; border: 2px solid #315f58; border-radius: inherit; }
+  .ar-frame img { border-color: #0d2622; }
+  .qr-placeholder { background: #e9dcc1; }
+  /* One column of ways to sit here without a phone: a named human, then the bots. */
+  .seat-options { display: grid; grid-auto-rows: max-content; gap: 2.5cqh; }
+  .join-grid:has(.qr-frame:not(.ar-frame)) p { display: none; } /* two QRs leave no room for the copy's paragraph */
+  @container (max-aspect-ratio: 2/1) {
+    /* A squarish mat (a portrait tablet, inside the portrait side padding):
+       the copy beside the QR, the seat buttons two abreast beneath. */
+    .join-grid { grid-template-columns: minmax(0, 1fr) max-content; grid-template-rows: max-content max-content; grid-auto-flow: row; align-content: center; padding-inline: 1cqw; }
+    .join-seat h2 { font-size: max(0.9rem, 8cqh); }
+    .join-seat p { display: none; }
+    .qr-frame, .qr-placeholder { height: min(40cqh, 32cqw); }
+    .seat-options { grid-column: 1 / -1; grid-template-columns: 1fr 1fr; font-size: max(0.55rem, 3.6cqh); }
+  }
+  @container (max-height: 220px) and (min-aspect-ratio: 2/1) {
+    /* A short wide mat (a laptop): the Game log pill covers the mat's lower
+       corner, so the seat buttons start at the top and give up some height. */
+    .join-grid { padding-block: 2cqh; }
+    .seat-options { align-self: start; }
+    .seat-options .bot-seat-button, .seat-options .no-phone-join input, .seat-options .no-phone-join button { min-height: 2.25rem; }
+    .seat-options:has(.no-phone-join) .bot-seat-button { display: none; } /* while a name is typed, the bots step aside */
+  }
+  @container (max-height: 160px) {
+    /* A very short mat (a phone held sideways): the copy goes, the buttons
+       pair up in two rows and may fall under a finger's 44px. */
+    .join-copy { display: none; }
+    .join-grid { grid-template-columns: none; justify-content: center; }
+    .seat-options { grid-template-columns: repeat(2, max-content); gap: 0.25rem; }
+    .bot-seat-button small { display: none; }
+    .seat-options .bot-seat-button, .seat-options .no-phone-join input, .seat-options .no-phone-join button { min-height: 2rem; }
+  }
+  /* The table's keyboard floats over the market just beyond the mat's inner edge (the top mat is rotated with its seat, so "bottom" is toward the centre for both). */
+  .name-keyboard { position: absolute; left: 0; right: 0; bottom: calc(100% + 1.5cqh); z-index: 8; font-size: 1rem; }
   .seat-kicker { color: #a6442d; font-size: clamp(0.62rem, 1.2vmin, 0.78rem); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
   .player-seat {
     display: grid;
@@ -3792,14 +3858,14 @@
   .rejoin-codes figure { margin: 0; text-align: center; }
   .rejoin-codes img { width: min(9rem, 24vw); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.5rem; }
   .rejoin-codes p { flex-basis: 100%; margin: 0; }
-  .bot-seat-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; }
   .no-phone-button { border-color: #315f58; color: #315f58; }
-  .no-phone-join { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.4rem; }
-  .no-phone-join input { min-height: 44px; width: min(14rem, 60vw); padding: 0.4rem 0.7rem; border: 1px solid #6e756d; border-radius: 99rem; font: inherit; text-align: center; }
-  .no-phone-join button { min-height: 44px; padding: 0.4rem 0.9rem; border: 0; border-radius: 99rem; background: #a6442d; color: #fffaf0; font: inherit; font-weight: 700; }
+  /* The name field and its two buttons, in the no-phone button's slot. */
+  .no-phone-join { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3em; }
+  .no-phone-join input { grid-column: 1 / -1; min-height: max(44px, 14cqh); min-width: 0; padding: 0.3em 0.7em; border: 1px solid #6e756d; border-radius: 99rem; font: inherit; text-align: center; }
+  .no-phone-join button { min-height: max(44px, 14cqh); padding: 0.3em 0.9em; border: 0; border-radius: 99rem; background: #a6442d; color: #fffaf0; font: inherit; font-weight: 700; }
   .no-phone-join button.quiet { background: transparent; color: #a6442d; border: 1px solid #a6442d; }
   .bot-seat-button small { display: block; font-weight: 400; font-size: 0.75em; opacity: 0.75; }
-  .bot-seat-button { min-height: 44px; padding: 0.4rem 0.9rem; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; }
+  .bot-seat-button { min-height: max(44px, 14cqh); padding: 0.3em 0.9em; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; line-height: 1.2; }
   .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
   /* No taller than the header's own line (name + turn pill): the QR must not take the mat height the tokens' second line needs. */
   .rejoin img { width: clamp(2.6rem, 5vh, 3.4rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
@@ -3906,7 +3972,7 @@
   .target-placeholder.tut-visible { visibility: visible; }
   .table-exchange-target:disabled { opacity: 0.48; }
   .table-exchange-target.loaded { border-style: solid; border-color: #d38b21; background: #fff4d6; opacity: 1; }
-  .table-exchange-target > span { font-size: 1.2rem; }
+  .table-exchange-target .plus-mark { width: 1.2rem; height: 1.2rem; }
   .table-exchange-target small { font-size: clamp(0.55rem, 1.1vmin, 0.72rem); }
   .table-exchange-target img { width: clamp(2.25rem, 5.7vh, 3.4rem); height: clamp(2.25rem, 5.7vh, 3.4rem); border: 1px solid #315f58; border-radius: 0.35rem; object-fit: cover; }
   .tabletop-mark { display: grid; place-content: center; place-items: center; gap: 0.25rem; }
