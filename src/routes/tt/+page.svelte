@@ -100,10 +100,13 @@
   let regHistory = $state<RegRecord[]>([]);
   let regCopied = $state(false);
   function recordRegCheck(report: ArRegCheckReport) {
+    // The phone's offscreen renderings (`shots`, ~100 KB a check) stay on the
+    // relay (GET /regchecks), not in the table's twenty-entry history.
+    const { shots: _shots, ...slim } = report;
     const rec: RegRecord = {
       at: new Date().toISOString(),
       table: { diagIn: currentDiagInches(), viewport: [innerWidth, innerHeight], mPerPx: physical?.mPerCssPx ?? 0, epoch: ar?.epoch ?? null, targets: arTargets?.regions ?? null, session: ar?.host.session ?? null },
-      report
+      report: slim
     };
     regHistory = [rec, ...regHistory].slice(0, 20);
     try { localStorage.setItem(REG_HISTORY_KEY, JSON.stringify(regHistory)); } catch { /* storage full or blocked: the table's copy is the relay's anyway */ }

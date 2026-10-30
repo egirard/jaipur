@@ -60,6 +60,10 @@ export type ArRegCheckReport = {
   step: number; stepId: string | null; stepTitle?: string | null; totalSteps: number;
   steps: ArRegCheckStep[];
   score?: string | null; epoch?: number | null; targets?: number;
+  /** What the phone holds and draws (see ARViewer docs/TRACKING-DIAGNOSTICS.md): read from the relay, not the table. */
+  probe?: unknown;
+  /** The phone's offscreen renderings of its virtual layer, in the finished report only. */
+  shots?: Record<string, unknown>;
 };
 import type { Card, GameState } from '../jaipur-rules';
 
