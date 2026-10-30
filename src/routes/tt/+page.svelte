@@ -2659,8 +2659,9 @@
     onclick={() => { scalePanelSeat = seat; scalePanelOpen = !scalePanelOpen; refreshPhysical(); }}
   ><span class="scale-gear" aria-hidden="true">
       <svg viewBox="0 0 48 48" width="1em" height="1em">
-        <path class="gear-outline" fill="currentColor" d="M24 4l3 4.5 5.3-1.4 1.4 5.3L38.5 15 36 20l4 3.6-4 3.6 2.5 5-4.8 2.6-1.4 5.3-5.3-1.4L24 44l-3-4.5-5.3 1.4-1.4-5.3L9.5 33 12 28l-4-3.6 4-3.6-2.5-5 4.8-2.6 1.4-5.3 5.3 1.4z" opacity="0.28"/>
-        <path class="gear-arrow" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M12.5 35.5l5-5M12.5 35.5h5m-5 0v-5M35.5 12.5l-5 5M35.5 12.5h-5m5 0v5"/>
+        <!-- An eight-tooth gear: a round body (r 18) with arc-topped teeth (r 22), its corners softened by the round stroke join. -->
+        <path class="gear-outline" fill="currentColor" stroke-linejoin="round" d="M20.9 2.2 A22.0 22.0 0 0 1 27.1 2.2 L28.5 6.6 A18.0 18.0 0 0 1 33.1 8.5 L37.2 6.4 A22.0 22.0 0 0 1 41.6 10.8 L39.5 14.9 A18.0 18.0 0 0 1 41.4 19.5 L45.8 20.9 A22.0 22.0 0 0 1 45.8 27.1 L41.4 28.5 A18.0 18.0 0 0 1 39.5 33.1 L41.6 37.2 A22.0 22.0 0 0 1 37.2 41.6 L33.1 39.5 A18.0 18.0 0 0 1 28.5 41.4 L27.1 45.8 A22.0 22.0 0 0 1 20.9 45.8 L19.5 41.4 A18.0 18.0 0 0 1 14.9 39.5 L10.8 41.6 A22.0 22.0 0 0 1 6.4 37.2 L8.5 33.1 A18.0 18.0 0 0 1 6.6 28.5 L2.2 27.1 A22.0 22.0 0 0 1 2.2 20.9 L6.6 19.5 A18.0 18.0 0 0 1 8.5 14.9 L6.4 10.8 A22.0 22.0 0 0 1 10.8 6.4 L14.9 8.5 A18.0 18.0 0 0 1 19.5 6.6 L20.9 2.2 Z" opacity="0.28"/>
+        <path class="gear-arrow" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M16.5 30.5L13 34M13 34h2.4M13 34v-2.4M31.5 17.5L35 14M35 14h-2.4M35 14v2.4"/>
       </svg>
       <b>{arDiag}″</b>
     </span></button>
@@ -3200,9 +3201,12 @@
         <div class="end-actions near">{@render endActions()}</div>
       </div>
     {:else}
+      <!-- The room code is only worth printing when phones can join by it
+           (the Firestore store and the upstream /hand page); a local table
+           is joined through its QR codes alone. -->
       <div class="tabletop-mark">
         <img src={componentImage('card-back')} alt="" />
-        <strong>{gameId || 'Creating…'}</strong>
+        {#if !localStore}<strong>{gameId || 'Creating…'}</strong>{/if}
         <span>Two seats · one shared market</span>
       </div>
     {/if}
@@ -3777,16 +3781,21 @@
      speaker button beside it, drawn solid in the table's own palette: a
      cream gear with a rust outline, like the cream pills with rust borders
      everywhere else, so it reads as one of the controls, not a watermark. */
-  /* The gear (48 px) is centred on the speaker button beside it (36 px
-     tall, bottom-anchored on the same inset): its box starts 6 px lower.
+  /* The gear (2.85em ≈ 46 px, a shade under its old 48 so it sits closer
+     to the speaker's weight) is centred on the speaker button beside it
+     (36 px tall, bottom-anchored on the same inset): its box starts ~5 px
+     lower. Its cream face is a little see-through, like the market's pills.
      The diagonal label sits small in the gear's middle; the resize arrows
-     move into the two free corners around it. */
-  .orientation-toggle.options-gear { position: absolute; z-index: 3; bottom: calc(var(--market-edge-inset) - 0.375rem); left: var(--market-edge-inset); min-width: 0; min-height: 0; padding: 0; line-height: 0; border: none; border-radius: 0; background: none; box-shadow: none; color: #a6442d; }
-  .options-gear .scale-gear { font-size: 3em; filter: drop-shadow(0 0.08rem 0.25rem rgb(10 32 30 / 45%)); }
-  .options-gear .scale-gear .gear-outline { opacity: 1; fill: #fff4d6; stroke: #a6442d; stroke-width: 2.4; paint-order: stroke; }
-  .options-gear .scale-gear .gear-arrow { stroke: #a6442d; stroke-width: 2.4; }
-  .options-gear .scale-gear b { font-size: 0.25em; line-height: 1; letter-spacing: -0.02em; color: #a6442d; text-shadow: none; }
-  .options-gear.for-top { bottom: auto; left: auto; top: calc(var(--market-edge-inset) - 0.375rem); right: var(--market-edge-inset); transform: rotate(180deg); }
+     sit in the two free corners around it, short and lighter than the rim,
+     with clear cloth between them, the label and the rim (they used to run
+     from the label's corner to the rim and crowded both). */
+  .orientation-toggle.options-gear { position: absolute; z-index: 3; bottom: calc(var(--market-edge-inset) - 0.3rem); left: var(--market-edge-inset); min-width: 0; min-height: 0; padding: 0; line-height: 0; border: none; border-radius: 0; background: none; box-shadow: none; color: #a6442d; }
+  .options-gear .scale-gear { font-size: 2.85em; filter: drop-shadow(0 0.08rem 0.25rem rgb(10 32 30 / 45%)); }
+  .options-gear .scale-gear .gear-outline { opacity: 1; fill: #fff4d6; fill-opacity: 0.85; stroke: #a6442d; stroke-width: 2.4; stroke-linejoin: round; paint-order: stroke; }
+  .options-gear .scale-gear .gear-arrow { stroke: #a6442d; stroke-width: 1.7; }
+  /* Nudged right of centre so the upper arrow has air before the ″ mark. */
+  .options-gear .scale-gear b { font-size: 0.22em; line-height: 1; letter-spacing: -0.02em; color: #a6442d; text-shadow: none; transform: translateX(0.18em); }
+  .options-gear.for-top { bottom: auto; left: auto; top: calc(var(--market-edge-inset) - 0.3rem); right: var(--market-edge-inset); transform: rotate(180deg); }
   /* The speaker sits beside each player's gear; a muted one dims. */
   .music-control { position: absolute; z-index: 3; bottom: var(--market-edge-inset); left: calc(var(--market-edge-inset) + 3.6em); display: flex; align-items: center; gap: 0.4rem; }
   .music-control.for-top { bottom: auto; left: auto; top: var(--market-edge-inset); right: calc(var(--market-edge-inset) + 3.6em); transform: rotate(180deg); }
@@ -3870,8 +3879,8 @@
   .bot-seat-button small { display: block; font-weight: 400; font-size: 0.75em; opacity: 0.75; }
   .bot-seat-button { min-height: max(44px, 14cqh); padding: 0.3em 0.9em; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; line-height: 1.2; }
   .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
-  /* No taller than the header's own line (name + turn pill): the QR must not take the mat height the tokens' second line needs. */
-  .rejoin img { width: clamp(2.6rem, 5vh, 3.4rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
+  /* Half again as tall as the header's own line (name + turn pill), so it scans from across the 55" table; it stands proud of the header's other items, which is accepted. */
+  .rejoin img { width: clamp(3.9rem, 7.5vh, 5.1rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
   .rejoin small { max-width: 8rem; color: #a6442d; font-weight: 700; line-height: 1.15; }
   .orientation-toggle {
     min-width: 44px;
@@ -3978,7 +3987,8 @@
   .table-exchange-target .plus-mark { width: 1.2rem; height: 1.2rem; }
   .table-exchange-target small { font-size: clamp(0.55rem, 1.1vmin, 0.72rem); }
   .table-exchange-target img { width: clamp(2.25rem, 5.7vh, 3.4rem); height: clamp(2.25rem, 5.7vh, 3.4rem); border: 1px solid #315f58; border-radius: 0.35rem; object-fit: cover; }
-  .tabletop-mark { display: grid; place-content: center; place-items: center; gap: 0.25rem; }
+  /* Gold on the cloth: the dark green it used to be vanished into the mandala. */
+  .tabletop-mark { display: grid; place-content: center; place-items: center; gap: 0.25rem; color: #ffd27a; font-weight: 700; text-shadow: 0 1px 2px rgb(10 32 30 / 85%), 0 0 0.6rem rgb(10 32 30 / 60%); }
   .tabletop-mark img { width: clamp(3rem, 9vh, 5rem); border-radius: 0.55rem; }
   .tabletop-mark strong { font-size: clamp(1.4rem, 4vmin, 2.5rem); letter-spacing: 0.2em; }
   .token-view {

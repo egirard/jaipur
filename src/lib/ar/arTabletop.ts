@@ -257,8 +257,12 @@ function drawCardArt(kind: string): string {
 }
 
 /** A coin-shaped private tile with a large value, in the table's token
- *  style (used for the sale preview total and secret bonus values). */
-function drawCoinTile(text: string, fill: string, ring: string): string {
+ *  style (used for the sale preview total and secret bonus values).
+ *  `textScale` shrinks the value without shrinking the coin: a tile drawn
+ *  bigger on the table keeps the same size of digits. The value is also
+ *  measured and never drawn wider than the coin's face, so a long label
+ *  like "+8–10" stays inside the disc instead of hanging past its rim. */
+function drawCoinTile(text: string, fill: string, ring: string, textScale = 1): string {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const ctx = c.getContext('2d')!;
@@ -278,7 +282,14 @@ function drawCoinTile(text: string, fill: string, ring: string): string {
   ctx.fillStyle = '#fffbea';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `bold ${text.length > 2 ? 96 : 120}px system-ui, sans-serif`;
+  let px = (text.length > 2 ? 96 : 120) * textScale;
+  ctx.font = `bold ${px}px system-ui, sans-serif`;
+  const widest = 196; // inside the ring's inner edge, with room for the outline
+  const width = ctx.measureText(text).width;
+  if (width > widest) {
+    px = Math.floor((px * widest) / width);
+    ctx.font = `bold ${px}px system-ui, sans-serif`;
+  }
   ctx.lineJoin = 'round';
   ctx.lineWidth = 10;
   ctx.strokeStyle = '#07110f';
@@ -829,9 +840,12 @@ export class ArTabletop {
           const { xM, zM } = this.toMeters(head);
           handNodes.push({ id: `prev:${good}:total`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#66ffcc', face: id });
           if (p.bonus) {
+            // The bonus coin is as wide as the total's so its range ("+8–10")
+            // has a disc behind the whole label; its digits are drawn at the
+            // size they had on the 0.8-wide coin, so only the disc grew.
             const bid = `prevb-${p.bonus}`;
-            seatAssets[bid] = { img: drawCoinTile(`+${p.bonus}`, '#7a4a1d', '#fff0e0'), wM: cw * 0.8, hM: cw * 0.8 };
-            handNodes.push({ id: `prev:${good}:bonus`, kind: 'tile', xM: xM + (seatNo === 1 ? -cw : cw), zM, rotY: tileRot, faceUp: true, peek: false, glow: '#ffd27a', face: bid });
+            seatAssets[bid] = { img: drawCoinTile(`+${p.bonus}`, '#7a4a1d', '#fff0e0', 0.8), wM: cw, hM: cw };
+            handNodes.push({ id: `prev:${good}:bonus`, kind: 'tile', xM: xM + (seatNo === 1 ? -cw : cw) * 1.1, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#ffd27a', face: bid });
           }
         }
       }
