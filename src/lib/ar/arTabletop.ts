@@ -38,6 +38,11 @@ export type ArViewerDiag = {
   targetId?: string | null;
   /** Target ids ARCore rated untrackable (`score` then reads "k/n trackable"). */
   untrackable?: string[];
+  /** The phone's pose over the interval (ARViewer ≥ the pose report): the
+   *  camera's forward axis in degrees above the horizon (−90 lying face-up
+   *  on the table, +90 face-down), and the farthest it moved (m) and
+   *  turned (°) from where the interval began. Null without a viewer pose. */
+  pitch?: number | null; moved?: number | null; turned?: number | null;
 };
 
 /** One step of a phone's registration walk-through, as the phone measured it. */

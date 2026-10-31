@@ -40,6 +40,10 @@
   import { ArTabletop, type ArTrackingTargets, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type SalePreview } from '$lib/ar/arTabletop';
   import { lanEndpoints, loadLanAddress, probeSameOriginRelay, resolveArEndpoints, sameOriginEndpoints, saveLanAddress, type ArEndpoints } from '$lib/ar/arEndpoints';
   import type { ArRelayStatus } from '$lib/ar/arHost';
+  import {
+    WASH_LEVELS, applyMove, brightnessPercent, checkEngagement, isEngaged, loadCloth, noEvidenceReason, saveCloth, screenKey, startSweep,
+    stepSweep, sweepIdle, sweepWaiting, sweepWash, trackedShare, washIndex, type ClothRecord, type PhoneSample, type SweepState
+  } from '$lib/ar/backgroundAdapter';
   import { botActionEvent, botEngineVersion, chooseBotAction, createBotObservation, type BotObservation, type JaipurAction } from '$lib/jaipur-bot';
   import StrongBotWorker from '$lib/jaipur-bot.worker?worker';
   import type { StrongBotRequest, StrongBotResponse } from '$lib/jaipur-bot.worker';
@@ -70,6 +74,107 @@
   let arLanDraft = $state('');
   let lanKeyboardOpen = $state(false);
   let arUsingLan = $state(false);
+
+  // ---- The cloth's brightness (src/lib/ar/backgroundAdapter.ts) ----------
+  // The dark wash over the tablecloth photo; the phones register against
+  // the unwashed capture, so this can move at any time. The saved level
+  // (`cloth.wash`, per screen) changes only through the calibration
+  // controls: the sweep, which measures how dim this screen can go while a
+  // phone held over it still tracks, and − / +. What the screen shows
+  // (`liveWash`) can also step brighter, for this session only, while a
+  // phone first engages the table and, held up and moving, tracks poorly.
+  // Phones lying still never count (backgroundAdapter.ts, isEngaged).
+  let clothScreen = $state('');
+  let cloth = $state<ClothRecord>({ wash: WASH_LEVELS[0], target: WASH_LEVELS[0], auto: true, sweeps: [] });
+  let liveWash = $state(WASH_LEVELS[0]);
+  let clothCeiling = $state<number | null>(null); // a wash that failed this session
+  let clothChangedAt = $state(0);
+  let sweep = $state<SweepState>(sweepIdle);
+  let clothLog = $state<string[]>([]);
+  /** Every phone's tracking reports of the last two minutes, by viewer. */
+  let phoneSamples = $state<Record<string, PhoneSample[]>>({});
+  /** When each phone in AR first locked onto the table (its engagement window starts there). */
+  let phoneFirstSeen = $state<Record<string, number>>({});
+  const clothBrightness = () => brightnessPercent(liveWash);
+  /** Engaged phones' tracking over the last six seconds (the Evaluate button and the sweep pill). */
+  const phonesTracking = () => trackedShare(phoneSamples, Date.now() - 6000);
+  function noteCloth(line: string) { clothLog = [`${new Date().toLocaleTimeString()} · ${line}`, ...clothLog].slice(0, 8); }
+  function persistCloth() { if (clothScreen) saveCloth(localStorage, clothScreen, cloth); }
+  /** Show a level (does not save it). */
+  function showWash(wash: number, why: string) {
+    if (wash === liveWash) return;
+    liveWash = wash;
+    clothChangedAt = Date.now();
+    noteCloth(`${brightnessPercent(wash)}% — ${why}`);
+  }
+  /** Save a level for this screen and show it. */
+  function saveWash(wash: number, why: string) {
+    cloth = { ...cloth, wash, target: wash };
+    showWash(wash, why);
+    persistCloth();
+  }
+  /** Operator's −/+: sets and saves the level; a step brighter forgets a ceiling below it. */
+  function nudgeCloth(delta: 1 | -1) {
+    const i = Math.min(WASH_LEVELS.length - 1, Math.max(0, washIndex(liveWash) + delta));
+    if (delta === 1 && clothCeiling != null && WASH_LEVELS[i] >= clothCeiling) clothCeiling = null;
+    saveWash(WASH_LEVELS[i], 'set by hand');
+  }
+  function toggleClothAuto() { cloth = { ...cloth, auto: !cloth.auto }; persistCloth(); noteCloth(`auto-brighten for a phone first engaging ${cloth.auto ? 'on' : 'off'}`); }
+  function beginSweep() {
+    if (sweep.phase === 'holding') return;
+    sweep = startSweep(Date.now(), washIndex(liveWash));
+    noteCloth(`sweep started from ${clothBrightness()}%`);
+  }
+  function stopSweep() {
+    if (sweep.phase !== 'holding') return;
+    const from = sweep.from;
+    sweep = { phase: 'aborted', from, results: sweep.results, reason: 'stopped' };
+    showWash(WASH_LEVELS[from], 'sweep stopped');
+  }
+  /** What the sweep pill says about the phones right now. */
+  function sweepLiveText(live: ReturnType<typeof trackedShare>): string {
+    if (live.frames) return `tracked ${Math.round(live.share * 100)}%`;
+    return sweepWaiting(sweep, Date.now()) ? `waiting — ${noEvidenceReason(live)}` : noEvidenceReason(live);
+  }
+  /** Once a second: drive a running sweep, else run the first-engagement check. */
+  function tickCloth() {
+    const now = Date.now();
+    // Keep two minutes of reports per phone.
+    for (const [id, list] of Object.entries(phoneSamples)) {
+      const kept = list.filter((x) => now - x.at < 120_000);
+      if (kept.length !== list.length) phoneSamples = { ...phoneSamples, [id]: kept };
+    }
+    if (sweep.phase === 'holding') {
+      const next = stepSweep(sweep, now, phoneSamples);
+      if (next !== sweep) {
+        sweep = next;
+        const wash = sweepWash(next);
+        if (wash != null) showWash(wash, 'sweep step');
+        else if (next.phase === 'done') {
+          const rec = WASH_LEVELS[next.recommended];
+          cloth = { ...cloth, sweeps: [...cloth.sweeps, { at: now, results: next.results, recommended: next.recommended, reason: next.reason }] };
+          clothCeiling = next.recommended < WASH_LEVELS.length - 1 && !next.results[next.results.length - 1].held ? WASH_LEVELS[next.recommended + 1] : null;
+          saveWash(rec, `sweep done: ${next.reason}`);
+        } else if (next.phase === 'aborted') {
+          cloth = { ...cloth, sweeps: [...cloth.sweeps, { at: now, results: next.results, recommended: null, reason: next.reason }] };
+          showWash(WASH_LEVELS[next.from], `sweep aborted: ${next.reason}`);
+          persistCloth();
+        }
+      }
+      return;
+    }
+    if (!cloth.auto) return;
+    // The only automatic move: brighter, for this session, while a phone
+    // first engaging the table tracks poorly in hand. Not saved — the
+    // saved level is the calibration's business.
+    const state = { wash: liveWash, ceiling: clothCeiling, lastChangeAt: clothChangedAt };
+    const move = checkEngagement(state, now, phoneSamples, phoneFirstSeen);
+    if (move) {
+      clothCeiling = applyMove(state, move, now).ceiling;
+      showWash(move.wash, `auto brighter this session: ${move.reason}`);
+    }
+  }
+  $effect(() => { const t = setInterval(tickCloth, 1000); return () => clearInterval(t); });
   const relayCaption = () =>
     arRelayStatus === 'connected'
       ? `${arViewers > 0 ? `${arViewers} phone${arViewers === 1 ? '' : 's'}` : 'ready'}${arUsingLan ? ' · LAN server' : ''}`
@@ -845,6 +950,9 @@
       arEndpoints = endpoints;
       arLan = loadLanAddress(localStorage);
       arLanDraft = arLan;
+      clothScreen = screenKey(currentDiagInches(), innerWidth, innerHeight);
+      cloth = loadCloth(localStorage, clothScreen);
+      liveWash = cloth.wash;
       // AR attachment: registration underlay + relay session + seat AR QRs.
       ar = new ArTabletop(
         pageParams.get('arsession')?.slice(0, 32) ??
@@ -885,6 +993,14 @@
       };
       ar.onViewerDiag = (viewerId, seat, report) => {
         phoneDiags = { ...phoneDiags, [viewerId]: { ...report, seat, at: Date.now() } };
+        const sample: PhoneSample = { at: Date.now(), frames: report.frames, tracked: report.tracked, emulated: report.emulated, state: report.state, seen: report.seen, pitch: report.pitch ?? null, moved: report.moved ?? null, turned: report.turned ?? null };
+        phoneSamples = { ...phoneSamples, [viewerId]: [...(phoneSamples[viewerId] ?? []), sample] };
+        // The engagement window opens at the phone's first lock and closes for good when it leaves AR.
+        if (report.state === 'ended') {
+          if (viewerId in phoneFirstSeen) { const { [viewerId]: _gone, ...rest } = phoneFirstSeen; phoneFirstSeen = rest; }
+        } else if (report.seen && phoneFirstSeen[viewerId] == null) {
+          phoneFirstSeen = { ...phoneFirstSeen, [viewerId]: Date.now() };
+        }
       };
       ar.onTrackingPublished = (targets) => (arTargets = targets);
       ar.onViewerRegCheck = (_viewerId, seat, report) => {
@@ -3008,7 +3124,7 @@
   <meta name="description" content="A shared two-player Jaipur tabletop." />
 </svelte:head>
 
-<main class="tabletop" data-e2e-tabletop data-e2e-layout style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg")`}>
+<main class="tabletop" data-e2e-tabletop data-e2e-layout data-cloth-wash={liveWash} style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg"); --cloth-wash: ${liveWash}`}>
   <div class="top-edge edge">
     <div class="inverted-content">
       {#if playerForSeat(1)}
@@ -3062,6 +3178,10 @@
         <span>Round {lobby.round.number}</span>
       {:else}
         <span>Waiting for both traders</span>
+      {/if}
+      {#if sweep.phase === 'holding'}
+        {@const live = phonesTracking()}
+        <span class="relay-warning sweep-pill" data-sweep-pill>Background sweep · {clothBrightness()}% · hold your phone over the table as in play · {sweepLiveText(live)}</span>
       {/if}
       {#if arRelayStatus === 'displaced'}
         <span class="relay-warning" data-relay-warning="displaced">Another table window took over the AR session — close it, or reload this one to take it back</span>
@@ -3356,6 +3476,38 @@
         <label><input type="checkbox" checked={showArDiag} data-ar-diag-option onchange={(e) => setArDebug({ diag: (e.currentTarget as HTMLInputElement).checked })} /> Show AR diagnostics</label>
         <small>Prints each phone's registration numbers at its player's edge of the market (and on the phone itself). See docs/TRACKING-DIAGNOSTICS.md in ARViewer for what each number means.</small>
       </div>
+      <div class="facing-option diag-option cloth-option" data-cloth-option>
+        <div class="reg-controls cloth-controls">
+          <span>Background</span>
+          <button type="button" class="orientation-toggle" data-cloth-darker aria-label="Dimmer background" disabled={sweep.phase === 'holding' || washIndex(liveWash) >= WASH_LEVELS.length - 1} onclick={() => nudgeCloth(1)}>−</button>
+          <b data-cloth-brightness>{clothBrightness()}%</b>
+          <button type="button" class="orientation-toggle" data-cloth-brighter aria-label="Brighter background" disabled={sweep.phase === 'holding' || washIndex(liveWash) <= 0} onclick={() => nudgeCloth(-1)}>+</button>
+          {#if sweep.phase === 'holding'}
+            <button type="button" class="orientation-toggle" data-sweep-stop onclick={stopSweep}>Stop sweep</button>
+          {:else}
+            {@const live = phonesTracking()}
+            <button type="button" class="orientation-toggle" data-sweep-start disabled={!live.frames} title={live.frames ? '' : `Needs a phone in AR, held up and moving, that has found the table (${noEvidenceReason(live)})`} onclick={beginSweep}>Evaluate with phones</button>
+          {/if}
+          <button type="button" class="orientation-toggle" data-cloth-auto aria-pressed={cloth.auto} onclick={toggleClothAuto}>Auto-brighten {cloth.auto ? 'on' : 'off'}</button>
+        </div>
+        <small>
+          How dark the tablecloth is drawn. Phones register against the unwashed cloth, so this can move at any time; what dimming costs is the signal the phone's camera gets from this screen in this room — measured, not assumed. Only phones held up and moving count; one lying on the table says nothing about the screen.
+          <b>Evaluate with phones</b>: with a phone in AR held over the table as in play, each level is held for ten seconds from the current one toward the darkest; the dimmest at which the phones still tracked three quarters of their frames is saved for this screen. − / + save a level by hand.
+          <b>Auto-brighten</b>: in the first minute and a half after a phone first finds the table, if it tracks under half its frames in hand, the cloth steps one level brighter for this session only — the saved level changes here, not on its own.
+          {#if liveWash !== cloth.wash}<b data-cloth-session>Showing {clothBrightness()}% this session; {brightnessPercent(cloth.wash)}% is saved</b> — evaluate again to re-measure, or set it with − / +.{:else}Saved {brightnessPercent(cloth.wash)}%.{/if}{clothCeiling != null ? ` ${brightnessPercent(clothCeiling)}% failed this session.` : ''}
+        </small>
+        {#if sweep.phase === 'holding' || sweep.phase === 'done' || sweep.phase === 'aborted'}
+          <div class="reg-report cloth-report" data-sweep-phase={sweep.phase}>
+            <small>
+              {#if sweep.phase === 'holding'}<b>Sweeping</b> · at {brightnessPercent(WASH_LEVELS[sweep.index])}% · {sweep.results.length} level{sweep.results.length === 1 ? '' : 's'} done{:else if sweep.phase === 'done'}<b>Done</b> · {sweep.reason}{:else}<b>Stopped</b> · {sweep.reason}{/if}
+              {#each sweep.results as r (r.wash)}<br />{brightnessPercent(r.wash)}% · tracked {Math.round(r.share * 100)}% of {r.frames} frames on {r.phones} phone{r.phones === 1 ? '' : 's'}{r.lost ? ' · lost the table' : ''} · {r.frames ? (r.held ? 'held' : 'failed') : 'no phone in hand'}{/each}
+            </small>
+          </div>
+        {/if}
+        {#if clothLog.length}
+          <div class="reg-history cloth-log"><small>{#each clothLog as line, i (i)}{#if i > 0}<br />{/if}{line}{/each}</small></div>
+        {/if}
+      </div>
       <div class="facing-option diag-option reg-option">
         <div class="reg-controls">
           <span>Registration check</span>
@@ -3451,7 +3603,7 @@
           <small>None in AR right now.</small>
         {:else}
           {#each Object.entries(phoneDiags) as [id, d] (id)}
-            <small data-ar-phone={id}><span class={`ar-dot ${d.state}`}></span> {d.seat ? `Player ${d.seat}` : 'Spectator'} · <b>{diagWord(d)}</b> · {diagLine(d)} · {Math.round((Date.now() - d.at) / 1000)}s ago</small>
+            <small data-ar-phone={id}><span class={`ar-dot ${d.state}`}></span> {d.seat ? `Player ${d.seat}` : 'Spectator'} · <b>{diagWord(d)}</b> · {diagLine(d)}{#if d.pitch != null}{' · '}{isEngaged(d) ? 'in hand' : 'lying still'}{/if} · {Math.round((Date.now() - d.at) / 1000)}s ago</small>
           {/each}
         {/if}
       </div>
@@ -3655,10 +3807,12 @@
        it). The AR phones register from static patches of this cloth (see
        src/lib/ar/arTabletop.ts, trackingRegions): a real cloth is as
        non-repeating as backgrounds get, and it stays put through play. */
-    /* Muted by a quarter: a dark wash over the photo. (The AR phones
-       track this cloth; the wash lowers brightness, not the contrast the
-       feature matcher works from — rescored with arcoreimg.) */
-    background-image: linear-gradient(rgb(20 8 4 / 25%), rgb(20 8 4 / 25%)), var(--table-mat);
+    /* Muted under a dark wash whose alpha is --cloth-wash (0.25 shipped;
+       Table options' Background row and src/lib/ar/backgroundAdapter.ts
+       move it). The AR phones track this cloth, but register against the
+       capture with the wash stripped (arTabletop.ts, onclone), so the wash
+       changes brightness, not the reference the feature matcher holds. */
+    background-image: linear-gradient(rgb(20 8 4 / var(--cloth-wash, 0.25)), rgb(20 8 4 / var(--cloth-wash, 0.25))), var(--table-mat);
     background-position: center;
     background-size: cover;
     background-color: #46100b;
@@ -3921,6 +4075,13 @@
   .music-control.open .music-volume { width: clamp(8rem, 18vmin, 14rem); opacity: 1; }
   .scale-panel .table-id { letter-spacing: 0.14em; }
   .scale-panel .ar-endpoints { margin: 0 0 0.6rem; line-height: 1.35; }
+  /* The Background row stacks: a wrapping row of controls, then the copy, the last sweep and the log at full width. */
+  .scale-panel .cloth-option { flex-wrap: wrap; }
+  .scale-panel .cloth-controls { flex: 1 1 100%; max-width: none; }
+  .scale-panel .cloth-option > small, .scale-panel .cloth-report, .scale-panel .cloth-log { flex: 1 1 100%; margin: 0; }
+  .scale-panel .cloth-controls b { min-width: 2.6em; text-align: center; font-variant-numeric: tabular-nums; }
+  .scale-panel .cloth-report, .scale-panel .cloth-log { line-height: 1.4; }
+  .shared-market > header > span.sweep-pill { background: #183a37; }
   .scale-panel .lan-option { display: grid; grid-template-columns: auto 1fr auto auto; gap: 0.4rem; align-items: center; margin: 0.2rem 0 0.6rem; font-weight: 700; color: #183a37; }
   .scale-panel .lan-option input { min-width: 0; min-height: 44px; padding: 0.3rem 0.6rem; border: 1px solid #8e826b; border-radius: 0.6rem; font: inherit; font-family: ui-monospace, Menlo, monospace; }
   .scale-panel .lan-option small, .scale-panel .lan-keyboard { grid-column: 1 / -1; font-weight: 400; line-height: 1.35; }

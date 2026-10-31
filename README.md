@@ -81,6 +81,15 @@ see their private cards in AR, while all play happens on the table.
   **Play vs Maharaja**; a seated phone gets the same buttons in its AR
   viewer while the seat across from it is empty. The bot "thinks" for a
   random 0.5–1.5 s under a turning hourglass before it moves.
+- Background brightness is measured, not guessed: Table options →
+  **Background** dims the tablecloth in steps, **Evaluate with phones** finds
+  the dimmest level at which a phone held over the table still tracks, and
+  **Auto-brighten** steps brighter for the session if a phone struggles in
+  its first moments with the table — only phones held up and moving count,
+  nothing moves on its own after that, and the saved level changes only
+  through these controls (the phones register against the unwashed capture,
+  so the wash can move at any time). See
+  [docs/BACKGROUND-ADAPTATION.md](docs/BACKGROUND-ADAPTATION.md).
 - Hold a face-down hand card to peek at it on the table (shield it with
   your other hand); the AR phones are not told.
 - The gear in each player's upper-left corner of the market opens **Table
