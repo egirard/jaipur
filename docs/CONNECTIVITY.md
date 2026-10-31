@@ -140,6 +140,41 @@ served from that same ARViewer server (copy or link jaipur's `build/` into
 its `public/`), in which case step 4 above finds the relay by itself and
 the LAN field is never needed.
 
+## Deploying
+
+Three things deploy, each from its own push; none needs a manual redeploy.
+
+- **Relay** (ARViewer, `server/server.js`): the Render service was created
+  once as a Blueprint from `render.yaml` and auto-deploys on every push to
+  ARViewer `main`, live within a few minutes. A table or phone that is
+  connected rides through the restart on its 1.5 s retry (the relay keeps
+  nothing durable; the table replays its picture). To confirm which relay
+  version is live without a phone, join it as a seatless viewer: the current
+  server answers `{type:'rejected', reason:'seat-required'}`; an older one
+  answers `joined`.
+
+  ```sh
+  node -e "const ws=new (require('ws'))('wss://arviewer-relay.onrender.com/ws');ws.on('open',()=>ws.send(JSON.stringify({type:'join',role:'viewer',session:'PROBE0'})));ws.on('message',m=>{console.log(String(m));process.exit()})"
+  ```
+
+  (Free tier: if the relay is asleep the first connection takes about a
+  minute.) `GET https://arviewer-relay.onrender.com/inspect?session=CODE`
+  shows what the relay holds for a table's session.
+- **Viewer** (ARViewer, `public/viewer/`): the "Deploy static app" workflow
+  publishes GitHub Pages on every push to `main`; `gh run list` in the
+  ARViewer checkout shows it. The hosted viewer is cached by URL for ten
+  minutes; the table's QRs carry a per-load nonce so a rescanned QR never
+  hands a phone a stale page.
+- **Table** (this repo): `scripts/deploy.sh` fast-forwards `main` to the
+  current branch, pushes, and dispatches `ci-and-deploy.yml` (push events
+  alone have not been starting runs on this fork). The site is
+  `https://egirard.github.io/jaipur/tt/`.
+
+Relay and table are deployed independently, so each tolerates the other
+being a version behind: the table falls back to counting phones when the
+relay sends no per-seat presence, and the relay ignores fields it does not
+know.
+
 ## Security notes
 
 - Seat QRs are bearer capabilities shown on a shared screen: anyone who
