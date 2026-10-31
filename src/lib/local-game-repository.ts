@@ -1,11 +1,11 @@
 // Browser-local event store (GPLv3, part of this fork).
 //
-// The AR tabletop is the only writer in AR mode — phones join and watch
-// over the AR relay and never touch the game store — so a single table can
-// run a complete game with its events kept in this browser's localStorage.
-// That lets the hosted fork be tried from a public URL with no Firebase
-// project configured (`/tt/?local=1`, or automatically when the build has
-// no Firebase config). Same interface as the Firestore repository.
+// The AR tabletop is the only writer — phones join and watch over the AR
+// relay and never touch the game store — so a single table runs a complete
+// game with its events kept in this browser's localStorage. This is the
+// tabletop's store: it is used unless the table is opened with
+// `?firebase=1` on a build that has Firebase config, which opts into the
+// deprecated Firestore repository (same interface; see DEPRECATIONS.md).
 
 import {
   REDUCER_VERSION,

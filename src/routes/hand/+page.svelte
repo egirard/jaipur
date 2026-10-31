@@ -1,4 +1,5 @@
 <script lang="ts">
+  // DEPRECATED (2026-10-30, see DEPRECATIONS.md): the legacy phone hand controller, reached only from a table opened with ?phone=1; phones now join over the AR relay (seat QR → "Play using phone"). Kept until removed; not maintained.
   import '@fontsource/atkinson-hyperlegible/400.css';
   import '@fontsource/atkinson-hyperlegible/700.css';
   import '@fontsource/cormorant-garamond/700.css';

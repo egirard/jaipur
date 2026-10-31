@@ -24,7 +24,8 @@
 // Speaks only the AR Card Viewer protocol via ArHost; no ARViewer code.
 
 import html2canvas from 'html2canvas';
-import { ArHost, type ArDebugFlags, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingRegion } from './arHost';
+import { loadSeatTokens, seatOfToken, type SeatNo, type SeatTokens } from './seatTokens';
+import { ArHost, type ArRelayStatus, type ArDebugFlags, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingRegion } from './arHost';
 import { captureScale, centreMeters, overlappingColumns, pieces, type Rect } from './trackingGeometry';
 
 /** What a phone reports about its registration every couple of seconds. */
@@ -380,6 +381,19 @@ export class ArTabletop {
   private lastSeatAssetsJson = new Map<string, string>();
   viewers = 0;
   onViewersChanged: ((n: number) => void) | null = null;
+  /** The seats whose phone is connected to the relay right now (presence
+   *  per seat, not a head count: a second phone on one seat cannot mask a
+   *  drop on the other). */
+  seatsOnline: Set<SeatNo> | null = null; // null: the relay has not said (an older relay never does)
+  onPresenceChanged: ((seats: Set<SeatNo> | null) => void) | null = null;
+  /** The relay connection, for the table to show (the phones' side of a
+   *  dead relay is "No tabletop is connected"; the table used to say nothing). */
+  relayStatus: ArRelayStatus = 'connecting';
+  onRelayStatus: ((status: ArRelayStatus) => void) | null = null;
+  /** This session's seat bearer tokens (seatTokens.ts): what the seat QRs
+   *  carry, what the relay stamps on actions, and the key the seat scenes
+   *  are published under. Everything else in the table speaks seat numbers. */
+  readonly seatTokens: SeatTokens;
   /** A phone's registration report (see the API doc's `diag` action). */
   onViewerDiag: ((viewerId: string, seat: string | undefined, report: ArViewerDiag) => void) | null = null;
   /** The tracking regions just published (band columns, rail rows), with their screen rectangles. */
@@ -394,7 +408,7 @@ export class ArTabletop {
   private lastPlayers: GameState['players'] = [];
 
   private readonly base: string;
-  constructor(session?: string, assetBase = '') {
+  constructor(session?: string, assetBase = '', endpoints: { relayUrl?: string; viewerBase?: string } = {}) {
     this.base = assetBase;
     // Real card art arrives asynchronously; once it has, re-render the
     // assets (the key changes with the art generation) and republish.
@@ -404,17 +418,22 @@ export class ArTabletop {
     });
     this.host = new ArHost({
       session,
+      relayUrl: endpoints.relayUrl,
+      viewerBase: endpoints.viewerBase,
       onAction: (a: ArAction) => {
+        // The relay stamps the seat token the phone joined with; only a
+        // token this table issued opens a seat (anything else acts for no one).
+        const seat = seatOfToken(a.seat, this.seatTokens) ?? undefined;
         // A seated phone asking to join with a trader name.
-        if (a.action === 'join' && a.seat) {
+        if (a.action === 'join' && seat) {
           const name = (a.data as { name?: unknown } | undefined)?.name;
-          if (typeof name === 'string' && name.trim()) this.onJoin?.(a.seat, name.trim().slice(0, 32));
+          if (typeof name === 'string' && name.trim()) this.onJoin?.(seat, name.trim().slice(0, 32));
         }
         // A seated phone asking for a computer opponent (the table checks
         // the seat is free and the level exists).
-        if (a.action === 'bot' && a.seat) {
+        if (a.action === 'bot' && seat) {
           const difficulty = (a.data as { difficulty?: unknown } | undefined)?.difficulty;
-          if (typeof difficulty === 'string' && this.botOffers.some((o) => o.id === difficulty)) this.onBotRequest?.(a.seat, difficulty);
+          if (typeof difficulty === 'string' && this.botOffers.some((o) => o.id === difficulty)) this.onBotRequest?.(seat, difficulty);
         }
         // The phone view is this seat's private hand controller (what the
         // upstream /hand page does): tapping one of its own cards or camels
@@ -422,29 +441,36 @@ export class ArTabletop {
         // tap on the table. The AR view sends the same intent for the seat's
         // own pieces. Only the seat's own pieces are honoured. (AR `tap` on
         // anything else stays viewer-local: an inspect, never a selection.)
-        if (a.action === 'select' && a.seat && typeof a.nodeId === 'string') {
+        if (a.action === 'select' && seat && typeof a.nodeId === 'string') {
           const m = /^(hand|herd):(.+)$/.exec(a.nodeId);
-          if (m) this.onToggleReturn?.(a.seat, m[2]);
+          if (m) this.onToggleReturn?.(seat, m[2]);
         }
         // Registration reports from phones in AR: shown, never answered.
         if (a.action === 'diag' && a.viewerId && a.data && typeof a.data === 'object') {
-          this.onViewerDiag?.(a.viewerId, a.seat, a.data as ArViewerDiag);
+          this.onViewerDiag?.(a.viewerId, seat, a.data as ArViewerDiag);
         }
         // Registration walk-through progress and results.
         if (a.action === 'regcheck' && a.viewerId && a.data && typeof a.data === 'object') {
-          this.onViewerRegCheck?.(a.viewerId, a.seat, a.data as ArRegCheckReport);
+          this.onViewerRegCheck?.(a.viewerId, seat, a.data as ArRegCheckReport);
         }
         // Host-defined phone buttons (scene.controls).
-        if (a.action === 'control' && a.seat) {
+        if (a.action === 'control' && seat) {
           const id = (a.data as { id?: unknown } | undefined)?.id;
-          if (id === 'clear') this.onClear?.(a.seat);
+          if (id === 'clear') this.onClear?.(seat);
         }
       },
-      onViewers: (n) => {
-        this.viewers = n;
-        this.onViewersChanged?.(n);
+      onPeers: ({ viewers, seats }) => {
+        this.viewers = viewers;
+        this.onViewersChanged?.(viewers);
+        this.seatsOnline = seats ? new Set(seats.map((t) => seatOfToken(t, this.seatTokens)).filter((x): x is SeatNo => x !== null)) : null;
+        this.onPresenceChanged?.(this.seatsOnline);
+      },
+      onStatus: (status) => {
+        this.relayStatus = status;
+        this.onRelayStatus?.(status);
       },
     });
+    this.seatTokens = loadSeatTokens(this.host.session, typeof localStorage === 'undefined' ? null : localStorage);
   }
 
   /** Start publishing: physical scale from the screen diagonal, connect to
@@ -514,7 +540,7 @@ export class ArTabletop {
     if (!this.mPerPx) return [];
     const regions: ArTrackingRegion[] = [];
     const viewport: [number, number] = [innerWidth, innerHeight];
-    const publish = (id: string, seat: string | undefined, r: Rect, minPx: number) => {
+    const publish = (id: string, seat: SeatNo | undefined, r: Rect, minPx: number) => {
       const sx = Math.round(r.left * scale), sy = Math.round(r.top * scale);
       const sw = Math.round(r.width * scale), sh = Math.round(r.height * scale);
       if (sw < 32 || sh < 32) return;
@@ -531,7 +557,9 @@ export class ArTabletop {
       const { xM, zM } = centreMeters(r, viewport, this.mPerPx);
       const widthM = r.width * this.mPerPx;
       const heightM = r.height * this.mPerPx;
-      regions.push({ id, ...(seat ? { seat } : {}), xM, zM, widthM, heightM, mat });
+      // Phones filter regions by the seat token they hold; the table's own
+      // target list keeps the seat number.
+      regions.push({ id, ...(seat ? { seat: this.seatTokens[seat] } : {}), xM, zM, widthM, heightM, mat });
       out.push({ id, ...(seat ? { seat } : {}), rect: { left: r.left, top: r.top, width: r.width, height: r.height }, widthM, heightM, xM, zM });
     };
     const band = document.querySelector<HTMLElement>('.shared-market')?.getBoundingClientRect();
@@ -542,7 +570,7 @@ export class ArTabletop {
       publish('band:R', undefined, cols[2], BAND_MIN_PX);
     }
     for (const seatNo of [1, 2] as const) {
-      const seat = String(seatNo);
+      const seat = String(seatNo) as SeatNo;
       const stacks = goodsStacksRect(seat);
       if (!stacks || stacks.width < 60 || stacks.height < 120) continue;
       for (const [i, r] of pieces(stacks, RAIL_MAX_ASPECT).entries()) publish(`rail:${seat}:${i + 1}`, seat, r, RAIL_MIN_PX);
@@ -641,8 +669,16 @@ export class ArTabletop {
     }
   }
 
-  arViewerUrl(seat?: 1 | 2): string {
-    return this.host.viewerUrl(seat ? String(seat) : undefined);
+  /** Switch relay and viewer (the LAN stand-in, see arEndpoints.ts); the
+   *  page re-renders the seat QRs afterwards. */
+  setEndpoints(next: { relayUrl: string; viewerBase: string }): void {
+    this.relayStatus = 'connecting';
+    this.onRelayStatus?.('connecting');
+    this.host.setEndpoints(next);
+  }
+
+  arViewerUrl(seat: 1 | 2): string {
+    return this.host.viewerUrl(this.seatTokens[String(seat) as SeatNo]);
   }
 
   /** Screen rect center -> meters in the tracked-image frame (the tracked
@@ -743,7 +779,11 @@ export class ArTabletop {
         }
       }
     }
-    this.host.publishScene({ nodes, ...(this.debug ? { debug: this.debug } : {}) });
+    // A registration check names the seat to run it; the phone compares
+    // that with the token it holds.
+    const rc = this.debug?.regcheck;
+    const debug = this.debug && rc ? { ...this.debug, regcheck: { ...rc, seat: this.seatTokens[rc.seat as SeatNo] ?? rc.seat } } : this.debug;
+    this.host.publishScene({ nodes, ...(debug ? { debug } : {}) });
 
     // Hands: private per seat, drawn on top of the owner's face-down cards
     // on the table (measured from the live DOM, so the AR face sits exactly
@@ -752,7 +792,7 @@ export class ArTabletop {
     // and the table can never disagree. A seat's scene also names who holds
     // it, so the phone can confirm the join.
     for (const seatNo of [1, 2] as const) {
-      const seat = String(seatNo);
+      const seat = String(seatNo) as SeatNo;
       const player = lobby.players.find((p) => p.seat === seatNo);
       const hand: Card[] = (player && round?.hands[player.uid]) ?? [];
       const intent = player ? lobby.tabletopIntents[player.uid] : undefined;
@@ -865,7 +905,7 @@ export class ArTabletop {
       const seatAssetsJson = JSON.stringify(Object.keys(seatAssets).sort());
       if (this.lastSeatAssetsJson.get(seat) !== seatAssetsJson) {
         this.lastSeatAssetsJson.set(seat, seatAssetsJson);
-        this.host.publishAssetsFor(seat, seatAssets);
+        this.host.publishAssetsFor(this.seatTokens[seat], seatAssets);
       }
       const name = player?.displayName ?? this.seatNames.get(seat);
       const otherSeat = seatNo === 1 ? 2 : 1;
@@ -896,7 +936,7 @@ export class ArTabletop {
       const json = JSON.stringify(scene);
       if (this.lastSeatSceneJson.get(seat) !== json) {
         this.lastSeatSceneJson.set(seat, json);
-        this.host.publishSceneFor(seat, scene);
+        this.host.publishSceneFor(this.seatTokens[seat], scene);
       }
     }
   }

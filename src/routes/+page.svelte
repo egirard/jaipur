@@ -1,4 +1,5 @@
 <script lang="ts">
+  // DEPRECATED (2026-10-30, see DEPRECATIONS.md): the legacy two-browser game over Firestore; the supported product is the AR tabletop at /tt. Kept until removed; not maintained.
   import '@fontsource/atkinson-hyperlegible/400.css';
   import '@fontsource/atkinson-hyperlegible/700.css';
   import '@fontsource/cormorant-garamond/700.css';

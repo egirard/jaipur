@@ -38,6 +38,8 @@
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
   import { ArTabletop, type ArTrackingTargets, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type SalePreview } from '$lib/ar/arTabletop';
+  import { lanEndpoints, loadLanAddress, probeSameOriginRelay, resolveArEndpoints, sameOriginEndpoints, saveLanAddress, type ArEndpoints } from '$lib/ar/arEndpoints';
+  import type { ArRelayStatus } from '$lib/ar/arHost';
   import { botActionEvent, botEngineVersion, chooseBotAction, createBotObservation, type BotObservation, type JaipurAction } from '$lib/jaipur-bot';
   import StrongBotWorker from '$lib/jaipur-bot.worker?worker';
   import type { StrongBotRequest, StrongBotResponse } from '$lib/jaipur-bot.worker';
@@ -58,6 +60,50 @@
   let ar = $state<ArTabletop | undefined>(undefined);
   let arQrs = $state<Array<{ seat: Seat; url: string; image: string }>>([]);
   let arViewers = $state(0);
+  /** Seats whose phone is connected to the relay (presence per seat). */
+  let arSeatsOnline = $state<Set<string> | null>(null); // null until a relay that reports presence says
+  let arRelayStatus = $state<ArRelayStatus>('connecting');
+  let arEndpoints = $state<ArEndpoints | null>(null);
+  /** The LAN stand-in (Table options): an ARViewer server on this network,
+   *  used only once the relay proves unreachable. */
+  let arLan = $state('');
+  let arLanDraft = $state('');
+  let lanKeyboardOpen = $state(false);
+  let arUsingLan = $state(false);
+  const relayCaption = () =>
+    arRelayStatus === 'connected'
+      ? `${arViewers > 0 ? `${arViewers} phone${arViewers === 1 ? '' : 's'}` : 'ready'}${arUsingLan ? ' · LAN server' : ''}`
+      : arRelayStatus === 'connecting'
+        ? `connecting to the ${arUsingLan ? 'LAN server' : 'relay'}…`
+        : arRelayStatus === 'displaced'
+          ? 'taken over by another table window'
+          : arRelayStatus === 'unreachable'
+            ? (arUsingLan ? 'LAN server unreachable' : arLan ? 'relay unreachable — switching to the LAN server' : 'relay unreachable — set a LAN server in Table options')
+            : `${arUsingLan ? 'LAN server' : 'relay'} offline — retrying`;
+  /** Move the table (and, through re-rendered QRs, the phones) to the LAN server. */
+  async function useLan() {
+    const next = lanEndpoints(arLan);
+    if (!ar || !next) return;
+    arUsingLan = true;
+    arEndpoints = { ...next, source: 'lan' };
+    ar.setEndpoints(next);
+    await renderArQrs();
+    ar.refreshTracking(600);
+  }
+  function saveLan() {
+    arLan = arLanDraft.trim();
+    arLanDraft = arLan;
+    saveLanAddress(localStorage, arLan);
+    lanKeyboardOpen = false;
+    // Saved while the relay is already failing: take it up at once.
+    if (arLan && !arUsingLan && (arRelayStatus === 'unreachable' || arRelayStatus === 'closed')) void useLan();
+  }
+  function openLanSettings() {
+    scalePanelSeat = marketFacingSeat === 1 ? 1 : 2;
+    scalePanelOpen = true;
+    refreshPhysical();
+  }
+  $effect(() => { if (!scalePanelOpen) lanKeyboardOpen = false; });
   // Registration reports from phones in AR, by viewer id, kept while fresh
   // (a phone that stops reporting drops out after 12 s).
   type PhoneDiag = ArViewerDiag & { seat?: string; at: number };
@@ -657,6 +703,7 @@
       // The Firebase repository stays in the code base; ?firebase=1 opts a
       // build with Firebase config back into it.
       localStore = !(pageParams.get('firebase') === '1' && import.meta.env.VITE_FIREBASE_API_KEY);
+      if (pageParams.get('firebase') === '1') console.warn('[jaipur] ?firebase=1: the Firebase store is deprecated (see DEPRECATIONS.md); the tabletop runs on the browser-local store.');
       // Firebase is optional: its SDK is only loaded (dynamically) when the
       // page opts in, so a table with no Firestore around never touches it.
       const remote = localStore
@@ -695,6 +742,7 @@
 
       const joinBase = `${location.origin}${base}/hand/`;
       legacyPhone = pageParams.get('phone') === '1';
+      if (legacyPhone) console.warn('[jaipur] ?phone=1: the Firebase /hand controller is deprecated (see DEPRECATIONS.md); phones join over the AR relay — scan a seat QR and choose "Play using phone".');
       if (legacyPhone) seatQrs = await Promise.all(([1, 2] as const).map(async (seat) => {
         const url = `${joinBase}?gameId=${gameId}&seat=${seat}`;
         return {
@@ -768,7 +816,7 @@
         (nextStatus) => {
           statusKind = nextStatus === 'synced' ? 'synced' : 'syncing';
           status = nextStatus === 'synced'
-            ? (localStore ? 'Tabletop (local store)' : 'Tabletop synced')
+            ? (localStore ? 'Tabletop (local store)' : 'Tabletop synced (Firebase store — deprecated)')
             : 'Synchronizing tabletop…';
         }
       );
@@ -782,12 +830,28 @@
       solitaire = pageParams.get('bot') === '1';
       if (solitaire && freshGame) await addBot(1);
 
+      // Where the relay and the viewer live (arEndpoints.ts): ?relay= /
+      // ?viewer= (remembered), the build's env, the page's own origin when
+      // the ARViewer server serves this page (LAN play), else the hosted pair.
+      const endpointInput = {
+        params: pageParams,
+        storage: localStorage,
+        env: { relay: import.meta.env.VITE_AR_RELAY_URL as string | undefined, viewer: import.meta.env.VITE_AR_VIEWER_URL as string | undefined }
+      };
+      let endpoints = resolveArEndpoints(endpointInput);
+      if (endpoints.source === 'default' && (await probeSameOriginRelay(location.origin))) {
+        endpoints = resolveArEndpoints({ ...endpointInput, sameOrigin: sameOriginEndpoints(location) });
+      }
+      arEndpoints = endpoints;
+      arLan = loadLanAddress(localStorage);
+      arLanDraft = arLan;
       // AR attachment: registration underlay + relay session + seat AR QRs.
       ar = new ArTabletop(
         pageParams.get('arsession')?.slice(0, 32) ??
         localStorage.getItem('jaipur:ar:session') ??
         undefined,
-        base
+        base,
+        { relayUrl: endpoints.relayUrl, viewerBase: endpoints.viewerBase }
       );
       localStorage.setItem('jaipur:ar:session', ar.host.session);
       ar.botOffers = botLevels.map(({ difficulty, name, blurb }) => ({ id: difficulty, name, blurb }));
@@ -812,6 +876,13 @@
       };
       ar.previewFor = (kind) => (isGood(kind) ? salePreview(kind) : null); // AR-only sale preview
       ar.onViewersChanged = (n) => (arViewers = n);
+      ar.onPresenceChanged = (seats) => (arSeatsOnline = seats ? new Set(seats) : null);
+      ar.onRelayStatus = (status) => {
+        arRelayStatus = status;
+        // The relay cannot be reached: the LAN stand-in takes over if one is
+        // set; otherwise the market header asks for one (openLanSettings).
+        if (status === 'unreachable' && !arUsingLan && arLan && lanEndpoints(arLan)) void useLan();
+      };
       ar.onViewerDiag = (viewerId, seat, report) => {
         phoneDiags = { ...phoneDiags, [viewerId]: { ...report, seat, at: Date.now() } };
       };
@@ -843,16 +914,7 @@
       // Publish what the store already holds: with the local store the
       // last notification fired before the AR bridge existed.
       publishAr();
-      arQrs = await Promise.all(([1, 2] as const).map(async (seat) => ({
-        seat,
-        url: ar!.arViewerUrl(seat),
-        image: await QRCode.toDataURL(ar!.arViewerUrl(seat), {
-          errorCorrectionLevel: 'M',
-          margin: 2,
-          width: 360,
-          color: { dark: '#0d2622', light: '#eafff0' }
-        })
-      })));
+      await renderArQrs();
       // The seat QRs are prime tracking features: re-capture once they show.
       await tick();
       ar.refreshTracking(600);
@@ -1403,8 +1465,30 @@
   // AR phones seated at this table (their uid marks them); when fewer
   // phones are connected than AR seats, someone has dropped and the seat
   // QR is shown again inline so they can rescan.
+  /** The seat QRs: the viewer page with the session, the relay and the
+   *  seat's token (re-rendered when the relay changes). */
+  async function renderArQrs() {
+    if (!ar) return;
+    arQrs = await Promise.all(([1, 2] as const).map(async (seat) => ({
+      seat,
+      url: ar!.arViewerUrl(seat),
+      image: await QRCode.toDataURL(ar!.arViewerUrl(seat), {
+        errorCorrectionLevel: 'M',
+        margin: 2,
+        width: 360,
+        color: { dark: '#0d2622', light: '#eafff0' }
+      })
+    })));
+    await tick();
+  }
+
+  // A phone-joined seat whose phone is not on the relay right now. The relay
+  // reports presence per seat token, so another seat's phones cannot mask
+  // the drop; against an older relay that only counts phones, fall back to
+  // comparing the count with the number of phone-joined seats.
   const arSeatedCount = () => lobby.players.filter((p) => p.uid.startsWith('ar-')).length;
-  const seatDropped = (player: Player) => player.uid.startsWith('ar-') && arViewers < arSeatedCount();
+  const seatDropped = (player: Player) =>
+    player.uid.startsWith('ar-') && (arSeatsOnline ? !arSeatsOnline.has(String(player.seat)) : arViewers < arSeatedCount());
 
   // A phone that scanned a seat's AR QR asks to sit down with a trader
   // name. The relay stamps the seat, so a phone can only ever claim the seat
@@ -2545,7 +2629,7 @@
           <a href={arQr.url} class="qr-frame ar-frame" aria-label={`Sit here with the AR viewer as Player ${seat}`}>
             <img src={arQr.image} alt={`QR code to sit here with the AR viewer as Player ${seat}`} />
           </a>
-          <span data-ar-session={ar?.host.session}>AR viewer{arViewers > 0 ? ` · ${arViewers} phone${arViewers === 1 ? '' : 's'}` : ''}</span>
+          <span data-ar-session={ar?.host.session} data-relay-status={arRelayStatus}>AR viewer · {relayCaption()}</span>
         </div>
       {:else}
         <span class="qr-placeholder" aria-hidden="true"></span>
@@ -2979,6 +3063,17 @@
       {:else}
         <span>Waiting for both traders</span>
       {/if}
+      {#if arRelayStatus === 'displaced'}
+        <span class="relay-warning" data-relay-warning="displaced">Another table window took over the AR session — close it, or reload this one to take it back</span>
+      {:else if arRelayStatus === 'unreachable' && arUsingLan}
+        <span class="relay-warning" data-relay-warning="lan-unreachable">LAN server unreachable — is it running, and was its certificate accepted in this browser?</span>
+        <button type="button" class="relay-action" onclick={openLanSettings}>LAN server…</button>
+      {:else if arRelayStatus === 'unreachable'}
+        <span class="relay-warning" data-relay-warning="unreachable">{arLan ? 'AR relay unreachable — switching to the LAN server' : 'AR relay unreachable — no internet? Set a LAN server to play offline'}</span>
+        {#if !arLan}<button type="button" class="relay-action" data-set-lan onclick={openLanSettings}>Set LAN server</button>{/if}
+      {:else if arRelayStatus === 'closed'}
+        <span class="relay-warning" data-relay-warning="closed">AR {arUsingLan ? 'LAN server' : 'relay'} offline — phones will reconnect when it returns</span>
+      {/if}
     </header>
     {#if lobby.round?.status === 'active'}
       {@const activeUid = lobby.round.activeUid}
@@ -3374,7 +3469,22 @@
             <figcaption>Player {arQr.seat}{holder ? ` · ${holder.displayName}` : ' · open'}<br /><small>{holder ? 'rescan to rejoin' : 'scan to sit here'}</small></figcaption>
           </figure>
         {/each}
-        <p><small>{arViewers} phone{arViewers === 1 ? '' : 's'} connected · session {ar?.host.session}</small></p>
+        <p><small>{arViewers} phone{arViewers === 1 ? '' : 's'} connected{arSeatsOnline?.size ? ` (seat ${[...arSeatsOnline].sort().join(' and ')})` : ''} · session {ar?.host.session} · relay {arRelayStatus}</small></p>
+        {#if arEndpoints}
+          <p class="ar-endpoints"><small>Relay <code>{arEndpoints.relayUrl}</code> · viewer <code>{arEndpoints.viewerBase}</code> · from {arEndpoints.source === 'param' ? 'the URL' : arEndpoints.source === 'saved' ? 'a remembered setting' : arEndpoints.source === 'env' ? 'the build' : arEndpoints.source === 'same-origin' ? 'this page\'s own server' : arEndpoints.source === 'lan' ? 'the LAN server below' : 'the hosted defaults'}.</small></p>
+        {/if}
+        <div class="lan-option" data-lan-option>
+          <label for="lan-address">LAN server</label>
+          <input id="lan-address" type="text" inputmode="none" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="64" placeholder="192.168.1.20:8443" bind:value={arLanDraft} onpointerdown={() => (lanKeyboardOpen = true)} aria-label="LAN server address, host and port" />
+          <button type="button" data-lan-save onclick={saveLan} disabled={arLanDraft.trim() === arLan}>Save</button>
+          <button type="button" data-lan-use onclick={() => void useLan()} disabled={!arLan || !lanEndpoints(arLan) || arUsingLan}>{arUsingLan ? 'In use' : 'Use now'}</button>
+          <small>A stand-in for play without internet: an ARViewer server on this network (<code>npm run certs &amp;&amp; npm start</code> serves the relay and the viewer on port 8443). The table keeps using the relay above and switches to this address only when that relay cannot be reached; with nothing set here it asks instead. Accept the server's certificate once in this browser (open <code>https://HOST:8443</code>) and on each phone. Leave empty to forget.</small>
+          {#if lanKeyboardOpen}
+            <div class="lan-keyboard" data-lan-keyboard>
+              <OnScreenKeyboard layout="address" value={arLanDraft} onInput={(v) => (arLanDraft = v)} onDone={saveLan} maxLength={64} label="Keyboard for the LAN server address" />
+            </div>
+          {/if}
+        </div>
       </div>
     </section>
   {/if}
@@ -3810,6 +3920,15 @@
   .music-control.open .music-volume { pointer-events: auto; }
   .music-control.open .music-volume { width: clamp(8rem, 18vmin, 14rem); opacity: 1; }
   .scale-panel .table-id { letter-spacing: 0.14em; }
+  .scale-panel .ar-endpoints { margin: 0 0 0.6rem; line-height: 1.35; }
+  .scale-panel .lan-option { display: grid; grid-template-columns: auto 1fr auto auto; gap: 0.4rem; align-items: center; margin: 0.2rem 0 0.6rem; font-weight: 700; color: #183a37; }
+  .scale-panel .lan-option input { min-width: 0; min-height: 44px; padding: 0.3rem 0.6rem; border: 1px solid #8e826b; border-radius: 0.6rem; font: inherit; font-family: ui-monospace, Menlo, monospace; }
+  .scale-panel .lan-option small, .scale-panel .lan-keyboard { grid-column: 1 / -1; font-weight: 400; line-height: 1.35; }
+  .scale-panel .lan-keyboard { font-size: 0.85rem; }
+  .shared-market > header > button.relay-action { min-width: 0; min-height: 36px; padding: 0.1em 0.8em; border: 2px solid #a6442d; border-radius: 99rem; background: #fffaf0; color: #a6442d; font: inherit; font-weight: 700; }
+  .scale-panel .ar-endpoints code { font-size: 0.92em; word-break: break-all; }
+  /* The relay's trouble, as a rust pill beside the round label (same place the phones look for the host). */
+  .shared-market > header > span.relay-warning { background: #a6442d; color: #fffaf0; font-weight: 700; }
   .scale-panel .facing-option { display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; }
   .scale-panel .facing-option small { flex: 1; line-height: 1.25; color: #5d5240; }
   .scale-panel .sound-option input[type='range'] { width: 7rem; flex: 0 0 auto; accent-color: #a6442d; }

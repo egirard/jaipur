@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { KEYBOARD_ROWS, pressKey, upperNext, type KeyboardKey } from './on-screen-keyboard';
+  import { keyboardRows, pressKey, upperNext, type KeyboardKey, type KeyboardLayout } from './on-screen-keyboard';
 
   /** The table's own keyboard (see on-screen-keyboard.ts). It edits the
    *  bound value directly, so the text field need not keep focus; keys
@@ -9,15 +9,18 @@
     onInput,
     onDone,
     maxLength = 32,
-    label = 'On-screen keyboard'
-  }: { value: string; onInput: (next: string) => void; onDone: () => void; maxLength?: number; label?: string } = $props();
+    label = 'On-screen keyboard',
+    layout = 'name'
+  }: { value: string; onInput: (next: string) => void; onDone: () => void; maxLength?: number; label?: string; layout?: KeyboardLayout } = $props();
 
   let shift = $state(false);
-  const upper = $derived(upperNext(value, shift));
+  const capitalize = $derived(layout === 'name');
+  const upper = $derived(capitalize ? upperNext(value, shift) : shift);
+  const rows = $derived(keyboardRows(layout));
 
   function press(key: KeyboardKey) {
     if (key.action === 'done') { onDone(); return; }
-    const next = pressKey({ value, shift }, key, maxLength);
+    const next = pressKey({ value, shift }, key, maxLength, capitalize);
     shift = next.shift;
     if (next.value !== value) onInput(next.value);
   }
@@ -25,7 +28,7 @@
 </script>
 
 <div class="osk" role="group" aria-label={label} data-on-screen-keyboard>
-  {#each KEYBOARD_ROWS as row, r (r)}
+  {#each rows as row, r (r)}
     <div class="row">
       {#each row.keys as key, i (key.key)}
         <button

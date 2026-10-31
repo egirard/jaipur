@@ -17,7 +17,8 @@
     "design:ui-fixes": "playwright test --config tests/design/playwright.config.ts",
     "test:rules": "firebase emulators:exec --project jaipur-e2e --only firestore \"vitest run --config vitest.rules.config.ts\"",
     "emulators": "firebase emulators:start",
-    "verify:change": "bash scripts/verify-change.sh"
+    "verify:change": "bash scripts/verify-change.sh",
+    "verify:legacy": "bash scripts/verify-legacy.sh"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible": "^5.2.8",

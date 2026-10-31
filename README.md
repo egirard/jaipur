@@ -98,7 +98,43 @@ see their private cards in AR, while all play happens on the table.
   huge Seal of Excellence that shrinks into the winner's seat, and either
   the next round opening by itself or "N wins the game!" and **Play again**.
 - The AR viewer and relay are hosted by the ARViewer project; the QR
-  codes on the table embed them.
+  codes on the table embed them. Each seat QR carries its own bearer token
+  (`seat=1-XXXXXXXX`), so a phone that scanned one seat cannot read the
+  other's hand; the tokens are remembered per session, so a reload keeps the
+  printed QRs valid. The join mat says whether the table is connected to the
+  relay, and a second table window that joins the same session takes it over
+  (the first one says so and stops).
+
+### LAN-only play
+
+The whole connectivity story — session and seat tokens, what flows over the
+relay, presence and recovery, endpoint resolution, the LAN stand-in and the
+deprecated Firebase channel — is in [docs/CONNECTIVITY.md](docs/CONNECTIVITY.md).
+In short:
+
+The table cannot learn its own LAN address — a browser page has no way to —
+so for play without internet the two addresses have to be provided once.
+Everything else already works offline: the game lives in the table's
+browser and the phones talk only to the relay.
+
+1. On a laptop on the same Wi-Fi, run the ARViewer server with its
+   self-signed certificate (`npm run certs && npm start` in the ARViewer
+   checkout; it serves the viewer and the relay on `https://LAPTOP:8443`).
+   WebXR needs HTTPS, so each phone accepts the certificate once.
+2. Enter `LAPTOP:8443` as the **LAN server** in Table options. The table
+   keeps using the hosted relay and switches to the LAN server only when
+   that relay cannot be reached (no internet); if nothing is set at that
+   moment, the market header asks for it. **Use now** switches at once.
+   To make a LAN pair the primary instead, open the table once with
+   `/tt/?relay=LAPTOP:8443&viewer=LAPTOP:8443` (remembered; `?relay=default`
+   forgets) or bake it into a build with `VITE_AR_RELAY_URL` and
+   `VITE_AR_VIEWER_URL`; Table options shows which pair is in use and why.
+3. Alternatively serve the table's own build from that server (copy or
+   link `build/` into the ARViewer server's `public/` directory and open
+   `https://LAPTOP:8443/<dir>/tt/`): the table probes its origin's
+   `/inspect`, recognises the ARViewer server, and uses `/ws` and `/viewer/`
+   beside itself with nothing to type. The seat QRs carry the relay address
+   either way, so phones follow automatically.
 
 ### Play improvements (this fork)
 
@@ -147,10 +183,12 @@ The Nix shell provides the pinned toolchain when Nix is available:
 nix develop --command bun run verify:change
 ```
 
-The verifier runs static checks, unit and Firestore Rules tests, every
-two-browser Playwright scenario against the Firebase emulators, the production
-build, and whitespace checks. Scenario walkthroughs and their zero-pixel
-screenshots live under `tests/e2e/`.
+The verifier runs static checks, the unit tests, the production build and
+whitespace checks; it needs no Firebase emulator. The Firestore rules tests
+and the two-browser Playwright scenarios belong to the deprecated Firebase
+channel and run on request with `bun run verify:legacy` (Java 21+ for the
+emulators; see [DEPRECATIONS.md](DEPRECATIONS.md) for their state). Scenario
+walkthroughs and their screenshots live under `tests/e2e/`.
 
 ## Accessibility and installation
 
@@ -182,7 +220,13 @@ networked experience; installation does not make Firebase multiplayer
 available without a connection, though an opened game can be viewed from its
 local replay cache while disconnected.
 
-## Firebase
+## Firebase (deprecated)
+
+The Firebase channel is deprecated as of 2026-10-30 and will be removed: the
+AR tabletop keeps the game in the browser's local store and the phones join
+over the AR relay, so nothing in the supported flow touches Firebase. The
+notes below describe the legacy two-browser game and `/hand` controller while
+they remain in the tree — see [DEPRECATIONS.md](DEPRECATIONS.md).
 
 - Project: `jaipur-20260730`
 - Web app: `Jaipur Web`

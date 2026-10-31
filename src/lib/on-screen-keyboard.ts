@@ -18,6 +18,18 @@ export const KEYBOARD_ROWS: KeyboardRow[] = [
   { inset: 0, keys: [...letters("'-"), { key: 'space', action: 'space', span: 12 }, { key: 'done', action: 'done', span: 4 }] }
 ];
 
+/** `name`: a trader's name (words capitalise themselves, space, apostrophe).
+ *  `address`: a host:port or URL (dot, dash, colon, slash; no space; no
+ *  capitalising — shift still gives a capital). */
+export type KeyboardLayout = 'name' | 'address';
+export function keyboardRows(layout: KeyboardLayout): KeyboardRow[] {
+  if (layout === 'name') return KEYBOARD_ROWS;
+  return [
+    ...KEYBOARD_ROWS.slice(0, 4),
+    { inset: 0, keys: [...letters('.-:/'), { key: 'done', action: 'done', span: 12 }] }
+  ];
+}
+
 /** A name capitalises each word on its own (autocapitalize="words");
  *  shift inverts that for the next letter. */
 export const atWordStart = (value: string) => value.length === 0 || value.endsWith(' ');
@@ -25,7 +37,7 @@ export const upperNext = (value: string, shift: boolean) => shift !== atWordStar
 
 export type KeyboardState = { value: string; shift: boolean };
 
-export function pressKey(state: KeyboardState, pressed: KeyboardKey, maxLength = 32): KeyboardState {
+export function pressKey(state: KeyboardState, pressed: KeyboardKey, maxLength = 32, capitalize = true): KeyboardState {
   const { value, shift } = state;
   switch (pressed.action) {
     case 'shift': return { value, shift: !shift };
@@ -37,7 +49,7 @@ export function pressKey(state: KeyboardState, pressed: KeyboardKey, maxLength =
       return { value: `${value} `, shift };
     default: {
       if (value.length >= maxLength) return { value, shift: false };
-      const char = upperNext(value, shift) ? pressed.key.toUpperCase() : pressed.key;
+      const char = (capitalize ? upperNext(value, shift) : shift) ? pressed.key.toUpperCase() : pressed.key;
       return { value: value + char, shift: false };
     }
   }

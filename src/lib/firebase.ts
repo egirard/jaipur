@@ -1,3 +1,8 @@
+// DEPRECATED (2026-10-30, see DEPRECATIONS.md): the Firebase channel is no
+// longer part of the supported product. The AR tabletop keeps the game in
+// the browser-local store and phones join over the AR relay; this module is
+// kept only for the legacy two-browser game (/) and the legacy /hand
+// controller, and will be removed with them.
 // The Firebase SDK is loaded on demand inside initializeFirebase(): pages
 // that run on the browser-local store (the AR tabletop by default) must not
 // pull it into their bundle or need an emulator to be running.

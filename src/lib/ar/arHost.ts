@@ -15,7 +15,22 @@
 //   ar.publishSceneFor('1', { nodes: handNodes });      // seat 1's hand
 //   qrImage = await QRCode.toDataURL(ar.viewerUrl('1')) // seat 1's AR QR
 
+import { DEFAULT_RELAY, DEFAULT_VIEWER } from './arEndpoints';
+
 export type ArAsset = { img: string; wM: number; hM: number };
+
+/** The relay connection as the table sees it. `closed`: dropped, retrying.
+ *  `unreachable`: the retries are not getting through — three failures
+ *  before the first connection ever opened, or fifteen seconds without one
+ *  since it dropped (a Render relay waking from sleep holds the connect
+ *  open rather than failing it, so it does not trip this); the table may
+ *  switch to a LAN stand-in. `displaced`: another table window joined the
+ *  same session and the relay handed it over; this one stops reconnecting
+ *  (two tables would otherwise displace each other every 1.5 s and the
+ *  phones would see the host flap). */
+export type ArRelayStatus = 'connecting' | 'connected' | 'closed' | 'unreachable' | 'displaced';
+const UNREACHABLE_FAILURES = 3;
+const UNREACHABLE_AFTER_MS = 15_000;
 
 /** A static patch of the screen the phones register from, published
  *  alongside the whole-screen image: a column of the market band, or a
@@ -95,7 +110,7 @@ export type ArAction = {
 };
 
 export type ArHostOptions = {
-  /** WebSocket relay, e.g. wss://arviewer-relay.onrender.com/ws */
+  /** WebSocket relay, e.g. wss://arviewer-relay.onrender.com/ws (see arEndpoints.ts). */
   relayUrl?: string;
   /** Base URL of the AR viewer page the QR should open. */
   viewerBase?: string;
@@ -103,11 +118,12 @@ export type ArHostOptions = {
   session?: string;
   onAction?: (a: ArAction) => void;
   onViewers?: (count: number) => void;
-  onStatus?: (status: 'connecting' | 'connected' | 'closed') => void;
+  /** Who is connected: the phone count and the seat tokens with at least
+   *  one phone (`seats` is null when the relay predates per-seat presence). */
+  onPeers?: (peers: { viewers: number; seats: string[] | null }) => void;
+  onStatus?: (status: ArRelayStatus) => void;
 };
 
-const DEFAULT_RELAY = 'wss://arviewer-relay.onrender.com/ws';
-const DEFAULT_VIEWER = 'https://egirard.github.io/ARViewer/viewer/';
 const SCENE_THROTTLE_MS = 80; // ~12 publishes/sec while state churns
 
 function makeSessionCode(): string {
@@ -124,6 +140,10 @@ export class ArHost {
   private opts: ArHostOptions;
   private ws: WebSocket | null = null;
   private closed = false;
+  private displaced = false;
+  private everOpened = false;
+  private failures = 0;
+  private downSince: number | null = null;
 
   // Everything published is remembered so a reconnect (ours or the relay's
   // restart) can replay the full picture.
@@ -143,14 +163,16 @@ export class ArHost {
     this.session = opts.session ?? makeSessionCode();
   }
 
-  /** The URL a phone should open — embed this in the QR. With a seat token
-   *  the viewer is seated (receives that seat's private scene); without it,
-   *  it is a spectator. */
-  viewerUrl(seat?: string): string {
+  /** The URL a seat's phone should open — embed this in that seat's QR.
+   *  `seat` is the seat's bearer token (seatTokens.ts); the phone receives
+   *  that seat's private scene and acts for it. Every phone is a seat: the
+   *  relay turns away a viewer without one (spectating was dropped — the
+   *  table is the shared view). */
+  viewerUrl(seat: string): string {
     const u = new URL(this.viewerBase);
     u.searchParams.set('s', this.session);
     u.searchParams.set('relay', this.relayUrl);
-    if (seat) u.searchParams.set('seat', seat);
+    u.searchParams.set('seat', seat);
     // Per-table-load nonce: the hosted viewer is cached by URL for 10 min,
     // so a re-scanned QR must not hand the phone a stale page.
     u.searchParams.set('t', this.loadNonce);
@@ -159,7 +181,34 @@ export class ArHost {
 
   connect(): void {
     this.closed = false;
+    this.displaced = false;
     this.open();
+  }
+
+  /** Where the relay and viewer are right now (Table options shows them). */
+  get endpoints(): { relayUrl: string; viewerBase: string } {
+    return { relayUrl: this.relayUrl, viewerBase: this.viewerBase };
+  }
+
+  /** Move to another relay and viewer (the LAN stand-in): drop the current
+   *  socket without retrying it, connect to the new one and replay the
+   *  whole published picture there. Seat QRs must be re-rendered by the
+   *  caller: they embed the relay. */
+  setEndpoints(next: { relayUrl: string; viewerBase: string }): void {
+    this.relayUrl = next.relayUrl;
+    this.viewerBase = next.viewerBase;
+    const old = this.ws;
+    this.ws = null;
+    if (old) {
+      old.onclose = null;
+      old.onerror = null;
+      old.onmessage = null;
+      try { old.close(1000); } catch { /* already closing */ }
+    }
+    this.everOpened = false;
+    this.failures = 0;
+    this.downSince = null;
+    this.connect();
   }
 
   close(): void {
@@ -175,6 +224,9 @@ export class ArHost {
     const ws = new WebSocket(this.relayUrl);
     this.ws = ws;
     ws.onopen = () => {
+      this.everOpened = true;
+      this.failures = 0;
+      this.downSince = null;
       this.opts.onStatus?.('connected');
       this.send({ v: 1, type: 'join', role: 'table', session: this.session, game: 'jaipur' });
       // Replay the whole published picture for the fresh connection.
@@ -195,11 +247,23 @@ export class ArHost {
       }
       if (msg.type === 'action') this.opts.onAction?.(msg as ArAction);
       else if (msg.type === 'peers' || msg.type === 'joined') {
-        if (typeof msg.viewers === 'number') this.opts.onViewers?.(msg.viewers);
+        if (typeof msg.viewers === 'number') {
+          this.opts.onViewers?.(msg.viewers);
+          const seats = Array.isArray(msg.seats) ? msg.seats.filter((x): x is string => typeof x === 'string') : null;
+          this.opts.onPeers?.({ viewers: msg.viewers, seats });
+        }
+      } else if (msg.type === 'displaced') {
+        // Another table window took the session: stay closed (see ArRelayStatus).
+        this.displaced = true;
+        this.closed = true;
       }
     };
     ws.onclose = () => {
-      this.opts.onStatus?.('closed');
+      if (this.ws !== ws) return; // replaced by setEndpoints: not ours to retry
+      this.failures += 1;
+      this.downSince ??= Date.now();
+      const unreachable = (!this.everOpened && this.failures >= UNREACHABLE_FAILURES) || Date.now() - this.downSince > UNREACHABLE_AFTER_MS;
+      this.opts.onStatus?.(this.displaced ? 'displaced' : unreachable ? 'unreachable' : 'closed');
       if (!this.closed) setTimeout(() => this.open(), 1500);
     };
     ws.onerror = () => ws.close();
