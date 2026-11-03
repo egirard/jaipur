@@ -25,6 +25,7 @@
 
 import html2canvas from 'html2canvas';
 import { loadSeatTokens, seatOfToken, type SeatNo, type SeatTokens } from './seatTokens';
+import { phoneScore, saleOptions } from './phoneHand';
 import { ArHost, type ArRelayStatus, type ArDebugFlags, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingRegion } from './arHost';
 import { captureScale, centreMeters, overlappingColumns, pieces, type Rect } from './trackingGeometry';
 
@@ -86,6 +87,7 @@ export type ArBotRequestHandler = (seat: string, difficulty: string) => void;
 export type ArBotOffer = { id: string; name: string; blurb: string };
 /** What selling a good would earn the active trader right now. */
 export type SalePreview = { cards: number; base: number; bonus: string | null };
+export type PhonePrompt = { notes: string[]; controls: { id: string; label: string; kind?: 'confirm' | 'cancel' | 'plain' }[] };
 
 const KIND_COLORS: Record<string, string> = {
   diamond: '#9fd7e8',
@@ -377,8 +379,20 @@ export class ArTabletop {
   onBotRequest: ArBotRequestHandler | null = null;
   /** A seat's phone toggled one of its own cards/camels for a trade. */
   onToggleReturn: ((seat: string, cardId: string) => void) | null = null;
-  /** A seat's phone asked to unstage everything not yet placed. */
-  onClear: ((seat: string) => void) | null = null;
+  /** A seat's phone pressed one of the host's buttons (scene.controls):
+   *  `clear`, `draw-confirm`/`draw-cancel`, `trade-confirm`/`trade-cancel`,
+   *  `sell:<kind>`, `sale-confirm`/`sale-cancel`. */
+  onControl: ((seat: string, id: string) => void) | null = null;
+  /** A seat's phone (complete view) tapped a market card: a draw, or a
+   *  trade target for a staged return — the page decides, as for a tap on
+   *  the table. */
+  onMarketTap: ((seat: string, cardId: string) => void) | null = null;
+  /** Page-supplied: what selling each good in a player's hand would earn
+   *  now, with the control id when the phone may start that sale. */
+  salesFor: ((uid: string) => NonNullable<ArScene['sales']>) | null = null;
+  /** Page-supplied: the move in progress for a player (a draw, a trade or a
+   *  sale awaiting confirmation), as lines and buttons for the phone. */
+  promptFor: ((uid: string) => PhonePrompt | null) | null = null;
   /** Set by the page; published to a seat while a bot may still be seated opposite it. */
   botOffers: ArBotOffer[] = [];
   /** Page-supplied: what selling `kind` earns the active trader now. */
@@ -447,8 +461,9 @@ export class ArTabletop {
         // own pieces. Only the seat's own pieces are honoured. (AR `tap` on
         // anything else stays viewer-local: an inspect, never a selection.)
         if (a.action === 'select' && seat && typeof a.nodeId === 'string') {
-          const m = /^(hand|herd):(.+)$/.exec(a.nodeId);
-          if (m) this.onToggleReturn?.(seat, m[2]);
+          const m = /^(hand|herd|mkt):(.+)$/.exec(a.nodeId);
+          if (m && m[1] === 'mkt') this.onMarketTap?.(seat, m[2]);
+          else if (m) this.onToggleReturn?.(seat, m[2]);
         }
         // Registration reports from phones in AR: shown, never answered.
         if (a.action === 'diag' && a.viewerId && a.data && typeof a.data === 'object') {
@@ -461,7 +476,7 @@ export class ArTabletop {
         // Host-defined phone buttons (scene.controls).
         if (a.action === 'control' && seat) {
           const id = (a.data as { id?: unknown } | undefined)?.id;
-          if (id === 'clear') this.onClear?.(seat);
+          if (typeof id === 'string' && id.length <= 40) this.onControl?.(seat, id);
         }
       },
       onPeers: ({ viewers, seats }) => {
@@ -751,9 +766,14 @@ export class ArTabletop {
           ?.getBoundingClientRect();
         if (!rect) continue;
         const { xM, zM } = this.toMeters(rect);
+        // A card awaiting a draw's confirmation glows gold; a trade target
+        // (a return lies on it) green — public on the table, so public here.
+        const drawing = lobby.pendingDraw?.cardIds.includes(card.id) ?? false;
+        const trading = lobby.players.some((p) => card.id in (lobby.tabletopIntents[p.uid]?.exchangeLoads ?? {}));
         nodes.push({
           id: `mkt:${card.id}`, kind: 'card', xM, zM, rotY: 0,
           faceUp: true, peek: false, face: `k-${card.kind}`, back: 'back',
+          ...(drawing ? { glow: '#ffd27a', tag: 'Taking?' } : trading ? { glow: '#66ffcc', tag: 'Trade' } : {}),
         });
       }
       // Deck: a stack with the remaining count.
@@ -918,24 +938,27 @@ export class ArTabletop {
       // What the upstream /hand page prints above its cards: hand count,
       // staging summary, token tally, and round-over notice.
       const notes: string[] = [];
-      let controls: { id: string; label: string }[] | undefined;
+      let controls: NonNullable<ArScene['controls']> | undefined;
+      let score: ArScene['score'];
+      let sales: ArScene['sales'];
       if (player && round) {
         const unplaced = [...selected].filter((id) => !loaded.has(id)).length;
+        // The move in progress comes first (the phone's complete view shows
+        // its buttons); then the standing lines.
+        const prompt = this.promptFor?.(player.uid) ?? null;
+        if (prompt) { notes.push(...prompt.notes); controls = [...prompt.controls]; }
         notes.push(`${hand.length} / 7 cards`);
-        notes.push(lobby.pendingDraw
-          ? 'Draw awaiting confirmation on the table'
-          : `${unplaced} selected for the table · ${loaded.size} placed face-down`);
-        const tokens = [...(round.ownedGoodsTokens[player.uid] ?? []), ...(round.ownedBonusTokens[player.uid] ?? [])];
-        const total = tokens.reduce((sum, t) => sum + t.value, 0);
-        notes.push(tokens.length ? `Your tokens: ${tokens.length} worth ${total} points` : 'No tokens yet');
+        if (!prompt) notes.push(`${unplaced} selected for the table · ${loaded.size} placed face-down`);
         if (round.status === 'complete') notes.push('Round complete — open the next round on the table.');
-        if (myTurn && unplaced > 0) controls = [{ id: 'clear', label: 'Clear unplaced' }];
+        if (myTurn && unplaced > 0 && !prompt) controls = [{ id: 'clear', label: 'Clear unplaced' }];
+        score = phoneScore(round, player.uid);
+        sales = this.salesFor?.(player.uid) ?? saleOptions(round, player.uid, [...selected]);
       }
       const scene: ArScene = {
         nodes: handNodes,
         ...(name ? { player: { name } } : {}),
         ...(canSeatBot ? { offers: { bot: this.botOffers } } : {}),
-        ...(player && round ? { turn: myTurn, notes } : {}),
+        ...(player && round ? { turn: myTurn, notes, score, sales } : {}),
         ...(controls ? { controls } : {})
       };
       const json = JSON.stringify(scene);

@@ -218,7 +218,7 @@ browser-local store. Nothing in the supported flow touches Firebase, so on
 | --- | --- | --- |
 | Firebase channel — anonymous Auth, the Firestore event store (`src/lib/firebase.ts`, `src/lib/firebase-config.ts`, `src/lib/game-repository.ts`), `firestore.rules`, the emulators | the browser-local store; the table is the only writer | code kept; `?firebase=1` on a build with Firebase config still opts in, with a console warning and "deprecated" in the status line |
 | Two-browser game at `/` | the AR tabletop at `/tt` | kept; not maintained |
-| Phone hand controller at `/hand`, from a table opened with `?phone=1` | the viewer's "Play using phone" view from a seat's AR QR (no WebXR needed) | kept; `?phone=1` warns |
+| Phone hand controller at `/hand`, from a table opened with `?phone=1` | the viewer's "Play using phone" view from a seat's AR QR (no WebXR needed), minimal or complete | **retired 2026-11-03**: `/hand` is a notice page with no Firebase, the table prints no `/hand` QRs, `?phone=1` only warns |
 | Firebase-backed verification (`test:rules`, the two-browser Playwright scenarios, `scripts/dev-ar.sh`'s `JAIPUR_FIREBASE=1`) | `bun run verify:change` (static checks, unit tests, build); `bun run verify:legacy` runs the old suite on request | the Git hooks no longer need Java or the emulators |
 | Spectator phones (a viewer URL without a seat) | none — the table is the shared view | removed; the relay turns them away |
 | The five-letter room code in the market's centre | nothing — phones join by QR | shown only with `?firebase=1` |
@@ -230,7 +230,9 @@ as above.
 
 **Removal plan.** (1) Rework `tests/e2e/012-tabletop-mode` around the relay
 join flow and refresh the screenshot baselines — the legacy suite has been
-red since the relay join landed. (2) Delete `/`, `/hand`, the Firebase
-modules, `firestore.rules`, `firebase.json`, the `firebase` dependencies and
-the emulator scripts; drop `?firebase=1` and `?phone=1` from the table.
-(3) Point the front page at `/tt`.
+red since the relay join landed (it still expects the `?phone=1` QRs, which
+are gone). (2) Delete `/`, the `/hand` notice page, the Firebase modules,
+`firestore.rules`, `firebase.json`, the `firebase` dependencies and the
+emulator scripts; drop `?firebase=1` from the table. (3) Point the front
+page at `/tt`. Done so far: `/hand` retired and its QRs removed from the
+table (2026-11-03).

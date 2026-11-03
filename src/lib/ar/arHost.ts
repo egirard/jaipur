@@ -86,8 +86,17 @@ export type ArScene = {
   /** Status lines for the phone view ("3 / 7 cards", token totals…). */
   notes?: string[];
   /** Host-defined buttons the phone view offers; pressing one sends
-   *  `{action:'control', data:{id}}`. */
-  controls?: { id: string; label: string }[];
+   *  `{action:'control', data:{id}}`. `kind` lets the view style a
+   *  confirmation apart from a cancel. */
+  controls?: { id: string; label: string; kind?: 'confirm' | 'cancel' | 'plain' }[];
+  /** The seat's score as the table reveals it: goods tokens lie face up
+   *  (`goods`, their total, over `goodsCount` tokens), bonus tokens face
+   *  down (`bonus`, each hidden value). */
+  score?: { goods: number; goodsCount: number; bonus: number[]; total: number };
+  /** What selling each good in the hand would earn now, one entry per kind
+   *  in the hand; `control` names the button to send to start that sale
+   *  when the host allows it right now. */
+  sales?: { kind: string; cards: number; base: number; bonus: string | null; legal: boolean; why?: string; control?: string }[];
   /** Diagnostics the host asks viewers to show (shared scene only):
    *  `targets` outlines the tracking targets in AR, `diag` prints the
    *  viewer's registration numbers on screen, `regcheck` asks the named

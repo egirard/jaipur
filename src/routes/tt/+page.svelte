@@ -4,6 +4,7 @@
   import '@fontsource/cormorant-garamond/700.css';
   import { base } from '$app/paths';
   import { onMount, tick } from 'svelte';
+  import { saleOptions, type SaleOption } from '$lib/ar/phoneHand';
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
   import OnScreenKeyboard from '$lib/OnScreenKeyboard.svelte';
@@ -37,7 +38,7 @@
     isGood
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
-  import { ArTabletop, type ArTrackingTargets, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type SalePreview } from '$lib/ar/arTabletop';
+  import { ArTabletop, type ArTrackingTargets, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type PhonePrompt, type SalePreview } from '$lib/ar/arTabletop';
   import { lanEndpoints, loadLanAddress, probeSameOriginRelay, resolveArEndpoints, sameOriginEndpoints, saveLanAddress, type ArEndpoints } from '$lib/ar/arEndpoints';
   import type { ArRelayStatus } from '$lib/ar/arHost';
   import {
@@ -49,7 +50,6 @@
   import type { StrongBotRequest, StrongBotResponse } from '$lib/jaipur-bot.worker';
 
   type Seat = 1 | 2;
-  type SeatQr = { seat: Seat; url: string; image: string };
 
   const goods: Good[] = ['diamond', 'gold', 'silver', 'cloth', 'spice', 'leather'];
   const buildHash = (import.meta.env.VITE_GIT_HASH ?? 'local').slice(0, 7);
@@ -59,7 +59,6 @@
   let gameId = $state('');
   let repository = $state<GameRepository>();
   let lobby = $state<GameState>(reduceGame([]));
-  let seatQrs = $state<SeatQr[]>([]);
   // AR Card Viewer attachment (see src/lib/ar/): per-seat AR QRs + solitaire bot.
   let ar = $state<ArTabletop | undefined>(undefined);
   let arQrs = $state<Array<{ seat: Seat; url: string; image: string }>>([]);
@@ -343,10 +342,6 @@
       d.untrackable?.length ? `untrackable: ${d.untrackable.join(' ')}` : ''
     ].filter(Boolean).join('\n');
   };
-  // The AR phone is the way to sit down at this table. The upstream phone
-  // controller (/hand, Firebase-driven) is a distinct offering; ?phone=1
-  // brings its QR back for anyone who wants it, never both per player.
-  let legacyPhone = $state(false);
   let arDiag = $state(55);
   let localStore = $state(false);
   let scalePanelOpen = $state(false);
@@ -845,22 +840,9 @@
         }
       }
 
-      const joinBase = `${location.origin}${base}/hand/`;
-      legacyPhone = pageParams.get('phone') === '1';
-      if (legacyPhone) console.warn('[jaipur] ?phone=1: the Firebase /hand controller is deprecated (see DEPRECATIONS.md); phones join over the AR relay — scan a seat QR and choose "Play using phone".');
-      if (legacyPhone) seatQrs = await Promise.all(([1, 2] as const).map(async (seat) => {
-        const url = `${joinBase}?gameId=${gameId}&seat=${seat}`;
-        return {
-          seat,
-          url,
-          image: await QRCode.toDataURL(url, {
-            errorCorrectionLevel: 'M',
-            margin: 2,
-            width: 360,
-            color: { dark: '#183a37', light: '#fffaf0' }
-          })
-        };
-      }));
+      // The Firebase /hand controller is gone (DEPRECATIONS.md): phones join
+      // over the AR relay. ?phone=1 only says so now.
+      if (pageParams.get('phone') === '1') console.warn('[jaipur] ?phone=1 no longer does anything: the /hand controller was retired (see DEPRECATIONS.md). Phones scan a seat QR and choose "Play using phone".');
 
       if (localStore) localStorage.setItem(currentKey, gameId);
       const attached = localStore
@@ -978,10 +960,19 @@
         const player = playerForSeat(Number(seat) as Seat);
         if (player && player.uid !== lobby.bot?.uid) void toggleFromPhone(player.uid, cardId);
       };
-      ar.onClear = (seat) => {
+      // The phone's complete view drives whole moves — a draw, a trade, a
+      // sale — through the same two-step paths as the table; the host stays
+      // the authority and the phone only shows what it is told.
+      ar.onControl = (seat, id) => {
         const player = playerForSeat(Number(seat) as Seat);
-        if (player && player.uid !== lobby.bot?.uid && canSelectReturns(player.uid)) void publishIntent(player.uid, [], exchangeLoads(player.uid));
+        if (player && player.uid !== lobby.bot?.uid) void phoneControl(player.uid, Number(seat) as Seat, id);
       };
+      ar.onMarketTap = (seat, cardId) => {
+        const player = playerForSeat(Number(seat) as Seat);
+        if (player && player.uid !== lobby.bot?.uid) void marketTapFromPhone(player.uid, cardId);
+      };
+      ar.salesFor = (uid) => phoneSales(uid);
+      ar.promptFor = (uid) => phonePrompt(uid);
       ar.previewFor = (kind) => (isGood(kind) ? salePreview(kind) : null); // AR-only sale preview
       ar.onViewersChanged = (n) => (arViewers = n);
       ar.onPresenceChanged = (seats) => (arSeatsOnline = seats ? new Set(seats) : null);
@@ -1089,6 +1080,8 @@
   const showHands = $derived(showHandsChoice === 'auto' ? Boolean(lobby.bot) || hasPhonelessPlayer : showHandsChoice === 'on');
   // Show hands changes what the AR phones may see (placed return cards): republish.
   $effect(() => { void showHands; publishAr(); });
+  // A staged sale is table-local state (not in the store): the phones learn of it here.
+  $effect(() => { void pendingSale; publishAr(); });
   // Background music: "Marketplace Melody" (static/audio, see ASSETS.md)
   // loops at low volume. Browsers only start audio after a gesture, so the
   // first tap or key on the table starts it; the mute choice is remembered.
@@ -1685,6 +1678,74 @@
     if (Object.values(loads).includes(cardId)) return;
     const selected = selectedReturnIds(uid);
     await publishIntent(uid, selected.includes(cardId) ? selected.filter((id) => id !== cardId) : [...selected, cardId], loads);
+  }
+
+  // ---- The phone's complete view: whole moves from the phone --------------
+  // A tap on a market card means what it means on the table: with returns
+  // staged, place one on this card (a trade target; tapping a loaded card
+  // takes the return back); with nothing staged, start a draw of this card
+  // (or of all the camels). Confirmation is a button, as the table's prompt is.
+  async function marketTapFromPhone(uid: string, cardId: string) {
+    const round = lobby.round;
+    if (!round || round.status !== 'active' || round.activeUid !== uid || busy || pendingDraw || pendingSale) return;
+    const card = round.market.find((c) => c.id === cardId);
+    if (!card) return;
+    const loads = exchangeLoads(uid);
+    if (card.kind !== 'camel' && (cardId in loads || selectedReturnIds(uid).length > 0)) return chooseExchangeTarget(uid, cardId);
+    if (Object.keys(loads).length > 0) return; // a trade is staged: finish or cancel it first
+    await chooseMarket(card);
+  }
+
+  /** One of the host's phone buttons (scene.controls); every id is checked against the table's own state. */
+  async function phoneControl(uid: string, seat: Seat, id: string) {
+    const round = lobby.round;
+    if (!round || round.status !== 'active' || busy) return;
+    if (id === 'clear') { if (canSelectReturns(uid)) await publishIntent(uid, [], exchangeLoads(uid)); return; }
+    if (id === 'draw-confirm') { if (pendingDraw?.activeUid === uid) await confirmPendingDraw(); return; }
+    if (id === 'draw-cancel') { if (pendingDraw?.activeUid === uid) await abandonPendingDraw(); return; }
+    if (round.activeUid !== uid || pendingDraw) return;
+    if (id === 'trade-confirm') return confirmExchange(uid);
+    if (id === 'trade-cancel') return cancelTrade(uid);
+    if (id === 'sale-confirm') { if (pendingSale?.uid === uid) confirmSale(); return; }
+    if (id === 'sale-cancel') { if (pendingSale?.uid === uid) cancelSale(); return; }
+    const sell = /^sell:([a-z]+)$/.exec(id);
+    if (sell && isGood(sell[1]) && !pendingSale && canSell(sell[1])) tapSell(sell[1], seat);
+  }
+
+  /** What selling each good would earn, with the button to start it when this phone may. */
+  function phoneSales(uid: string): SaleOption[] {
+    const round = lobby.round;
+    const mayStart = Boolean(round && round.status === 'active' && round.activeUid === uid && !busy && !pendingDraw && !pendingSale);
+    return saleOptions(round, uid, selectedReturnIds(uid)).map((o) =>
+      mayStart && o.legal && canSell(o.kind) ? { ...o, control: `sell:${o.kind}` } : o);
+  }
+
+  /** The move in progress for this player, as the table's prompt would word it, with the phone's buttons. */
+  function phonePrompt(uid: string): PhonePrompt | null {
+    const round = lobby.round;
+    if (!round || round.status !== 'active') return null;
+    if (pendingDraw?.activeUid === uid) {
+      const card = round.market.find((c) => c.id === pendingDraw!.cardIds[0]);
+      const what = pendingDraw.kind === 'camels' ? `all ${pendingDraw.cardIds.length} camels` : `the ${label(card?.kind ?? 'camel').toLowerCase()}`;
+      return { notes: [`Take ${what}?`], controls: [{ id: 'draw-confirm', label: pendingDraw.kind === 'camels' ? 'Take the camels' : 'Take it', kind: 'confirm' }, { id: 'draw-cancel', label: 'Undo', kind: 'cancel' }] };
+    }
+    if (pendingDraw || round.activeUid !== uid) return null;
+    if (pendingSale?.uid === uid) {
+      const preview = salePreview(pendingSale.kind);
+      return { notes: [`Sell ${pendingSale.count} ${label(pendingSale.kind).toLowerCase()} for +${salePoints(pendingSale.kind, pendingSale.count)}${preview?.bonus && pendingSale.count >= 3 ? ` and a +${preview.bonus} bonus token` : ''}?`], controls: [{ id: 'sale-confirm', label: `Sell ${pendingSale.count}`, kind: 'confirm' }, { id: 'sale-cancel', label: 'Cancel', kind: 'cancel' }] };
+    }
+    const loads = exchangeLoads(uid);
+    const placed = Object.keys(loads).length;
+    if (placed > 0) {
+      const problem = exchangeProblem(uid);
+      const notes = [placed >= 2 ? `Trade ${placed} cards?` : 'Trade: tap another market card to place a second return.'];
+      if (problem && placed >= 2) notes.push(problem);
+      const controls: PhonePrompt['controls'] = [];
+      if (placed >= 2 && !problem) controls.push({ id: 'trade-confirm', label: `Trade ${placed}`, kind: 'confirm' });
+      controls.push({ id: 'trade-cancel', label: 'Cancel trade', kind: 'cancel' });
+      return { notes, controls };
+    }
+    return null;
   }
 
   async function appendFor(
@@ -2729,7 +2790,6 @@
 {#snippet plusMark()}<svg class="plus-mark" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v13M3.5 10h13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" /></svg>{/snippet}
 
 {#snippet joinSeat(seat: Seat)}
-  {@const qr = seatQrs.find((candidate) => candidate.seat === seat)}
   {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
   <!-- The mat is a size container: the copy, the QR and the seat buttons
        take their sizes from it (see .join-seat), not from the viewport. -->
@@ -2749,11 +2809,6 @@
         </div>
       {:else}
         <span class="qr-placeholder" aria-hidden="true"></span>
-      {/if}
-      {#if legacyPhone && qr}
-        <a href={qr.url} class="qr-frame" aria-label={`Join tabletop ${gameId} as Player ${seat} with the phone controller`}>
-          <img src={qr.image} alt={`QR code to join as Player ${seat} with the phone controller`} />
-        </a>
       {/if}
       <div class="seat-options" role="group" aria-label="Sit here from the table">
         <!-- Sit here from the table itself: no phone, cards shown face up (Show hands). -->

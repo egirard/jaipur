@@ -31,8 +31,9 @@ and the host opens the first round.
 For a shared touch table, open [tabletop mode](https://anicolao.github.io/jaipur/tt/).
 Each load reserves a fresh game and displays one seat-specific QR code at each
 end of the table. Both players scan the code nearest them and choose a name on
-their phones; each phone becomes a private hand controller while play opens
-automatically on the shared screen. Hands remain face-down on the table. A
+their phones; each phone becomes a private hand controller (in AR, or as the
+"Play using phone" page) while play opens automatically on the shared screen.
+Hands remain face-down on the table. A
 player selects private goods or camels on their phone, then taps the public
 exchange targets or token supplies on the tabletop. Earned-token counts remain
 visible on the table, while the chip faces and exact score appear only on the
@@ -98,8 +99,14 @@ see their private cards in AR, while all play happens on the table.
   full screen, a new table, the animation demo, and **Turn to trader**
   (rotate the market toward the active player; off by default because a
   phone in AR locks onto the pre-rotation capture and flips).
-- A phone without WebXR (iPhone) can **Play using phone**: its hand,
-  bonus values and the market as a plain page from the same relay.
+- Any phone can **Play using phone** (the only option without WebXR, as on
+  iPhone): a plain page from the same relay in one of two forms the phone
+  remembers — **Minimal** shows just the hand (tap to select or deselect a
+  card), the score split into the face-up goods total and each hidden bonus
+  value, and what selling each good would earn; **Complete** adds the market
+  and whole moves from the phone: tap a market card and confirm to draw,
+  stage returns then tap two or more market cards to trade, tap a sale and
+  confirm to sell. The table stays the authority for every move.
 - Round end plays out as a staged sequence: a "Game over" disc with the
   reason facing each player, goods tokens then bonus tokens (flipping to
   their values) flying up to each player's running score, glowing herds
@@ -234,8 +241,9 @@ local replay cache while disconnected.
 The Firebase channel is deprecated as of 2026-10-30 and will be removed: the
 AR tabletop keeps the game in the browser's local store and the phones join
 over the AR relay, so nothing in the supported flow touches Firebase. The
-notes below describe the legacy two-browser game and `/hand` controller while
-they remain in the tree — see [DEPRECATIONS.md](DEPRECATIONS.md).
+notes below describe the legacy two-browser game while it remains in the
+tree (the `/hand` controller was retired on 2026-11-03) — see
+[DEPRECATIONS.md](DEPRECATIONS.md).
 
 - Project: `jaipur-20260730`
 - Web app: `Jaipur Web`
