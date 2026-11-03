@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ARViewer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body { background: #0b1020; color: #dfe6f5; font-family: system-ui, sans-serif; }
+  /* In normal flow (not fixed): on this Pixel Chrome's layout viewport was
+     wider than the visual one, which pushed a fixed inset:0 lobby half off
+     screen; the body box is always right. */
+  #lobby {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    box-sizing: border-box; width: 100%; min-height: 100%;
+    padding: 12px max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-right));
+    text-align: center; font-size: 13px;
+  }
+  #lobby h1 { font-size: 18px; letter-spacing: 3px; margin: 0; }
+  #lobby p { max-width: 300px; line-height: 1.35; opacity: 0.8; white-space: pre-line; margin: 0; }
+  #join { display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: min(100%, 260px); }
+  #join label { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.7; }
+  #name {
+    font-size: 15px; padding: 9px 12px; border-radius: 10px; width: 100%; text-align: center;
+    border: 1px solid #39435c; background: #141b30; color: #dfe6f5;
+  }
+  #name:focus { outline: 2px solid #3f8cff; }
+  #go {
+    font-size: 15px; font-weight: 600; padding: 11px 18px; border-radius: 999px; width: 100%;
+    border: none; background: #3f8cff; color: #fff; cursor: pointer;
+  }
+  #go:disabled { background: #39435c; opacity: 0.5; }
+  #join .secondary { background: #141b30; color: #dfe6f5; border: 1px solid #39435c; }
+  #join .secondary:disabled { opacity: 0.5; }
+  #flat {
+    position: fixed; inset: 0; z-index: 4; overflow: auto; box-sizing: border-box;
+    padding: calc(10px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    background: #0b1020; display: flex; flex-direction: column; gap: 10px;
+  }
+  #flat header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  #flatTitle { font-weight: 600; font-size: 15px; color: #7ef0b6; }
+  #flatExit { font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.4); background: rgba(0,0,0,0.45); color: #fff; }
+  #flatMsg { font-size: 12px; opacity: 0.7; margin: 0; white-space: pre-line; }
+  .flat-heading { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.6; margin: 6px 0 0; }
+  .flat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+  .flat-cards.small { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
+  /* The hand is one row that shrinks to the screen: --n columns share the
+     width (so 7 cards fit a phone), capped so a small hand keeps card size. */
+  /* Hand cards keep a readable size and wrap onto a second row (a seven-card
+     hand squeezed into one row was 49 px a card on the phone). */
+  .flat-cards.hand { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+  .flat-cards.herd { grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); }
+  .flat-cards > * { position: relative; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: inherit; }
+  .flat-cards button { cursor: pointer; -webkit-tap-highlight-color: transparent; transition: transform 120ms; }
+  .flat-cards button:active { transform: scale(0.96); }
+  .flat-cards button:disabled { cursor: default; }
+  .flat-cards img { width: 100%; height: auto; border-radius: 8px; display: block; background: #141b30; }
+  .flat-cards .glow img { outline: 3px solid var(--glow, #66ffcc); box-shadow: 0 0 14px var(--glow, #66ffcc); }
+  .flat-cards .glow { transform: translateY(-3px); }
+  .flat-cards .inert img { filter: saturate(0.4) brightness(0.7); }
+  .flat-cards .tag { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px; border-radius: 0 0 8px 8px; background: rgba(0,0,0,0.7); font-size: 10px; font-weight: 600; text-align: center; }
+  #flatHerdCount, #flatHandCount { font-weight: 400; opacity: 0.8; margin-left: 4px; text-transform: none; letter-spacing: 0; }
+  .pill { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: #39435c; white-space: nowrap; }
+  .pill.active { background: #7ef0b6; color: #0b1020; }
+  #flatNotes { list-style: none; padding: 8px 10px; border-radius: 10px; background: #141b30; font-size: 12px; display: grid; gap: 3px; }
+  #flatNotes li:first-child { font-weight: 600; }
+  #flatControls { display: flex; flex-wrap: wrap; gap: 8px; }
+  #flatControls button { font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 999px; border: 1px solid #39435c; background: #141b30; color: #dfe6f5; }
+  #go.unavailable { background: #39435c; opacity: 0.6; font-size: 13px; }
+  #join .secondary.primary { background: #3f8cff; color: #fff; border-color: #3f8cff; }
+  /* Minimal | Complete: a segmented switch under the header. */
+  #flatModes { display: inline-flex; align-self: flex-start; border: 1px solid #39435c; border-radius: 999px; overflow: hidden; }
+  #flatModes button { font-size: 12px; font-weight: 600; padding: 6px 14px; border: 0; background: #141b30; color: #dfe6f5; cursor: pointer; }
+  #flatModes button[aria-pressed="true"] { background: #7ef0b6; color: #0b1020; }
+  /* The move in progress (complete view): the host's lines and buttons. */
+  #flatPrompt { display: grid; gap: 8px; padding: 10px; border-radius: 12px; background: #141b30; border: 1px solid transparent; }
+  #flatPrompt.active { border-color: #3f8cff; }
+  #flatPrompt #flatNotes { padding: 0; background: none; }
+  #flatControls button.confirm { background: #7ef0b6; color: #0b1020; border-color: #7ef0b6; }
+  #flatControls button.cancel { background: none; }
+  /* Score: the face-up goods total and each hidden bonus value, as the table reveals them. */
+  #flatScore { display: grid; gap: 6px; padding: 10px 12px; border-radius: 12px; background: #141b30; }
+  .score-total { display: flex; align-items: baseline; justify-content: space-between; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.9; }
+  .score-total b { font-size: 26px; letter-spacing: 0; color: #fff; }
+  .score-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .score-row > .chips { flex: 1; }
+  .score-row > b { font-size: 16px; min-width: 2ch; text-align: right; }
+  .score-row small { opacity: 0.6; font-size: 11px; width: 3.6em; white-space: nowrap; }
+  /* The tokens themselves: a goods token in its good's colour, a bonus token in rust. */
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chips b { display: inline-grid; place-items: center; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 50%; background: #7a3b2a; color: #fff0e0; font-size: 13px; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.25); }
+  .chips b[data-kind="diamond"] { background: #9fd7e8; color: #0b1020; }
+  .chips b[data-kind="gold"] { background: #e2b64a; color: #0b1020; }
+  .chips b[data-kind="silver"] { background: #c9cdd6; color: #0b1020; }
+  .chips b[data-kind="cloth"] { background: #9a4ea8; }
+  .chips b[data-kind="spice"] { background: #c8552b; }
+  .chips b[data-kind="leather"] { background: #8a5a2b; }
+  .chips .none { opacity: 0.5; font-size: 12px; align-self: center; }
+  /* What each good in the hand would sell for; in the complete view a sale starts from its button. */
+  #flatSaleList { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  #flatSaleList li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 10px; background: #141b30; font-size: 13px; }
+  #flatSaleList .sale-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+  #flatSaleList button.sale-row { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  #flatSaleList li.offered { background: #17301f; box-shadow: inset 0 0 0 1.5px #7ef0b6; }
+  #flatSaleList li.offered .sale-go { font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px; background: #7ef0b6; color: #0b1020; white-space: nowrap; }
+  #flatSaleList li.held .sale-what small { color: #ffd27a; }
+  #flatSaleList img { width: 30px; height: auto; border-radius: 4px; }
+  #flatSaleList .sale-what { flex: 1; }
+  #flatSaleList .sale-what small { display: block; opacity: 0.65; font-size: 11px; }
+  #flatSaleList .sale-value { font-weight: 700; font-size: 15px; color: #7ef0b6; white-space: nowrap; }
+  #flatSaleList .sale-value small { font-weight: 400; color: #ffd27a; margin-left: 4px; font-size: 11px; }
+  #flatSaleList li.illegal .sale-value { color: #8a93aa; }
+  .flat-cards .mkt-tappable img { outline: 1px solid rgba(255,255,255,0.25); }
+  #seated { font-weight: 600; color: #7ef0b6; }
+  /* "Play against an AI": one button per level the table offers, shown in
+     the lobby and (as a DOM overlay) inside AR while the other seat is open. */
+  .bot-offer { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: min(100%, 260px); }
+  .bot-offer > span { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.7; }
+  .bot-offer button {
+    font-size: 14px; font-weight: 600; padding: 9px 14px; border-radius: 999px; width: 100%;
+    border: 1px solid rgba(255,255,255,0.4); background: rgba(20,27,48,0.85); color: #dfe6f5; cursor: pointer;
+  }
+  .bot-offer button small { display: block; font-weight: 400; font-size: 11px; opacity: 0.7; }
+  /* In AR the offer sits at the bottom, above the HUD line, as a caption
+     over two side-by-side buttons (one per level). It used to be a column
+     at the top left, where the "Find the table" guide (which opens every
+     session, 92vw wide at 58px from the top) covered it entirely. */
+  #botOfferAr {
+    position: fixed; bottom: calc(12px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 5;
+    flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: stretch; gap: 6px 8px;
+    width: min(92vw, 360px); pointer-events: auto;
+  }
+  #botOfferAr > span { flex-basis: 100%; text-align: center; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+  #botOfferAr button { flex: 1 1 0; width: auto; min-width: 0; padding: 8px 10px; font-size: 13px; }
+  /* The HUD line moves up while the offer is shown, so the two never overlap. */
+  #overlay.has-offer #hud { padding-bottom: calc(86px + env(safe-area-inset-bottom)); }
+  #lobbyMsg { font-size: 11px; opacity: 0.65; }
+  #fatal { color: #ff8a8a; font-size: 12px; opacity: 1; max-width: 320px; word-break: break-word; }
+  #build { position: fixed; right: 6px; bottom: 4px; font-size: 10px; opacity: 0.45; }
+  #exit {
+    position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 10px; z-index: 5;
+    pointer-events: auto; font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.4); background: rgba(0,0,0,0.45); color: #fff;
+  }
+  #overlay { position: fixed; inset: 0; touch-action: none; }
+  #hud {
+    position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
+    text-align: center; font-size: 15px; pointer-events: none;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+  }
+  /* "Show AR diagnostics" (Table options): the registration numbers, live. */
+  #diag {
+    position: fixed; top: calc(10px + env(safe-area-inset-top)); left: 10px; z-index: 5; max-width: calc(100vw - 130px);
+    padding: 6px 8px; border-radius: 6px; background: rgba(0,0,0,0.55); color: #d8f0ff;
+    font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; pointer-events: none;
+  }
+  /* Step-by-step guidance in AR: the first-lock cue every session starts
+     with, and the registration check the table can ask a seat to run. The
+     phone carries every instruction and countdown (the table has no
+     keyboard); a vibration marks each transition. */
+  #guide {
+    position: fixed; top: calc(58px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 6;
+    width: min(92vw, 380px); padding: 12px 14px 10px; border-radius: 14px;
+    background: rgba(11, 16, 32, 0.84); border: 1.5px solid #3f8cff; color: #dfe6f5; text-align: center;
+    pointer-events: none; box-shadow: 0 4px 18px rgba(0,0,0,0.45);
+  }
+  #guide.ok { border-color: #7ef0b6; }
+  #guide.warn { border-color: #ffb454; }
+  #guideStep { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.7; }
+  #guideTitle { font-size: 17px; font-weight: 700; margin-top: 2px; }
+  #guideText { font-size: 14px; line-height: 1.35; margin-top: 4px; }
+  #guideMeter { display: flex; align-items: baseline; justify-content: center; gap: 12px; margin-top: 8px; }
+  #guideCount { font: 700 30px/1 ui-monospace, Menlo, monospace; color: #fff; min-width: 2ch; }
+  #guideCount:empty { display: none; }
+  #guideLive { font-size: 13px; opacity: 0.9; }
+  #guideList { list-style: none; padding: 0; margin: 8px 0 0; text-align: left; font-size: 13px; display: grid; gap: 3px; }
+  #guideList li b { color: #7ef0b6; }
+  #guideList li.bad b { color: #ff8a8a; }
+  #guideClose {
+    margin-top: 10px; pointer-events: auto; font-size: 13px; font-weight: 600; padding: 7px 16px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.1); color: #fff;
+  }
+  @keyframes guidePulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+  #guide.searching #guideLive { animation: guidePulse 1.4s ease-in-out infinite; }
+  #armed { color: #7ef0b6; font-size: 13px; font-weight: 600; max-width: 300px; }
+  .hidden { display: none !important; }
+</style>
+<script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+  <div id="lobby">
+    <h1>ARVIEWER</h1>
+    <p id="seated" class="hidden"></p>
+    <div id="botOffer" class="bot-offer hidden"></div>
+    <form id="join" autocomplete="off">
+      <label id="nameLabel" for="name" class="hidden">Your trader name</label>
+      <input id="name" class="hidden" maxlength="32" placeholder="Your trader name" autocapitalize="words">
+      <button id="go" type="submit" disabled>Enter AR</button>
+      <button id="goFlat" type="button" class="secondary" disabled>Play using phone</button>
+    </form>
+    <p id="lobbyMsg">Connecting to the table…</p>
+    <p id="fatal" class="hidden"></p>
+    <p id="armed" class="hidden"></p>
+  </div>
+  <!-- "Play using phone": the seat's private hand controller as a plain 2D
+       page for browsers without WebXR (iPhones) — the equivalent of jaipur's
+       upstream /hand page, over the relay. Tap to stage cards/camels; public
+       moves still happen on the table. -->
+  <div id="flat" class="hidden">
+    <header>
+      <span id="flatTitle">Your hand</span>
+      <span id="flatTurn" class="pill hidden">Watch the table</span>
+      <button id="flatExit" type="button">Back</button>
+    </header>
+    <!-- Two forms of the phone view, remembered on the phone: Minimal shows
+         only what the player needs (hand, score, sale values; a tap selects a
+         card); Complete adds the market and whole moves from the phone. -->
+    <div id="flatModes" role="group" aria-label="Phone view">
+      <button type="button" data-mode="minimal" aria-pressed="true">Minimal</button>
+      <button type="button" data-mode="complete" aria-pressed="false">Complete</button>
+    </div>
+    <section id="flatMarketWrap" class="hidden">
+      <h2 class="flat-heading">Market</h2>
+      <div id="flatMarket" class="flat-cards small"></div>
+    </section>
+    <p id="flatMsg"></p>
+    <div id="flatPrompt" class="hidden">
+      <ul id="flatNotes"></ul>
+      <div id="flatControls"></div>
+    </div>
+    <h2 class="flat-heading" id="flatHandHeading">Your hand <span id="flatHandCount"></span></h2>
+    <div id="flatHand" class="flat-cards hand"></div>
+    <div id="flatHerdWrap" class="hidden">
+      <h2 class="flat-heading">Your herd <span id="flatHerdCount"></span></h2>
+      <div id="flatHerd" class="flat-cards herd"></div>
+    </div>
+    <section id="flatScore" class="hidden">
+      <div class="score-total"><span>Score</span><b id="flatScoreTotal">0</b></div>
+      <div class="score-row"><span id="flatScoreGoods" class="chips"></span><b id="flatScoreGoodsSum"></b><small>face up</small></div>
+      <div class="score-row"><span id="flatScoreBonus" class="chips"></span><b id="flatScoreBonusSum"></b><small>hidden</small></div>
+    </section>
+    <section id="flatSales" class="hidden">
+      <h2 class="flat-heading">Sell now</h2>
+      <ul id="flatSaleList"></ul>
+    </section>
+    <div id="botOfferFlat" class="bot-offer hidden"></div>
+  </div>
+  <div id="overlay" class="hidden">
+    <button id="exit" type="button">Quit AR</button>
+    <div id="botOfferAr" class="bot-offer hidden"></div>
+    <pre id="diag" class="hidden"></pre>
+    <div id="guide" class="hidden" role="status" aria-live="polite">
+      <div id="guideStep"></div>
+      <div id="guideTitle"></div>
+      <div id="guideText"></div>
+      <div id="guideMeter"><span id="guideCount"></span><span id="guideLive"></span></div>
+      <ul id="guideList" class="hidden"></ul>
+      <button id="guideClose" type="button" class="hidden">Close</button>
+    </div>
+    <div id="hud"></div>
+  </div>
+  <span id="build">build e1bf158·table</span>
+  <script>
+    // Any script failure lands in the lobby instead of a silently dead page.
+    (function () {
+      var show = function (text) {
+        var el = document.getElementById('fatal');
+        el.textContent = 'Viewer error: ' + text;
+        el.classList.remove('hidden');
+      };
+      window.addEventListener('error', function (e) { show((e.message || e.error) + (e.filename ? ' @ ' + e.filename.split('/').pop() + ':' + e.lineno : '')); });
+      window.addEventListener('unhandledrejection', function (e) { show(String(e.reason && e.reason.message || e.reason)); });
+    })();
+  </script>
+  <!-- e1bf158·table is stamped by the Pages workflow so the HTML always loads
+       the script it was published with (Pages caches both for 10 min). -->
+  <script type="module" src="./viewer.js?v=e1bf158·table"></script>
+</body>
+</html>

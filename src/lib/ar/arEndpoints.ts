@@ -12,7 +12,11 @@
 //   4. the page's own origin when the ARViewer server is serving the table
 //      page itself (it answers GET /inspect) — then relay and viewer are
 //      simply /ws and /viewer/ beside it, and nothing has to be typed,
-//   5. the hosted pair.
+//   5. for the viewer only: the table's own bundled copy of the phone page
+//      (static/viewer/, vendored by scripts/sync-viewer.sh), when the table
+//      is served over https — one deploy of the table then publishes both;
+//      `?viewer=bundled` asks for it on any origin (remembered),
+//   6. the hosted pair.
 // The table embeds the resolved relay in every seat QR, so phones follow.
 
 export const DEFAULT_RELAY = 'wss://arviewer-relay.onrender.com/ws';
@@ -21,7 +25,7 @@ export const DEFAULT_VIEWER = 'https://egirard.github.io/ARViewer/viewer/';
 const RELAY_KEY = 'jaipur:ar:relay';
 const VIEWER_KEY = 'jaipur:ar:viewer';
 
-export type ArEndpointSource = 'param' | 'saved' | 'env' | 'same-origin' | 'default' | 'lan';
+export type ArEndpointSource = 'param' | 'saved' | 'env' | 'same-origin' | 'bundled' | 'default' | 'lan';
 export type ArEndpoints = { relayUrl: string; viewerBase: string; source: ArEndpointSource };
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -32,7 +36,34 @@ export type ArEndpointInput = {
   env?: { relay?: string | undefined; viewer?: string | undefined };
   /** The page's own relay and viewer, when the ARViewer server serves this page. */
   sameOrigin?: { relayUrl: string; viewerBase: string } | null;
+  /** The table's bundled copy of the phone page (bundledViewerBase), when the build carries one. */
+  bundledViewer?: string | null;
+  /** Prefer the bundled copy over the hosted viewer by default (the page is https, so phones can enter AR from it). */
+  preferBundled?: boolean;
 };
+
+/** Where the bundled phone page lives beside a table page:
+ *  <origin><base>/viewer/index.html — the file itself, because the dev
+ *  server hands a bare /viewer/ to SvelteKit's router (no such route) while
+ *  a static host would serve the index; the page's relative imports
+ *  (../shared/) resolve the same either way. */
+export function bundledViewerBase(loc: { origin: string }, base: string): string {
+  return `${loc.origin}${base.replace(/\/$/, '')}/viewer/index.html`;
+}
+
+/** Does this table carry the bundled phone page? (vite and the static host answer HEAD on it; a missing file is a 404 — or vite's SPA fallback HTML, which the content type tells apart). */
+export async function probeBundledViewer(viewerBase: string, fetchFn: typeof fetch = fetch, timeoutMs = 1500): Promise<boolean> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetchFn(viewerBase.replace(/index\.html$/, 'viewer.js'), { method: 'HEAD', signal: ctl.signal, cache: 'no-store' });
+    return res.ok && /javascript/.test(res.headers.get('content-type') ?? '');
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** "host", "host:8443", "https://host:8443", "wss://host/ws" → a wss:// URL on /ws. */
 export function normalizeRelay(value: string | null | undefined): string | null {
@@ -78,6 +109,10 @@ function pick(
   const param = input.params.get(name);
   if (param === 'default') {
     try { input.storage?.removeItem(key); } catch { /* ignore */ }
+  } else if (name === 'viewer' && param === 'bundled') {
+    // The keyword is remembered, not the URL: the copy moves with the table.
+    try { input.storage?.setItem(key, 'bundled'); } catch { /* ignore */ }
+    if (input.bundledViewer) return { value: input.bundledViewer, source: 'bundled' };
   } else if (param) {
     const value = normalize(param);
     if (value) {
@@ -86,18 +121,22 @@ function pick(
     }
   }
   let saved: string | null = null;
-  try { saved = normalize(input.storage?.getItem(key)); } catch { /* ignore */ }
-  if (saved) return { value: saved, source: 'saved' };
+  let rawSaved: string | null = null;
+  try { rawSaved = input.storage?.getItem(key) ?? null; saved = normalize(rawSaved); } catch { /* ignore */ }
+  if (name === 'viewer' && rawSaved === 'bundled') { if (input.bundledViewer) return { value: input.bundledViewer, source: 'bundled' }; }
+  else if (saved) return { value: saved, source: 'saved' };
   const env = normalize(input.env?.[name]);
   if (env) return { value: env, source: 'env' };
   if (input.sameOrigin) return { value: name === 'relay' ? input.sameOrigin.relayUrl : input.sameOrigin.viewerBase, source: 'same-origin' };
+  if (name === 'viewer' && input.bundledViewer && input.preferBundled) return { value: input.bundledViewer, source: 'bundled' };
   return { value: fallback, source: 'default' };
 }
 
 export function resolveArEndpoints(input: ArEndpointInput): ArEndpoints {
   const relay = pick('relay', RELAY_KEY, normalizeRelay, input, DEFAULT_RELAY);
   const viewer = pick('viewer', VIEWER_KEY, normalizeViewer, input, DEFAULT_VIEWER);
-  return { relayUrl: relay.value, viewerBase: viewer.value, source: relay.source };
+  // `source` describes the relay, except that a bundled viewer with a default relay says so.
+  return { relayUrl: relay.value, viewerBase: viewer.value, source: relay.source === 'default' && viewer.source === 'bundled' ? 'bundled' : relay.source };
 }
 
 // ---- The LAN stand-in --------------------------------------------------------

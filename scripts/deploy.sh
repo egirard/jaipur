@@ -6,6 +6,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 branch=$(git branch --show-current)
+# The table ships its own copy of the ARViewer phone page (docs/CONNECTIVITY.md,
+# "The bundled viewer"): say so when the copy is behind the checkout beside us.
+src="${ARVIEWER:-../ARViewer}"
+if [ -d "$src/public/viewer" ] && ! diff -rq "$src/public/viewer" static/viewer -x ARVIEWER_COMMIT -I '__BUILD__\|build [0-9a-f+]*·table' >/dev/null 2>&1; then
+  echo "note: static/viewer differs from $src/public/viewer — run 'bun run sync:viewer' and commit if that is unintended" >&2
+fi
 git push --no-verify origin "$branch"
 git branch -f main "$branch"
 git push --no-verify origin main

@@ -7,7 +7,9 @@
 import { bonusValueRange, type Good, type RoundState } from '../jaipur-rules';
 
 export type PhoneScore = {
-  /** Face-up value: the goods tokens' total, and how many there are. */
+  /** Every goods token the player holds — face up on the table — in the order earned. */
+  goodsTokens: { kind: Good; value: number }[];
+  /** Their total and count. */
   goods: number;
   goodsCount: number;
   /** Each bonus token's hidden value, in the order earned. */
@@ -16,10 +18,11 @@ export type PhoneScore = {
 };
 
 export function phoneScore(round: RoundState | null, uid: string): PhoneScore {
-  const goodsTokens = round?.ownedGoodsTokens[uid] ?? [];
+  const owned = round?.ownedGoodsTokens[uid] ?? [];
+  const goodsTokens = owned.filter((t): t is typeof t & { kind: Good } => t.kind !== 'camel' && !t.kind.startsWith('bonus')).map((t) => ({ kind: t.kind, value: t.value }));
   const bonus = (round?.ownedBonusTokens[uid] ?? []).map((t) => t.value);
-  const goods = goodsTokens.reduce((sum, t) => sum + t.value, 0);
-  return { goods, goodsCount: goodsTokens.length, bonus, total: goods + bonus.reduce((a, b) => a + b, 0) };
+  const goods = owned.reduce((sum, t) => sum + t.value, 0);
+  return { goodsTokens, goods, goodsCount: owned.length, bonus, total: goods + bonus.reduce((a, b) => a + b, 0) };
 }
 
 export type SaleOption = {

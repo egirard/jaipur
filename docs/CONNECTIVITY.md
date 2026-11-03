@@ -198,6 +198,37 @@ know.
 | "Another table window took over" | two tabs/windows of the table on one browser | close one, or reload the one to keep |
 | LAN server unreachable | server not running, or its certificate not yet accepted in this browser | open `https://HOST:8443` once, accept, retry |
 
+## The bundled viewer
+
+The table carries its own copy of the phone page: `static/viewer/` and
+`static/shared/` are ARViewer's `public/viewer` and `public/shared`,
+vendored by `bun run sync:viewer` (`scripts/sync-viewer.sh`, from a
+checkout at `../ARViewer` or `$ARVIEWER`), stamped with the ARViewer commit
+(`static/viewer/ARVIEWER_COMMIT`, and the build line on the phone reads
+`<hash>·table`). The deploy of the table therefore publishes the phone page
+too, at `<table>/viewer/index.html` (the file, not the directory: the dev
+server routes a bare `/viewer/` to SvelteKit), and a change to the phone
+interface needs one push instead of two.
+
+Resolution (arEndpoints.ts): on an **https** table that carries the copy it
+is the default viewer, with the hosted relay (Table options says "the
+hosted relay and this table's own copy of the phone page"). On an http
+table — the dev server — the hosted viewer stays the default, because a
+phone cannot enter AR from an http page; `?viewer=bundled` asks for the
+copy anyway (remembered as the keyword, so it follows the table to another
+address), which is the fast path for working on the phone's 2D view:
+`scripts/dev-ar.sh` binds vite to the LAN, open the table as
+`http://<lan-ip>:5185/tt/?viewer=bundled`, and the seat QRs point phones at
+the dev server's copy — edits to `static/viewer/` show on the next reload
+of the phone page. (`bun run sync:viewer` overwrites that directory from
+ARViewer; edit there and sync, or edit the copy and port the change back.)
+`?viewer=default` returns to the hosted viewer. An explicit `?viewer=HOST`,
+a remembered one, the build's `VITE_AR_VIEWER_URL` and the ARViewer server's
+own `/viewer/` all still win over the bundled copy.
+
+`scripts/deploy.sh` warns when the vendored copy differs from the ARViewer
+checkout beside it, so a stale copy is not published by accident.
+
 ## Appendix A — the deprecated Firebase channel
 
 jaipur began as a two-browser game: each player's browser held the Firebase

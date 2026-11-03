@@ -5,6 +5,7 @@
   "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
+    "sync:viewer": "bash scripts/sync-viewer.sh",
     "prepare": "svelte-kit sync && husky",
     "dev": "vite dev --host 127.0.0.1 --port 5185 --strictPort",
     "dev:e2e": "vite dev --host 127.0.0.1 --port 5185 --strictPort",

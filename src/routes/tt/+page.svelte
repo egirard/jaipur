@@ -39,7 +39,7 @@
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
   import { ArTabletop, type ArTrackingTargets, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type PhonePrompt, type SalePreview } from '$lib/ar/arTabletop';
-  import { lanEndpoints, loadLanAddress, probeSameOriginRelay, resolveArEndpoints, sameOriginEndpoints, saveLanAddress, type ArEndpoints } from '$lib/ar/arEndpoints';
+  import { bundledViewerBase, lanEndpoints, loadLanAddress, probeBundledViewer, probeSameOriginRelay, resolveArEndpoints, sameOriginEndpoints, saveLanAddress, type ArEndpointInput, type ArEndpoints } from '$lib/ar/arEndpoints';
   import type { ArRelayStatus } from '$lib/ar/arHost';
   import {
     WASH_LEVELS, applyMove, brightnessPercent, checkEngagement, isEngaged, loadCloth, noEvidenceReason, saveCloth, screenKey, startSweep,
@@ -376,10 +376,17 @@
     setTimeout(() => { if (!document.hidden) location.replace('about:blank'); }, 400);
   }
 
+  // New table: a fresh game AND a fresh AR session with nobody at it. The
+  // phones re-assert their seats on every reconnect, so keeping the session
+  // would seat the same players again; and ?bot=1 (solitaire) would seat
+  // the bot again — the mat is where both are chosen afresh.
   function newTable() {
     const url = new URL(location.href);
     url.searchParams.delete('game');
+    url.searchParams.delete('bot');
+    url.searchParams.delete('arsession');
     url.searchParams.set('new', '1');
+    localStorage.removeItem('jaipur:ar:session');
     location.href = url.toString();
   }
   let solitaire = false;
@@ -920,13 +927,18 @@
       // Where the relay and the viewer live (arEndpoints.ts): ?relay= /
       // ?viewer= (remembered), the build's env, the page's own origin when
       // the ARViewer server serves this page (LAN play), else the hosted pair.
-      const endpointInput = {
+      const endpointInput: ArEndpointInput = {
         params: pageParams,
         storage: localStorage,
         env: { relay: import.meta.env.VITE_AR_RELAY_URL as string | undefined, viewer: import.meta.env.VITE_AR_VIEWER_URL as string | undefined }
       };
+      // The table's own copy of the phone page (scripts/sync-viewer.sh):
+      // the default viewer on an https table, so one deploy publishes both.
+      const bundledBase = bundledViewerBase(location, base);
+      const bundledViewer = (await probeBundledViewer(bundledBase)) ? bundledBase : null;
+      Object.assign(endpointInput, { bundledViewer, preferBundled: location.protocol === 'https:' });
       let endpoints = resolveArEndpoints(endpointInput);
-      if (endpoints.source === 'default' && (await probeSameOriginRelay(location.origin))) {
+      if ((endpoints.source === 'default' || endpoints.source === 'bundled') && (await probeSameOriginRelay(location.origin))) {
         endpoints = resolveArEndpoints({ ...endpointInput, sameOrigin: sameOriginEndpoints(location) });
       }
       arEndpoints = endpoints;
@@ -1082,6 +1094,9 @@
   $effect(() => { void showHands; publishAr(); });
   // A staged sale is table-local state (not in the store): the phones learn of it here.
   $effect(() => { void pendingSale; publishAr(); });
+  // What the phones may do depends on `busy` (sale offers, the AR sale preview): a
+  // store change lands while an append is still in flight, so publish again when it clears.
+  $effect(() => { void busy; publishAr(); });
   // Background music: "Marketplace Melody" (static/audio, see ASSETS.md)
   // loops at low volume. Browsers only start audio after a gesture, so the
   // first tap or key on the table starts it; the mute choice is remembered.
@@ -3678,7 +3693,7 @@
         {/each}
         <p><small>{arViewers} phone{arViewers === 1 ? '' : 's'} connected{arSeatsOnline?.size ? ` (seat ${[...arSeatsOnline].sort().join(' and ')})` : ''} · session {ar?.host.session} · relay {arRelayStatus}</small></p>
         {#if arEndpoints}
-          <p class="ar-endpoints"><small>Relay <code>{arEndpoints.relayUrl}</code> · viewer <code>{arEndpoints.viewerBase}</code> · from {arEndpoints.source === 'param' ? 'the URL' : arEndpoints.source === 'saved' ? 'a remembered setting' : arEndpoints.source === 'env' ? 'the build' : arEndpoints.source === 'same-origin' ? 'this page\'s own server' : arEndpoints.source === 'lan' ? 'the LAN server below' : 'the hosted defaults'}.</small></p>
+          <p class="ar-endpoints"><small>Relay <code>{arEndpoints.relayUrl}</code> · viewer <code>{arEndpoints.viewerBase}</code> · from {arEndpoints.source === 'param' ? 'the URL' : arEndpoints.source === 'saved' ? 'a remembered setting' : arEndpoints.source === 'env' ? 'the build' : arEndpoints.source === 'same-origin' ? 'this page\'s own server' : arEndpoints.source === 'lan' ? 'the LAN server below' : arEndpoints.source === 'bundled' ? 'the hosted relay and this table\'s own copy of the phone page' : 'the hosted defaults'}.</small></p>
         {/if}
         <div class="lan-option" data-lan-option>
           <label for="lan-address">LAN server</label>

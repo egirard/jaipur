@@ -15,8 +15,8 @@ function round() {
 
 describe('phone score', () => {
   it('splits the face-up goods total from each hidden bonus value', () => {
-    expect(phoneScore(round(), 'a')).toEqual({ goods: 9, goodsCount: 2, bonus: [2, 6], total: 17 });
-    expect(phoneScore(round(), 'b')).toEqual({ goods: 0, goodsCount: 0, bonus: [], total: 0 });
+    expect(phoneScore(round(), 'a')).toEqual({ goodsTokens: [{ kind: 'cloth', value: 5 }, { kind: 'leather', value: 4 }], goods: 9, goodsCount: 2, bonus: [2, 6], total: 17 });
+    expect(phoneScore(round(), 'b')).toEqual({ goodsTokens: [], goods: 0, goodsCount: 0, bonus: [], total: 0 });
     expect(phoneScore(null, 'a').total).toBe(0);
   });
 });

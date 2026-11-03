@@ -92,7 +92,7 @@ export type ArScene = {
   /** The seat's score as the table reveals it: goods tokens lie face up
    *  (`goods`, their total, over `goodsCount` tokens), bonus tokens face
    *  down (`bonus`, each hidden value). */
-  score?: { goods: number; goodsCount: number; bonus: number[]; total: number };
+  score?: { goodsTokens: { kind: string; value: number }[]; goods: number; goodsCount: number; bonus: number[]; total: number };
   /** What selling each good in the hand would earn now, one entry per kind
    *  in the hand; `control` names the button to send to start that sale
    *  when the host allows it right now. */

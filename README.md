@@ -106,7 +106,10 @@ see their private cards in AR, while all play happens on the table.
   value, and what selling each good would earn; **Complete** adds the market
   and whole moves from the phone: tap a market card and confirm to draw,
   stage returns then tap two or more market cards to trade, tap a sale and
-  confirm to sell. The table stays the authority for every move.
+  confirm to sell. The table stays the authority for every move. The table
+  serves the phone page itself (`static/viewer/`, vendored from ARViewer with
+  `bun run sync:viewer`), so one deploy publishes both; see "The bundled
+  viewer" in docs/CONNECTIVITY.md.
 - Round end plays out as a staged sequence: a "Game over" disc with the
   reason facing each player, goods tokens then bonus tokens (flipping to
   their values) flying up to each player's running score, glowing herds

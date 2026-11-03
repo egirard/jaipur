@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RELAY, DEFAULT_VIEWER, lanEndpoints, loadLanAddress, normalizeRelay, normalizeViewer, probeSameOriginRelay, resolveArEndpoints, sameOriginEndpoints, saveLanAddress } from './arEndpoints';
+import { DEFAULT_RELAY, DEFAULT_VIEWER, bundledViewerBase, lanEndpoints, loadLanAddress, normalizeRelay, normalizeViewer, probeSameOriginRelay, resolveArEndpoints, sameOriginEndpoints, saveLanAddress } from './arEndpoints';
 
 class MemoryStorage {
   map = new Map<string, string>();
@@ -71,5 +71,31 @@ describe('the LAN stand-in', () => {
     expect(resolveArEndpoints({ params: new URLSearchParams(), storage }).source).toBe('default'); // not a primary setting
     saveLanAddress(storage, '');
     expect(loadLanAddress(storage)).toBe('');
+  });
+});
+
+describe('the bundled viewer', () => {
+  const bundled = bundledViewerBase({ origin: 'https://egirard.github.io' }, '/jaipur');
+  it('lives at <origin><base>/viewer/index.html', () => {
+    expect(bundled).toBe('https://egirard.github.io/jaipur/viewer/index.html');
+    expect(bundledViewerBase({ origin: 'http://192.168.1.20:5185' }, '')).toBe('http://192.168.1.20:5185/viewer/index.html');
+  });
+  it('is the default viewer on an https table that carries it, with the hosted relay', () => {
+    const r = resolveArEndpoints({ params: new URLSearchParams(), storage: new MemoryStorage(), bundledViewer: bundled, preferBundled: true });
+    expect(r).toEqual({ relayUrl: DEFAULT_RELAY, viewerBase: bundled, source: 'bundled' });
+    // Not preferred (an http dev table): the hosted viewer stays, phones could not enter AR from http anyway.
+    expect(resolveArEndpoints({ params: new URLSearchParams(), storage: new MemoryStorage(), bundledViewer: bundled, preferBundled: false }).viewerBase).toBe(DEFAULT_VIEWER);
+  });
+  it('?viewer=bundled asks for it anywhere and is remembered as the keyword, not the URL', () => {
+    const storage = new MemoryStorage();
+    const r = resolveArEndpoints({ params: new URLSearchParams('viewer=bundled'), storage, bundledViewer: 'http://192.168.1.20:5185/viewer/' });
+    expect(r.viewerBase).toBe('http://192.168.1.20:5185/viewer/');
+    expect(storage.getItem('jaipur:ar:viewer')).toBe('bundled');
+    const moved = resolveArEndpoints({ params: new URLSearchParams(), storage, bundledViewer: 'http://10.0.0.5:5185/viewer/' });
+    expect(moved.viewerBase).toBe('http://10.0.0.5:5185/viewer/');
+    // Without a bundled copy the keyword falls through to the hosted viewer.
+    expect(resolveArEndpoints({ params: new URLSearchParams(), storage, bundledViewer: null }).viewerBase).toBe(DEFAULT_VIEWER);
+    // An explicit viewer still wins over the bundled default.
+    expect(resolveArEndpoints({ params: new URLSearchParams('viewer=default'), storage, bundledViewer: 'http://x/viewer/', preferBundled: true }).viewerBase).toBe('http://x/viewer/');
   });
 });
