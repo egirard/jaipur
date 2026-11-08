@@ -3195,7 +3195,7 @@
   <meta name="description" content="A shared two-player Jaipur tabletop." />
 </svelte:head>
 
-<main class="tabletop" data-e2e-tabletop data-e2e-layout data-cloth-wash={liveWash} style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg"); --cloth-wash: ${liveWash}`}>
+<main class="tabletop" data-e2e-tabletop data-e2e-layout data-cloth-wash={liveWash} style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg"); --cloth-wash: ${liveWash}; --mm: ${physical ? (1 / (physical.mPerCssPx * 1000)).toFixed(3) : 0}px`}>
   <div class="top-edge edge">
     <div class="inverted-content">
       {#if playerForSeat(1)}
@@ -4230,8 +4230,8 @@
   .bot-seat-button small { display: block; font-weight: 400; font-size: 0.75em; opacity: 0.75; }
   .bot-seat-button { min-height: max(44px, 14cqh); padding: 0.3em 0.9em; border: 1px solid #8e826b; border-radius: 99rem; background: #fff; font: inherit; font-weight: 700; color: #183a37; line-height: 1.2; }
   .rejoin { display: inline-flex; align-items: center; gap: 0.4rem; }
-  /* Half again as tall as the header's own line (name + turn pill), so it scans from across the 55" table; it stands proud of the header's other items, which is accepted. */
-  .rejoin img { width: clamp(3.9rem, 7.5vh, 5.1rem); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
+  /* Sized for the phone, not the screen: at least 40 mm across (--mm is CSS px per millimetre from the diagonal setting; 7.5vh was 51 mm on the 55" table but 25 mm on a 27" one, too small to scan from a seat), capped at 11vh — about half the mat's height — so the header stands proud of its other items but the hand row keeps its room. */
+  .rejoin img { width: min(max(clamp(3.9rem, 7.5vh, 5.1rem), calc(var(--mm, 0px) * 40)), 11vh); aspect-ratio: 1; border: 2px solid #0d2622; border-radius: 0.4rem; }
   .rejoin small { max-width: 8rem; color: #a6442d; font-weight: 700; line-height: 1.15; }
   .orientation-toggle {
     min-width: 44px;
