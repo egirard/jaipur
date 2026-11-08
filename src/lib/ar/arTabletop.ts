@@ -28,6 +28,7 @@ import { loadSeatTokens, seatOfToken, type SeatNo, type SeatTokens } from './sea
 import { phoneScore, saleOptions } from './phoneHand';
 import { ArHost, type ArRelayStatus, type ArDebugFlags, type ArAction, type ArAsset, type ArNode, type ArScene, type ArTrackingRegion } from './arHost';
 import { captureScale, centreMeters, overlappingColumns, pieces, type Rect } from './trackingGeometry';
+import { facingOverrides } from './arFacing';
 
 /** What a phone reports about its registration every couple of seconds. */
 export type ArViewerDiag = {
@@ -85,8 +86,10 @@ export type ArJoinHandler = (seat: string, name: string) => void;
 export type ArBotRequestHandler = (seat: string, difficulty: string) => void;
 /** The bot levels the table offers to phones (id = BotDifficulty). */
 export type ArBotOffer = { id: string; name: string; blurb: string };
-/** What selling a good would earn the active trader right now. */
-export type SalePreview = { cards: number; base: number; bonus: string | null };
+/** What selling a good would earn the active trader right now: the goods
+ *  tokens the sale takes (top of the stack first, with their values, so
+ *  the AR preview can print each one), their sum and the bonus range. */
+export type SalePreview = { cards: number; base: number; bonus: string | null; tokens?: { id: string; value: number }[] };
 export type PhonePrompt = { notes: string[]; controls: { id: string; label: string; kind?: 'confirm' | 'cancel' | 'plain' }[] };
 
 const KIND_COLORS: Record<string, string> = {
@@ -307,10 +310,15 @@ function drawCoinTile(text: string, fill: string, ring: string, textScale = 1): 
 }
 
 /** A translucent ring on a transparent square: laid over a physical coin
- *  it reads as the coin glowing (the node also carries a glow halo). */
-let glowRing: string | null = null;
-function drawGlowRing(): string {
-  if (glowRing) return glowRing;
+ *  it reads as the coin glowing (the node also carries a glow halo). With
+ *  a value, the coin's worth is printed in the middle — the physical coin
+ *  under the ring is too small to read its own number through a phone,
+ *  and the player wants to know that the first cloth is worth 5. */
+const glowRings = new Map<string, string>();
+function drawGlowRing(value?: number): string {
+  const key = value == null ? '' : String(value);
+  const cached = glowRings.get(key);
+  if (cached) return cached;
   const c = document.createElement('canvas');
   c.width = c.height = 128;
   const ctx = c.getContext('2d')!;
@@ -320,13 +328,26 @@ function drawGlowRing(): string {
   ctx.beginPath();
   ctx.arc(64, 64, 54, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.fillStyle = 'rgba(102, 255, 204, 0.18)';
+  ctx.fillStyle = value == null ? 'rgba(102, 255, 204, 0.18)' : 'rgba(7, 17, 15, 0.55)';
   ctx.beginPath();
   ctx.arc(64, 64, 49, 0, Math.PI * 2);
   ctx.fill();
-  glowRing = c.toDataURL('image/png');
-  return glowRing;
+  if (value != null) {
+    ctx.fillStyle = '#eafff0';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${key.length > 1 ? 56 : 68}px system-ui, sans-serif`;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = '#07110f';
+    ctx.strokeText(key, 64, 68);
+    ctx.fillText(key, 64, 68);
+  }
+  const url = c.toDataURL('image/png');
+  glowRings.set(key, url);
+  return url;
 }
+
 
 function drawBackArt(): string {
   const c = document.createElement('canvas');
@@ -888,14 +909,20 @@ export class ArTabletop {
           const stack = document.querySelector(`[data-token-view-seat="${seatNo}"] [data-token-kind="${good}"]`);
           if (!stack) continue;
           // The first n coins (what the sale would take) glow in place…
+          // …each printed with its value (matched by token id, so the ring
+          // says what the coin under it is worth whatever order the DOM
+          // draws the stack in; a coin the preview does not know stays a
+          // plain ring).
           const coins = [...stack.querySelectorAll<HTMLElement>('[data-supply-token-id]')].slice(0, p.cards);
           let glowM = 0;
           coins.forEach((coin, i) => {
             const rect = coin.getBoundingClientRect();
             glowM = rect.width * this.mPerPx;
-            seatAssets['glow-ring'] = { img: drawGlowRing(), wM: glowM, hM: glowM };
+            const value = p.tokens?.find((t) => t.id === coin.dataset.supplyTokenId)?.value;
+            const ring = value == null ? 'glow-ring' : `glow-${value}`;
+            seatAssets[ring] = { img: drawGlowRing(value), wM: glowM, hM: glowM };
             const { xM, zM } = this.toMeters(rect);
-            handNodes.push({ id: `prev:${good}:${i}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#66ffcc', face: 'glow-ring' });
+            handNodes.push({ id: `prev:${good}:${i}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#66ffcc', face: ring });
           });
           // …and a glowing coin beside the stack's name shows the total.
           const head = stack.querySelector('.rail-head')?.getBoundingClientRect() ?? stack.getBoundingClientRect();
@@ -927,6 +954,8 @@ export class ArTabletop {
           handNodes.push({ id: `bonus:${token.id}`, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow: '#ffd27a', face: id });
         }
       }
+      // The market band, turned to face this seat (see facingOverrides).
+      handNodes.push(...facingOverrides(nodes, new Set(handNodes.map((n) => n.id)), rotY));
       const seatAssetsJson = JSON.stringify(Object.keys(seatAssets).sort());
       if (this.lastSeatAssetsJson.get(seat) !== seatAssetsJson) {
         this.lastSeatAssetsJson.set(seat, seatAssetsJson);

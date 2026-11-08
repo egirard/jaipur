@@ -1901,12 +1901,13 @@
     const uid = lobby.round?.activeUid;
     if (!uid || !lobby.round || !canSell(kind)) return null;
     const cards = saleIds(uid, kind).length;
-    const base = lobby.round.goodsTokens[kind].slice(0, cards).reduce((sum, token) => sum + token.value, 0);
+    const tokens = lobby.round.goodsTokens[kind].slice(0, cards).map((token) => ({ id: token.id, value: token.value }));
+    const base = tokens.reduce((sum, token) => sum + token.value, 0);
     const size = cards >= 5 ? '5' : cards === 4 ? '4' : cards === 3 ? '3' : null;
     const bonus = size && lobby.round.bonusTokens[size].length > 0
       ? { '3': '1–3', '4': '4–6', '5': '8–10' }[size]
       : null;
-    return { cards, base, bonus };
+    return { cards, base, bonus, tokens };
   }
 
   // Abandon a partially staged trade: clears placed returns and selection.
