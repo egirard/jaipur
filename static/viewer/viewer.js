@@ -386,6 +386,12 @@ renderer.xr.setReferenceSpaceType('local');
 // device composites the passthrough camera feed behind our render.
 renderer.setClearColor(0x000000, 0);
 document.body.appendChild(renderer.domElement);
+// The drawing buffer follows the viewport (the stylesheet pins the canvas to
+// it); three would otherwise leave a 300 × 150 buffer whose CSS size widened
+// the page on phones.
+const fitCanvas = () => renderer.setSize(window.innerWidth, window.innerHeight, false);
+fitCanvas();
+window.addEventListener('resize', fitCanvas);
 
 const scene = new THREE.Scene();
 scene.background = null;
@@ -785,6 +791,7 @@ function renderFlat() {
   const flip = hand.some((n) => Math.abs((n.rotY ?? 0) - Math.PI) < 0.01) ? -1 : 1;
   hand.sort((a, b) => flip * ((a.xM ?? 0) - (b.xM ?? 0)));
   flatHand.replaceChildren(...hand.map((n) => flatCard(n, assets, true, own)).filter(Boolean));
+  flatHand.style.setProperty('--cols', String(hand.length <= 4 ? Math.max(1, hand.length) : Math.ceil(hand.length / 2)));
   // The sale raised in the hand (the host's `handSale`): on each raised card
   // the worth of selling it and the cards before it (greyed where that
   // many cannot be sold), the bonus it would earn, and an ✕ on the last.
@@ -836,8 +843,9 @@ function renderFlat() {
     document.getElementById('flatScoreGoods').replaceChildren(...(goods.length ? goods.map((t) => chip(t.value, t.kind)) : [none('no goods tokens yet')]));
     document.getElementById('flatScoreGoodsSum').textContent = goods.length ? String(score.goods ?? 0) : '';
     const bonus = Array.isArray(score.bonus) ? score.bonus : [];
-    document.getElementById('flatScoreBonus').replaceChildren(...(bonus.length ? bonus.map((v) => chip(v)) : [none('no bonus tokens yet')]));
-    document.getElementById('flatScoreBonusSum').textContent = bonus.length ? String(bonus.reduce((a, b) => a + b, 0)) : '';
+    // Bonus tokens read "+3": a plus marks them off from the goods tokens.
+    document.getElementById('flatScoreBonus').replaceChildren(...(bonus.length ? bonus.map((v) => chip(`+${v}`)) : [none('no bonus tokens yet')]));
+    document.getElementById('flatScoreBonusSum').textContent = bonus.length ? `+${bonus.reduce((a, b) => a + b, 0)}` : '';
   }
   // Sell now: one line per good in the hand; a button when the host allows the sale from here (complete view).
   const sales = Array.isArray(seat?.sales) ? seat.sales.filter((o) => o && typeof o.kind === 'string') : [];
@@ -857,7 +865,8 @@ function renderFlat() {
       row.type = 'button';
       row.dataset.control = o.control;
       row.setAttribute('aria-label', `Sell ${o.cards} ${o.kind} for ${o.base}`);
-      row.addEventListener('click', () => { sendAction('control', undefined, { id: o.control }); flatMsg.textContent = 'Sent to the table…'; });
+      // The host raises that good's cards in the hand (one advances on the table); the numbers on the cards here finish the sale.
+      row.addEventListener('click', () => { sendAction('control', undefined, { id: o.control }); flatMsg.textContent = 'Tap a number on the raised cards to sell that many, or ✕ to lower them.'; });
       li.classList.add('offered');
     }
     const art = assets[`s-${o.kind}`] ?? assets[`k-${o.kind}`];

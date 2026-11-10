@@ -1775,8 +1775,15 @@
     if (id === 'sale:cancel') { if (handSale?.uid === uid) await cancelHandSale(); return; }
     const step = /^sale:([a-z]+):(\d+)$/.exec(id);
     if (step) { if (handSale?.uid === uid && handSale.kind === step[1]) await sellFromHand(Number(step[2])); return; }
+    // "Sell" on the phone's sale row: the sale goes through the hand like a
+    // tap on a card of that kind — the set raises (one card advances on the
+    // table for a phone-played seat) and the numbers on the phone's cards
+    // finish it — not through the rail's staged sale.
     const sell = /^sell:([a-z]+)$/.exec(id);
-    if (sell && isGood(sell[1]) && !pendingSale && canSell(sell[1])) tapSell(sell[1], seat);
+    if (sell && isGood(sell[1]) && !pendingSale && canSell(sell[1])) {
+      const first = round.hands[uid]?.find((c) => c.kind === sell[1]);
+      if (first) await tapHandCard(uid, first.id);
+    }
   }
 
   /** What selling each good would earn, with the button to start it when this phone may. */

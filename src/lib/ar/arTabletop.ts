@@ -402,7 +402,8 @@ export class ArTabletop {
   onToggleReturn: ((seat: string, cardId: string) => void) | null = null;
   /** A seat's phone pressed one of the host's buttons (scene.controls):
    *  `clear`, `draw-confirm`/`draw-cancel`, `trade-confirm`/`trade-cancel`,
-   *  `sell:<kind>`, `sale-confirm`/`sale-cancel`. */
+   *  `sell:<kind>` (raises that good's cards in the hand), `sale-confirm`/`sale-cancel`,
+   *  `sale:<kind>:<k>`/`sale:cancel`. */
   onControl: ((seat: string, id: string) => void) | null = null;
   /** A seat's phone (complete view) tapped a market card: a draw, or a
    *  trade target for a staged return — the page decides, as for a tap on
