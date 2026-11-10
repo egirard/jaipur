@@ -99,9 +99,12 @@ see their private cards in AR, while all play happens on the table.
   full screen, a new table, the animation demo, **Turn to trader**
   (rotate the market toward the active player; off by default because a
   phone in AR locks onto the pre-rotation capture and flips), **Show
-  hands** and **Shield** (for a card shield laid over each hand: the cards
-  move to the player's edge of the mat and a row of card backs peeks out
-  half a card above them, so the opponent still sees how many you hold).
+  hands**, **Shield** (for a card shield laid over each hand: the cards
+  move to the player's edge of the mat and a row of card backs — and open
+  slot outlines — peeks out half a card above them, so the opponent still
+  sees how many you hold and how much room you have) and **Sorted hands**
+  (on by default: each hand lies diamond → leather from its open slots; a
+  card taken from the market lands by the slots, then slides into place).
 - Any phone can **Play using phone** (the only option without WebXR, as on
   iPhone): a plain page from the same relay in one of two forms the phone
   remembers — **Minimal** shows just the hand (tap to select or deselect a

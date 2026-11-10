@@ -3,7 +3,8 @@
   import '@fontsource/atkinson-hyperlegible/700.css';
   import '@fontsource/cormorant-garamond/700.css';
   import { base } from '$app/paths';
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
+  import { displayOrder } from '$lib/handOrder';
   import { saleOptions, type SaleOption } from '$lib/ar/phoneHand';
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
@@ -801,6 +802,7 @@
       const savedHands = localStorage.getItem('jaipur:tabletop:show-hands');
       if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
       shieldMode = localStorage.getItem('jaipur:tabletop:shield') === 'on';
+      sortHands = localStorage.getItem('jaipur:tabletop:sort-hands') !== 'off';
       showArTargets = localStorage.getItem('jaipur:tabletop:ar-targets') === 'on';
       showArDiag = localStorage.getItem('jaipur:tabletop:ar-diag') === 'on';
       regHistory = loadRegHistory();
@@ -1104,6 +1106,30 @@
   const shielded = (uid: string) => shieldMode && uid !== lobby.bot?.uid;
   // The hand row moves on the mat with the setting: the AR hand nodes follow its rects.
   $effect(() => { void shieldMode; publishAr(); });
+  // "Sorted hands" (Table options, on by default): each hand lies diamond →
+  // leather from its open slots (src/lib/handOrder.ts). A card still in
+  // flight lands where new cards always have, by the slots; once it has
+  // landed it is held there a beat (settlingIds) and then sorts in — a
+  // second, separate slide (the hand cells' FLIP), never a jump mid-flight.
+  let sortHands = $state(true);
+  let settlingIds = $state<string[]>([]);
+  let lastArriving: string[] = [];
+  $effect(() => {
+    const now = arrivingCardIds;
+    const landed = lastArriving.filter((id) => !now.includes(id));
+    lastArriving = [...now];
+    if (landed.length === 0) return;
+    settlingIds = [...new Set([...untrack(() => settlingIds), ...landed])];
+    setTimeout(() => {
+      settlingIds = settlingIds.filter((id) => !landed.includes(id));
+      setTimeout(publishAr, 450); // the AR hand nodes follow the sorted cells once the slide is done
+    }, 350);
+  });
+  function toggleSortHands() {
+    sortHands = !sortHands;
+    localStorage.setItem('jaipur:tabletop:sort-hands', sortHands ? 'on' : 'off');
+    setTimeout(publishAr, 450);
+  }
   // A staged sale is table-local state (not in the store): the phones learn of it here.
   $effect(() => { void pendingSale; publishAr(); });
   // What the phones may do depends on `busy` (sale offers, the AR sale preview): a
@@ -2109,8 +2135,10 @@
   // the cards (the left end) and stays there. While a move animates, cards
   // that just left keep their place as ghosts; on release the ghosts move to
   // the slot side so only the cards left of a gap slide over to close it.
+  // The cards still pinned by the slots: in flight, or just landed.
+  const pinnedHandIds = () => new Set([...arrivingCardIds, ...settlingIds]);
   function handLayout(uid: string): Array<{ card?: Card; ghost?: string }> {
-    const display = [...(lobby.round?.hands[uid] ?? [])].reverse();
+    const display = displayOrder(lobby.round?.hands[uid] ?? [], sortHands, pinnedHandIds());
     const ghosts = handGhosts[uid];
     if (!ghosts) return display.map((card) => ({ card }));
     const byId = new Map(display.map((card) => [card.id, card]));
@@ -2148,8 +2176,9 @@
     };
   }
 
-  function holdHandSpaces(uid: string, handOrder: string[]) {
-    handGhosts = { ...handGhosts, [uid]: { order: [...handOrder].reverse(), collapsing: false } };
+  /** `hand` is the hand as it was before the move: its cells keep the order they are shown in. */
+  function holdHandSpaces(uid: string, hand: readonly Card[]) {
+    handGhosts = { ...handGhosts, [uid]: { order: displayOrder(hand, sortHands, pinnedHandIds()).map(({ id }) => id), collapsing: false } };
   }
 
   function releaseHandSpaces(uid: string) {
@@ -2161,7 +2190,8 @@
     // position (a visible jump).
     setTimeout(() => {
       const { [uid]: _gone, ...rest } = handGhosts;
-      handGhosts = rest;
+      handGhosts = rest; // the sorted order applies now (Sorted hands): one slide
+      setTimeout(publishAr, 450);
     }, 1500);
   }
 
@@ -2633,7 +2663,7 @@
         // then the returned cards (already face-down below them) flip face
         // up and slide into the vacated market slots.
         const taken = activity.cardIds?.length ?? 0;
-        holdHandSpaces(uid, (previous.round?.hands[uid] ?? []).map(({ id }) => id));
+        holdHandSpaces(uid, previous.round?.hands[uid] ?? []);
         // One pickup as the market cards lift, another as the returns slide in.
         playSfx('pickup-goods');
         playSfx('pickup-goods', 1350 + taken * 90);
@@ -2673,7 +2703,7 @@
         // The sold cards flip face-up in the hand, then arc (shrinking) to
         // that good's stack on the seller's side; the tokens follow after.
         // Their places in the hand stay open until everything has landed.
-        holdHandSpaces(uid, (previous.round?.hands[uid] ?? []).map(({ id }) => id));
+        holdHandSpaces(uid, previous.round?.hands[uid] ?? []);
         activity.cardIds?.forEach((cardId, index) => movements.push({
           cardId,
           source: box(`[data-table-hand-card="${CSS.escape(cardId)}"]`),
@@ -3083,6 +3113,10 @@
         {#each handCells(player.uid) as entry (entry.key)}
           <span class="hand-cell" animate:handFlip={{ duration: 420, inverted: seat === 1 }}>
           {#if entry.slot !== undefined}
+            {#if shielded(player.uid)}
+              <!-- Shield mode: an open slot's outline peeks out above the shield too, so both players can count the room left. -->
+              <span class="shield-slot" aria-hidden="true" data-shield-slot={entry.slot}></span>
+            {/if}
             <span class="hand-slot" aria-hidden="true" data-hand-slot={entry.slot}></span>
           {:else if entry.ghost}
             <span class="table-hand-card ghost" class:as-slot={handGhosts[player.uid]?.collapsing} aria-hidden="true" data-hand-ghost={entry.ghost}></span>
@@ -3610,6 +3644,17 @@
         >Shield {shieldMode ? 'on' : 'off'}</button>
         <small>For a card shield laid over each hand: the cards move to the player's edge of the mat and a second row of backs peeks out half a card above them. The owner reads the cards under the shield (face up with Show hands, or held to peek); the opponent sees only how many backs there are. Off by default; a computer opponent's hand is never shielded.</small>
       </div>
+      <div class="facing-option">
+        <button
+          type="button"
+          class="orientation-toggle"
+          aria-pressed={sortHands}
+          aria-label="Sorted hands: cards lie grouped by kind"
+          data-sort-hands={sortHands ? 'on' : 'off'}
+          onclick={toggleSortHands}
+        >Sorted hands {sortHands ? 'on' : 'off'}</button>
+        <small>Each hand lies diamond, gold, silver, cloth, spice, leather from its open slots. A card taken from the market lands by the slots as before, then slides into place. On by default; off keeps the cards in the order they were taken.</small>
+      </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArTargets} data-ar-targets-option onchange={(e) => setArDebug({ targets: (e.currentTarget as HTMLInputElement).checked })} /> Show AR tracking targets</label>
         <small>Outlines the static cloth patches the phones register from: three across the market band (every phone) and two on each token rail (that player's phone only). A patch turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
@@ -4127,6 +4172,7 @@
     pointer-events: none;
   }
   .shield-back > img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 0.35rem; }
+  .shield-slot { position: absolute; left: 0; top: -50%; z-index: 0; display: block; width: var(--hand-card-size); height: var(--hand-card-size); border: 2px dashed #b7aa8d; border-radius: 0.55rem; opacity: 0.6; pointer-events: none; }
   .table-hand-card, .table-herd-card { cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; }
   .table-hand-card.ghost { display: block; visibility: hidden; border-color: transparent; background: none; }
   /* Released ghost: it has moved to the slot side and looks exactly like an
