@@ -21,38 +21,40 @@ concurrency:
   group: pages-${{ github.ref }}-${{ inputs.update_snapshots || false }}
   cancel-in-progress: false
 
+# One job, one toolchain. It used to be two jobs (verify, then deploy) that
+# each entered the nix dev shell, and realising that shell on a fresh runner
+# (bun, git, a JDK and their closure) cost 100 s per job — 3.5 of the
+# workflow's 5 minutes — while check, unit tests and the build together
+# take 40 s. CI needs only bun (the JDK in the shell is for the Firebase
+# emulators, which CI does not run), so it installs bun directly; the unit
+# tests run under jsdom, so no browser is installed either.
 jobs:
-  verify:
+  verify-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: cachix/install-nix-action@v31
-      - run: nix develop --command bun install --frozen-lockfile
-      - run: nix develop --command bunx playwright install chromium
-      - run: nix develop --command bun run check
-      - run: nix develop --command bun run test:unit
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run test:unit
       # This fork's AR tabletop replaced the phone-controller join, which
       # the upstream browser scenarios drive; those (and the rules suite,
       # which needs the emulators) are skipped here so the public test
       # deployment stays unblocked. Reducer/unit coverage still gates it.
 
-  deploy:
-    needs: verify
-    if: >-
-      inputs.update_snapshots != true &&
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: cachix/install-nix-action@v31
-      - run: nix develop --command bun install --frozen-lockfile
       # Firebase config comes from repository secrets; when they are absent
       # the tabletop falls back to its browser-local store automatically.
       - name: Determine deployment path
         id: deployment
+        if: >-
+          inputs.update_snapshots != true &&
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository)
         shell: bash
         run: |
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             echo "base=/jaipur/pr${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
             echo "destination=pr${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
@@ -61,7 +63,8 @@ jobs:
             echo "destination=" >> "$GITHUB_OUTPUT"
           fi
       - name: Build static client
-        run: nix develop --command bun run build
+        if: steps.deployment.outputs.deploy == 'true'
+        run: bun run build
         env:
           PUBLIC_BASE_PATH: ${{ steps.deployment.outputs.base }}
           VITE_GIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -71,7 +74,14 @@ jobs:
           VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+      # Published to the gh-pages branch; GitHub's own "pages build and
+      # deployment" run then copies the branch to the CDN. That second hop
+      # is usually 30 s but has queued for 5–8 minutes; deploying straight
+      # from this workflow (actions/deploy-pages) would remove it, at the
+      # cost of the pr<N> preview directories, and needs the repository's
+      # Pages source switched to "GitHub Actions".
       - uses: peaceiris/actions-gh-pages@v4.1.0
+        if: steps.deployment.outputs.deploy == 'true'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: build
