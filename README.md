@@ -99,7 +99,9 @@ see their private cards in AR, while all play happens on the table.
   token it would earn face down at its foot, and an ✕ on the last. Tap a
   number to sell that many; tap a market card instead to place the tapped
   card as a trade return. The prompt pill and the token rails say nothing
-  about a raised set.
+  about a raised set. A seat played from a phone has no shield: on the
+  table only the tapped card advances, face down and unmarked, while the
+  phone and the AR view show the whole set with its numbers.
 - The gear in each player's upper-left corner of the market opens **Table
   options**: the tabletop id, the screen diagonal (check it against a bank
   card outline), the screen/viewport geometry the phones are told about,
@@ -109,7 +111,8 @@ see their private cards in AR, while all play happens on the table.
   hands**, **Shield** (for a card shield laid over each hand: the cards
   move to the player's edge of the mat and a row of card backs — and open
   slot outlines — peeks out half a card above them, so the opponent still
-  sees how many you hold and how much room you have) and **Sorted hands**
+  sees how many you hold and how much room you have; a seat played from a
+  phone is never shielded) and **Sorted hands**
   (on by default: each hand lies diamond → leather from its open slots; a
   card taken from the market lands by the slots, then slides into place).
 - Any phone can **Play using phone** (the only option without WebXR, as on

@@ -1102,9 +1102,13 @@
   // shield covers the cards themselves (face up with Show hands, or held to
   // peek) while a row of half backs stays out from under it: the opponent
   // counts those, the owner reads the cards. Off by default; a computer
-  // opponent's hand is never shielded (nothing to hide behind).
+  // opponent's hand is never shielded (nothing to hide behind), nor is a
+  // seat played from a phone (in AR or the phone view): that player reads
+  // their cards on the phone, and the hand lies face down on the table.
   let shieldMode = $state(false);
-  const shielded = (uid: string) => shieldMode && uid !== lobby.bot?.uid;
+  /** A seat joined from a phone (its QR, in AR or the phone view): the player sees their cards there, never on the table. */
+  const phonePlayed = (uid: string) => uid.startsWith('ar-');
+  const shielded = (uid: string) => shieldMode && uid !== lobby.bot?.uid && !phonePlayed(uid);
   // The hand row moves on the mat with the setting: the AR hand nodes follow its rects.
   $effect(() => { void shieldMode; publishAr(); });
   // "Sorted hands" (Table options, on by default): each hand lies diamond →
@@ -1936,6 +1940,15 @@
 
   function saleIds(uid: string, kind: Good): string[] {
     if (!lobby.round) return [];
+    // The set raised in the hand: every card of the kind, the tapped one
+    // first, so it is among the cards sold whatever the count — on the
+    // table a phone-played seat advances that one card alone, and the
+    // selection says nothing about the rest.
+    const sale = handSale;
+    if (sale && sale.uid === uid && sale.kind === kind) {
+      const group = lobby.round.hands[uid]?.filter((card) => card.kind === kind).map(({ id }) => id) ?? [];
+      return group.includes(sale.primary) ? [sale.primary, ...group.filter((id) => id !== sale.primary)] : group;
+    }
     const selected = selectedReturnIds(uid);
     if (selected.length > 0) {
       return selected.every((id) => lobby.round?.hands[uid]?.find((card) => card.id === id)?.kind === kind)
@@ -1977,11 +1990,11 @@
     return isLegalSale(lobby.round, uid, kind, ids);
   }
 
-  async function sell(kind: Good, supplySeat: Seat, count?: number) {
+  async function sell(kind: Good, supplySeat: Seat, count?: number, cardIds?: string[]) {
     const uid = lobby.round?.activeUid;
     if (!uid) return;
     saleTokenViewSeats[uid] = supplySeat;
-    const ids = saleIds(uid, kind);
+    const ids = cardIds ?? saleIds(uid, kind);
     await appendFor(uid, 'cards/sold', { kind, cardIds: count ? ids.slice(0, count) : ids });
   }
 
@@ -2007,18 +2020,25 @@
   // a trade return and lowers the rest, the numbers gone. The prompt pill
   // and the token rails say nothing about it: it is the player's business
   // behind the shield. Table-local, like the rail's staged sale.
-  let handSale = $state<{ uid: string; kind: Good; primary: string; at: number } | null>(null);
+  // A seat played from a phone (`single`) has no shield to hide behind: on
+  // the table only the tapped card advances, face down, and the numbers,
+  // bonus and ✕ are not drawn there (they stay in the DOM unseen, so the AR
+  // tiles still find their places); the set with its numbers shows on the
+  // phone and in AR, where only that player sees it.
+  let handSale = $state<{ uid: string; kind: Good; primary: string; at: number; single: boolean } | null>(null);
   const seatOf = (uid: string): Seat => (lobby.players.find((p) => p.uid === uid)?.seat === 1 ? 1 : 2);
   async function tapHandCard(uid: string, cardId: string) {
     if (!canSelectReturns(uid)) return;
     const loads = exchangeLoads(uid);
     if (Object.values(loads).includes(cardId)) return;
-    if (handSale?.uid === uid && selectedReturnIds(uid).includes(cardId)) { await cancelHandSale(); return; } // a raised card lowers the set
     const kind = lobby.round?.hands[uid]?.find((c) => c.id === cardId)?.kind;
+    // A raised card lowers the set (from a phone, any card of the raised kind: the phone shows them all raised).
+    if (handSale?.uid === uid && (selectedReturnIds(uid).includes(cardId) || (handSale.single && handSale.kind === kind))) { await cancelHandSale(); return; }
     const group = kind && isGood(kind) && Object.keys(loads).length === 0 ? (lobby.round?.hands[uid] ?? []).filter((c) => c.kind === kind).map(({ id }) => id) : [];
     if (kind && isGood(kind) && group.length > 0 && lobby.round && isLegalSale(lobby.round, uid, kind, group)) {
-      handSale = { uid, kind, primary: cardId, at: Date.now() };
-      await publishIntent(uid, [cardId, ...group.filter((id) => id !== cardId)], loads);
+      const single = phonePlayed(uid);
+      handSale = { uid, kind, primary: cardId, at: Date.now(), single };
+      await publishIntent(uid, single ? [cardId] : [cardId, ...group.filter((id) => id !== cardId)], loads);
       return;
     }
     handSale = null;
@@ -2038,8 +2058,9 @@
   async function sellFromHand(count: number) {
     const sale = handSale;
     if (!sale || busy || !saleCounts(sale.uid, sale.kind).includes(count)) return;
+    const ids = saleIds(sale.uid, sale.kind).slice(0, count); // the tapped card first — read before the set is lowered
     handSale = null;
-    await sell(sale.kind, seatOf(sale.uid), count);
+    await sell(sale.kind, seatOf(sale.uid), count, ids);
   }
   /** What the number on a raised card says: its place in the set (from the slots), the worth so far, whether that many may be sold, the bonus it would earn, and whether it is the last (the ✕ goes there). */
   function saleStep(uid: string, cardId: string) {
@@ -3244,13 +3265,16 @@
               <img class="peek-back" src={componentImage('card-back')} alt="" draggable="false" />
               <img class="peek-face" src={componentImage(card.kind)} alt="" draggable="false" />
             </span>
-            {#if selected && handSale?.uid === player.uid && handSale.kind === card.kind}
+            {#if handSale?.uid === player.uid && handSale.kind === card.kind && (selected || handSale.single)}
               {@const step = saleStep(player.uid, card.id)}
+              {@const unseen = handSale.single}
               {#if step}
-                <!-- The sale, behind the shield: the worth of this card and those to its left; the bonus it would earn; ✕ on the last. -->
+                <!-- The sale, behind the shield: the worth of this card and those to its left; the bonus it would earn; ✕ on the last.
+                     Unseen for a seat played from a phone (the marks are kept for the AR tiles' places). -->
                 <span
                   class="sale-step"
                   class:illegal={!step.legal}
+                  class:unseen
                   role="button"
                   tabindex="-1"
                   aria-label={step.legal ? `Sell ${step.k} for ${step.total} points` : `${step.k} cannot be sold`}
@@ -3261,10 +3285,10 @@
                   onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (step.legal) void sellFromHand(step.k); } }}
                 >{step.total}</span>
                 {#if step.bonus}
-                  <span class="sale-bonus" aria-hidden="true" data-hand-sale-bonus={step.bonus}><TokenChip token={{ id: `preview-bonus-${step.bonus}`, kind: `bonus-${step.bonus}`, value: 0 }} hidden /></span>
+                  <span class="sale-bonus" class:unseen aria-hidden="true" data-hand-sale-bonus={step.bonus}><TokenChip token={{ id: `preview-bonus-${step.bonus}`, kind: `bonus-${step.bonus}`, value: 0 }} hidden /></span>
                 {/if}
                 {#if step.last}
-                  <span class="sale-cancel" role="button" tabindex="-1" aria-label="Lower the cards" data-hand-sale-cancel onpointerdown={(e) => { e.stopPropagation(); e.preventDefault(); if (freshPress(e)) void cancelHandSale(); }} onclick={(e) => { e.stopPropagation(); e.preventDefault(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); void cancelHandSale(); } }}>✕</span>
+                  <span class="sale-cancel" class:unseen role="button" tabindex="-1" aria-label="Lower the cards" data-hand-sale-cancel onpointerdown={(e) => { e.stopPropagation(); e.preventDefault(); if (freshPress(e)) void cancelHandSale(); }} onclick={(e) => { e.stopPropagation(); e.preventDefault(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); void cancelHandSale(); } }}>✕</span>
                 {/if}
               {/if}
             {/if}
@@ -3756,7 +3780,7 @@
           data-shield-mode={shieldMode ? 'on' : 'off'}
           onclick={toggleShield}
         >Shield {shieldMode ? 'on' : 'off'}</button>
-        <small>For a card shield laid over each hand: the cards move to the player's edge of the mat and a second row of backs peeks out half a card above them. The owner reads the cards under the shield (face up with Show hands, or held to peek); the opponent sees only how many backs there are. Off by default; a computer opponent's hand is never shielded.</small>
+        <small>For a card shield laid over each hand: the cards move to the player's edge of the mat and a second row of backs peeks out half a card above them. The owner reads the cards under the shield (face up with Show hands, or held to peek); the opponent sees only how many backs there are. Off by default; a computer opponent's hand is never shielded, nor is a seat played from a phone (that player reads their cards there).</small>
       </div>
       <div class="facing-option">
         <button
@@ -4327,6 +4351,8 @@
      face down at its foot, and an ✕ on the last card. */
   .sale-step { position: absolute; left: 50%; top: 30%; z-index: 4; display: grid; place-items: center; min-width: 1.9em; height: 1.9em; padding: 0 0.35em; transform: translate(-50%, -50%); border: 2px solid #eafff0; border-radius: 99rem; background: #1d7a4a; color: #eafff0; font-size: clamp(0.85rem, 2.2vmin, 2rem); font-weight: 900; line-height: 1; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); cursor: pointer; }
   .sale-step.illegal { background: #777; color: #e4e4e4; opacity: 0.7; cursor: default; }
+  /* A phone-played seat's marks: laid out for the AR tiles, never shown on the table. */
+  .sale-step.unseen, .sale-bonus.unseen, .sale-cancel.unseen { visibility: hidden; pointer-events: none; }
   .sale-cancel { position: absolute; right: -0.45em; top: -0.45em; z-index: 5; display: grid; width: 1.6em; height: 1.6em; place-items: center; border: 2px solid #fff4f0; border-radius: 50%; background: #a6442d; color: #fff4f0; font-size: clamp(0.8rem, 2vmin, 1.8rem); font-weight: 900; line-height: 1; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); cursor: pointer; }
   .sale-bonus { position: absolute; left: 50%; bottom: 5%; z-index: 4; width: 44%; aspect-ratio: 1; transform: translateX(-50%); pointer-events: none; filter: drop-shadow(0 0.1rem 0.25rem rgb(0 0 0 / 40%)); }
   .market-card :global(.piece-image) { width: 100%; height: 100%; object-fit: cover; }

@@ -848,6 +848,9 @@ export class ArTabletop {
       const hand: Card[] = (player && round?.hands[player.uid]) ?? [];
       const intent = player ? lobby.tabletopIntents[player.uid] : undefined;
       const selected = new Set(intent?.selectedReturnIds ?? []);
+      // The sale raised in the hand: on the table a phone-played seat advances one card only, but on the phone and in AR the whole set glows.
+      const handSale = player ? this.handSaleFor?.(player.uid) ?? null : null;
+      for (const step of handSale?.steps ?? []) selected.add(step.id);
       const loaded = new Set(Object.values(intent?.exchangeLoads ?? {}));
       const myTurn = Boolean(player && round?.status === 'active' && round.activeUid === player.uid && !lobby.pendingDraw);
       const rotY = seatNo === 1 ? Math.PI : 0;
@@ -948,7 +951,6 @@ export class ArTabletop {
       }
       // The sale raised in the hand: its numbers, bonus marks and ✕ stand
       // over the raised cards where the table draws them.
-      const handSale = player ? this.handSaleFor?.(player.uid) ?? null : null;
       if (handSale) {
         for (const step of handSale.steps) {
           const card = document.querySelector(`[data-table-hand-card="${CSS.escape(step.id)}"]`);
