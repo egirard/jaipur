@@ -12,7 +12,9 @@
     label,
     canSell,
     pending = null,
-    onSell
+    pendingCounts = [],
+    onSell,
+    onCancel
   }: {
     seat: 1 | 2;
     round: RoundState | null;
@@ -20,10 +22,33 @@
     inverted?: boolean;
     label: (kind: Good) => string;
     canSell: (kind: Good) => boolean;
-    /** The good whose sale is staged (first tap): its stack shows a ✓. */
+    /** The good whose sale is staged (first tap): its stack shows a ✓ and an ✕. */
     pending?: Good | null;
-    onSell: (kind: Good) => void | Promise<void>;
+    /** The legal card counts of the staged sale (full sale last): those
+     *  coins glow and carry the running total; the one at a legal count
+     *  sells that many when tapped. */
+    pendingCounts?: number[];
+    /** The second tap: on the stack (or its ✓) the full sale, on a priced coin that count. */
+    onSell: (kind: Good, count?: number) => void | Promise<void>;
+    /** The ✕ beside the ✓. */
+    onCancel?: () => void;
   } = $props();
+
+  // The glowing coins of a staged sale: the top `max` of the stack, each
+  // with the total of selling down to it (the sale takes from the top).
+  const saleMax = $derived(pendingCounts.length ? Math.max(...pendingCounts) : 0);
+  const runningTotal = (tokens: RoundState['goodsTokens'][Good], n: number) => tokens.slice(0, n).reduce((sum, token) => sum + token.value, 0);
+  // The stack is one button (its coins cannot be buttons of their own):
+  // the tap's target says what was meant.
+  function tapStack(kind: Good, event: MouseEvent) {
+    const target = event.target as HTMLElement | null;
+    if (pending === kind) {
+      if (target?.closest('[data-cancel-sale]')) { onCancel?.(); return; }
+      const priced = target?.closest<HTMLElement>('[data-sale-count]');
+      if (priced) { void onSell(kind, Number(priced.dataset.saleCount)); return; }
+    }
+    void onSell(kind);
+  }
 
   // One wrapping row: the coins are sized so five fit the rail's width
   // side by side (see .chip), and a sixth and more wrap onto further
@@ -67,13 +92,16 @@
           class:sellable={canSell(kind)}
           class:confirm-ready={pending === kind}
           disabled={!canSell(kind)}
-          aria-label={pending === kind ? `Confirm: sell ${label(kind)}` : `Sell to ${label(kind)} token stack, ${round.goodsTokens[kind].length} left`}
+          aria-label={pending === kind ? `Confirm: sell ${label(kind)} (tap a priced coin to sell fewer, ✕ to cancel)` : `Sell to ${label(kind)} token stack, ${round.goodsTokens[kind].length} left`}
           data-sale-pending={pending === kind || undefined}
           data-token-kind={kind}
           style={`--good-art: url("${assetBase}/components/${kind}.webp")`}
-          onclick={() => onSell(kind)}
+          onclick={(e) => tapStack(kind, e)}
         >
-          {#if pending === kind}<span class="confirm-mark" aria-hidden="true">✓</span>{/if}
+          {#if pending === kind}
+            <span class="cancel-mark" data-cancel-sale aria-hidden="true">✕</span>
+            <span class="confirm-mark" aria-hidden="true">✓</span>
+          {/if}
           <span class="rail-head">
             <span class="rail-name">{label(kind)}</span>
             <span class="rail-count">{round.goodsTokens[kind].length}</span>
@@ -83,8 +111,11 @@
               {#each rows(round.goodsTokens[kind]) as row}
                 <span class="chip-row">
                   {#each row as token, index (token.id)}
-                    <span class="chip" style={`--z:${row.length - index}`} data-supply-token-id={token.id}>
+                    {@const inSale = pending === kind && index < saleMax}
+                    {@const priced = inSale && pendingCounts.includes(index + 1)}
+                    <span class="chip" class:in-sale={inSale} class:priced style={`--z:${row.length - index}`} data-supply-token-id={token.id} data-sale-count={priced ? index + 1 : undefined}>
                       <TokenChip {token} />
+                      {#if priced}<span class="sale-price" aria-hidden="true">{runningTotal(row, index + 1)}</span>{/if}
                     </span>
                   {/each}
                 </span>
@@ -185,7 +216,16 @@
      holds. The button is still disabled when a sale is impossible. */
   /* A staged sale: the same green ✓ and pulse as a market card awaiting its confirming tap. */
   .rail-token.confirm-ready { border: 3px solid #1d7a4a; box-shadow: 0 0 0 4px rgb(29 122 74 / 30%); animation: confirm-pulse 1.1s ease-in-out infinite; }
-  .confirm-mark { position: absolute; right: 0.15rem; top: 0.15rem; z-index: 3; display: grid; width: 1.8em; height: 1.8em; place-items: center; border-radius: 50%; background: #1d7a4a; color: #eafff0; font-size: clamp(0.9rem, 2.4vmin, 2rem); font-weight: 900; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); }
+  .confirm-mark, .cancel-mark { position: absolute; right: 0.15rem; top: 0.15rem; z-index: 3; display: grid; width: 1.8em; height: 1.8em; place-items: center; border-radius: 50%; background: #1d7a4a; color: #eafff0; font-size: clamp(0.9rem, 2.4vmin, 2rem); font-weight: 900; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); }
+  /* The ✕ sits beside the ✓ (a tap anywhere else on the stack is the full sale). */
+  .cancel-mark { right: calc(0.15rem + 1.8em + 0.25rem); background: #a6442d; color: #fff4f0; }
+  /* The staged sale's coins, counted from the top of the stack: an outline
+     and glow on each coin the full sale takes, and over every coin at a
+     legal count the running total of selling that many — the same number
+     the prompt's "Sell N" shows, tappable here. */
+  .chip.in-sale { z-index: 2; border-radius: 50%; box-shadow: 0 0 0 3px #66ffcc, 0 0 0.6em 0.1em rgb(102 255 204 / 70%); }
+  .chip.priced { cursor: pointer; }
+  .sale-price { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; border-radius: 50%; background: rgb(7 17 15 / 58%); color: #eafff0; font-size: clamp(0.8rem, 2.2vmin, 2rem); font-weight: 900; text-shadow: 0 1px 2px #07110f; pointer-events: none; }
   @keyframes confirm-pulse { 0%, 100% { box-shadow: 0 0 0 4px rgb(29 122 74 / 30%); } 50% { box-shadow: 0 0 0 9px rgb(29 122 74 / 12%); } }
   .rail-head { display: flex; gap: 0.35rem; align-items: baseline; font-weight: 800; text-shadow: 0 0 4px #fffaf0, 0 0 4px #fffaf0; }
   .rail-count { padding: 0 0.4rem; border-radius: 99rem; background: #183a37; color: #fffaf0; text-shadow: none; }

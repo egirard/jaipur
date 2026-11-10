@@ -1965,24 +1965,28 @@
   }
 
   // Selling takes two taps like every other move: the first stages the
-  // sale (the stack shows a ✓ and the prompt describes it, with Cancel), the
-  // second on the same stack confirms. Table-local: nothing is written to
-  // the store until the sale itself.
+  // sale (the stack shows a ✓ with an ✕ beside it, its coins glow with the
+  // running total of selling that many, and the prompt describes it with
+  // the same choice of counts), the second sells: on the stack itself or a
+  // "Sell N" in the prompt for the full sale, on a priced coin (or the
+  // prompt's smaller "Sell N") for that many. Table-local: nothing is
+  // written to the store until the sale itself.
   let pendingSale = $state<{ uid: string; kind: Good; seat: Seat; ids: string; count: number } | null>(null);
-  function tapSell(kind: Good, supplySeat: Seat) {
+  function tapSell(kind: Good, supplySeat: Seat, count?: number) {
     const uid = lobby.round?.activeUid;
     if (!uid || !canSell(kind)) return;
     if (pendingSale && pendingSale.uid === uid && pendingSale.kind === kind) {
-      const { count } = pendingSale;
+      const chosen = count ?? pendingSale.count;
+      if (!saleCounts(uid, kind).includes(chosen)) return;
       pendingSale = null;
-      void sell(kind, supplySeat, count);
+      void sell(kind, supplySeat, chosen);
       return;
     }
     const ids = saleIds(uid, kind);
     pendingSale = { uid, kind, seat: supplySeat, ids: ids.join(','), count: ids.length };
   }
-  function chooseSaleCount(count: number) {
-    if (pendingSale) pendingSale = { ...pendingSale, count };
+  function sellCount(count: number) {
+    if (pendingSale) tapSell(pendingSale.kind, pendingSale.seat, count);
   }
   function confirmSale() {
     if (pendingSale) tapSell(pendingSale.kind, pendingSale.seat);
@@ -3320,18 +3324,19 @@
         {:else if pendingSale}
           {@const preview = salePreview(pendingSale.kind)}
           {@const counts = saleCounts(pendingSale.uid, pendingSale.kind)}
-          <span>Sell {preview?.cards ?? 0} {label(pendingSale.kind).toLowerCase()} for +{preview?.base ?? 0}{preview?.bonus ? ` and a +${preview.bonus} bonus token` : ''}? Tap the ✓ stack again to confirm.</span>
+          <span>Sell {preview?.cards ?? 0} {label(pendingSale.kind).toLowerCase()} for +{preview?.base ?? 0}{preview?.bonus ? ` and a +${preview.bonus} bonus token` : ''}? Tap the ✓ stack again to confirm{counts.length > 1 ? ', or a priced coin to sell fewer' : ''}.</span>
           {#if counts.length > 1}
+            <!-- Each choice sells at once: the staging tap on the stack was the first of the two. -->
             <span class="sale-counts" role="group" aria-label="How many to sell">
               {#each counts as n (n)}
                 <button
                   type="button"
                   class="sale-count"
                   class:chosen={pendingSale.count === n}
-                  aria-pressed={pendingSale.count === n}
+                  disabled={busy}
                   aria-label={`Sell ${n} for ${salePoints(pendingSale.kind, n)} points`}
                   data-sale-count={n}
-                  onclick={() => chooseSaleCount(n)}
+                  onclick={() => sellCount(n)}
                 >
                   <span class="sale-count-title">Sell {n}</span>
                   <span class="sale-count-icons">{#each Array(n) as _}<img src={componentImage(pendingSale.kind)} alt="" />{/each}</span>
@@ -3340,7 +3345,6 @@
               {/each}
             </span>
           {/if}
-          <button type="button" disabled={busy} data-confirm-sale onclick={confirmSale}>Sell {pendingSale.count}</button>
           <button type="button" class="cancel" disabled={busy} data-cancel-sale onclick={cancelSale}>Cancel</button>
         {:else if Object.keys(promptLoads).length >= 2}
           {@const problem = exchangeProblem(activeUid)}
@@ -3780,7 +3784,9 @@
       {label}
       {canSell}
       pending={pendingSale?.kind ?? null}
-      onSell={(kind) => tapSell(kind, 1)}
+      pendingCounts={pendingSale ? saleCounts(pendingSale.uid, pendingSale.kind) : []}
+      onSell={(kind, count) => tapSell(kind, 1, count)}
+      onCancel={cancelSale}
     />
   </div>
   <div class="token-view bottom-token-view">
@@ -3791,7 +3797,9 @@
       {label}
       {canSell}
       pending={pendingSale?.kind ?? null}
-      onSell={(kind) => tapSell(kind, 2)}
+      pendingCounts={pendingSale ? saleCounts(pendingSale.uid, pendingSale.kind) : []}
+      onSell={(kind, count) => tapSell(kind, 2, count)}
+      onCancel={cancelSale}
     />
   </div>
 

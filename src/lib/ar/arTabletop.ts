@@ -184,7 +184,7 @@ const STATIC_CAPTURE_IGNORE = [
   '.table-card-flight', '.table-token-flight', '.bonus-stack', '.seat-tokens',
   // Token rails: the stack boxes, their art and names stay (a rail's rows
   // are tracking regions); the coins, counts and sale marks change.
-  '[data-supply-token-id]', '.rail-count', '.confirm-mark', '.empty-stack',
+  '[data-supply-token-id]', '.rail-count', '.confirm-mark', '.cancel-mark', '.empty-stack',
   '.score-stack', '.seat-seals', '.rejoin', '.shared-market > header',
   // Diagnostics overlays must never become part of the target they describe.
   '.ar-targets', '.ar-diag'
