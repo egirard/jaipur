@@ -2002,7 +2002,7 @@
   // a trade return and lowers the rest, the numbers gone. The prompt pill
   // and the token rails say nothing about it: it is the player's business
   // behind the shield. Table-local, like the rail's staged sale.
-  let handSale = $state<{ uid: string; kind: Good; primary: string } | null>(null);
+  let handSale = $state<{ uid: string; kind: Good; primary: string; at: number } | null>(null);
   const seatOf = (uid: string): Seat => (lobby.players.find((p) => p.uid === uid)?.seat === 1 ? 1 : 2);
   async function tapHandCard(uid: string, cardId: string) {
     if (!canSelectReturns(uid)) return;
@@ -2012,7 +2012,7 @@
     const kind = lobby.round?.hands[uid]?.find((c) => c.id === cardId)?.kind;
     const group = kind && isGood(kind) && Object.keys(loads).length === 0 ? (lobby.round?.hands[uid] ?? []).filter((c) => c.kind === kind).map(({ id }) => id) : [];
     if (kind && isGood(kind) && group.length > 0 && lobby.round && isLegalSale(lobby.round, uid, kind, group)) {
-      handSale = { uid, kind, primary: cardId };
+      handSale = { uid, kind, primary: cardId, at: Date.now() };
       await publishIntent(uid, [cardId, ...group.filter((id) => id !== cardId)], loads);
       return;
     }
@@ -2024,6 +2024,12 @@
     handSale = null;
     if (sale) await publishIntent(sale.uid, [], exchangeLoads(sale.uid));
   }
+  // The numbers and the ✕ act on a press of their own (pointerdown, like
+  // every tap on the table), never on the click that ends the press which
+  // raised the set — that press began on the card, and its pointer-up
+  // landed on the number that had just appeared under the finger, selling
+  // at once — and not within a beat of the raise either.
+  const freshPress = (e: PointerEvent) => !(e.pointerType === 'mouse' && e.button !== 0) && Date.now() - (handSale?.at ?? 0) > 300;
   async function sellFromHand(count: number) {
     const sale = handSale;
     if (!sale || busy || !saleCounts(sale.uid, sale.kind).includes(count)) return;
@@ -2090,13 +2096,17 @@
     }
   });
 
-  // The worth of everything in the player's token row. While a bonus
-  // token of theirs is still face down the total is as secret as the
-  // token (hold the chip to see it); once scoring has turned them over,
-  // or the round is complete, it is shown openly.
+  // The worth of everything in the player's token row. Outside Shield mode
+  // it is held to see (the phone and the AR view carry it); in Shield mode
+  // it is shown while no bonus token of theirs is still face down (then it
+  // is as secret as the token: hold the chip), and once scoring has turned
+  // them over, or the round is complete, it is shown openly either way.
   const tokenTotal = (uid: string) => ownedTokens(uid).reduce((sum, token) => sum + token.value, 0);
-  const totalSecret = (uid: string) =>
-    (lobby.round?.ownedBonusTokens[uid] ?? []).some((token) => !(scoring ? scoring.revealedBonus.includes(token.id) : lobby.round?.status === 'complete'));
+  const totalSecret = (uid: string) => {
+    const revealed = scoring ? (lobby.round?.ownedBonusTokens[uid] ?? []).every((token) => scoring!.revealedBonus.includes(token.id)) : lobby.round?.status === 'complete';
+    if (revealed) return false;
+    return !shielded(uid) || (lobby.round?.ownedBonusTokens[uid] ?? []).length > 0;
+  };
 
   function ownedTokens(uid: string): Token[] {
     if (!lobby.round) return [];
@@ -3228,15 +3238,15 @@
                   aria-label={step.legal ? `Sell ${step.k} for ${step.total} points` : `${step.k} cannot be sold`}
                   data-hand-sale-count={step.k}
                   data-hand-sale-legal={step.legal || undefined}
-                  onpointerdown={(e) => e.stopPropagation()}
-                  onclick={(e) => { e.stopPropagation(); e.preventDefault(); if (step.legal) void sellFromHand(step.k); }}
+                  onpointerdown={(e) => { e.stopPropagation(); e.preventDefault(); if (step.legal && freshPress(e)) void sellFromHand(step.k); }}
+                  onclick={(e) => { e.stopPropagation(); e.preventDefault(); }}
                   onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (step.legal) void sellFromHand(step.k); } }}
                 >{step.total}</span>
                 {#if step.bonus}
                   <span class="sale-bonus" aria-hidden="true" data-hand-sale-bonus={step.bonus}><TokenChip token={{ id: `preview-bonus-${step.bonus}`, kind: `bonus-${step.bonus}`, value: 0 }} hidden /></span>
                 {/if}
                 {#if step.last}
-                  <span class="sale-cancel" role="button" tabindex="-1" aria-label="Lower the cards" data-hand-sale-cancel onpointerdown={(e) => e.stopPropagation()} onclick={(e) => { e.stopPropagation(); e.preventDefault(); void cancelHandSale(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); void cancelHandSale(); } }}>✕</span>
+                  <span class="sale-cancel" role="button" tabindex="-1" aria-label="Lower the cards" data-hand-sale-cancel onpointerdown={(e) => { e.stopPropagation(); e.preventDefault(); if (freshPress(e)) void cancelHandSale(); }} onclick={(e) => { e.stopPropagation(); e.preventDefault(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); void cancelHandSale(); } }}>✕</span>
                 {/if}
               {/if}
             {/if}
@@ -3288,7 +3298,7 @@
         <span>Herd</span>
       </div>
     </div>
-    <div class="seat-tokens" class:dense={ownedTokens(player.uid).length > 18} data-table-tokens={player.uid} aria-label={`${player.displayName}'s earned tokens`}>
+    <div class="seat-tokens" class:dense={ownedTokens(player.uid).length > 18} class:shielded={shielded(player.uid)} style={`--n: ${ownedTokens(player.uid).length}`} data-table-tokens={player.uid} aria-label={`${player.displayName}'s earned tokens`}>
       {#each lobby.round?.ownedGoodsTokens[player.uid] ?? [] as token (token.id)}
         <span class="earned" class:arriving={arrivingTokenIds.has(token.id)} data-owned-token-id={token.id}><TokenChip {token} /></span>
       {/each}
@@ -3371,9 +3381,11 @@
 <svelte:head>
   <title>Jaipur Tabletop</title>
   <meta name="description" content="A shared two-player Jaipur tabletop." />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 </svelte:head>
 
-<main class="tabletop" data-e2e-tabletop data-e2e-layout data-cloth-wash={liveWash} style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg"); --cloth-wash: ${liveWash}; --mm: ${physical ? (1 / (physical.mPerCssPx * 1000)).toFixed(3) : 0}px`}>
+<!-- Gameplay surface: no pinch-zoom (touch-action), no text selection or long-press callouts (the panel, the log and the inputs opt back in). -->
+<main class="tabletop" data-e2e-tabletop data-e2e-layout oncontextmenu={(e) => { if (!(e.target as HTMLElement | null)?.closest?.('input, textarea')) e.preventDefault(); }} data-cloth-wash={liveWash} style={`--market-art: url("${componentImage('card-back')}"); --table-mat: url("${base}/components/mat.jpg"); --cloth-wash: ${liveWash}; --mm: ${physical ? (1 / (physical.mPerCssPx * 1000)).toFixed(3) : 0}px`}>
   <div class="top-edge edge">
     <div class="inverted-content">
       {#if playerForSeat(1)}
@@ -4064,6 +4076,7 @@
   button { font: inherit; }
   button:focus-visible { outline: 3px solid #d38b21; outline-offset: 2px; }
   .tabletop {
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
     --rail-width: clamp(8.5rem, 14vw, 24rem);
     /* Player mats keep their 25vh height but are 78% of the column wide,
        so the market pattern shows on either side of them. */
@@ -4249,6 +4262,10 @@
   .tabletop-hand.shielded { align-items: end; }
   .tabletop-hand.shielded .hand-cell { position: relative; }
   .tabletop-hand.shielded .hand-cell > .table-hand-card { z-index: 1; }
+  /* Only the half that peeks out is drawn (clip-path): the lower half of a
+     back lies under the card, and an open slot's outline would otherwise
+     cross the slot's own dashed field. */
+  .shield-back, .shield-slot { clip-path: inset(0 0 50% 0); }
   .shield-back {
     position: absolute; left: 0; top: -50%; z-index: 0;
     display: block; width: var(--hand-card-size); height: var(--hand-card-size);
@@ -4311,6 +4328,12 @@
      worth. A token still in flight is kept invisible here (`arriving`). */
   .seat-tokens { --earned-size: clamp(1.4rem, 3.2vmin, 3.6rem); display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); max-height: calc(2 * var(--earned-size) + 0.2rem + 0.3rem + 2px); overflow: hidden; padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 1.4rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .seat-tokens.dense { --earned-size: clamp(1.1rem, 2.5vmin, 2.8rem); }
+  /* Shield mode: the row never wraps or runs past the mat. Once the coins
+     (--n of them, plus the "=" and the total) no longer fit side by side,
+     each overlaps the one before by exactly the excess shared out — the
+     later coin on top — so a row of thirty still ends inside the mat. */
+  .seat-tokens.shielded { flex-wrap: nowrap; --earned-size: clamp(1.4rem, 3.2vmin, 3.6rem); }
+  .seat-tokens.shielded .earned:not(.total) + .earned:not(.total) { margin-left: min(0px, calc((100% - 3 * var(--earned-size) - var(--n) * (var(--earned-size) + 0.2rem)) / max(1, var(--n) - 1))); }
   .seat-tokens .earned { width: var(--earned-size); height: var(--earned-size); flex: 0 0 auto; }
   .seat-tokens .earned.arriving { visibility: hidden; }
   .seat-tokens .earned.bonus { filter: saturate(0.7); touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer; }
@@ -4377,6 +4400,8 @@
   .music-volume { width: 0; height: 2.2rem; margin: 0; padding: 0; opacity: 0; overflow: hidden; accent-color: #a6442d; pointer-events: none; transition: width 220ms ease, opacity 180ms; }
   .music-control.open .music-volume { pointer-events: auto; }
   .music-control.open .music-volume { width: clamp(8rem, 18vmin, 14rem); opacity: 1; }
+  .scale-panel, .corner-log { touch-action: pan-y; }
+  .tabletop input { -webkit-user-select: text; user-select: text; touch-action: manipulation; }
   .scale-panel .table-id { letter-spacing: 0.14em; }
   .scale-panel .ar-endpoints { margin: 0 0 0.6rem; line-height: 1.35; }
   /* The Background row stacks: a wrapping row of controls, then the copy, the last sweep and the log at full width. */
