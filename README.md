@@ -96,9 +96,12 @@ see their private cards in AR, while all play happens on the table.
 - The gear in each player's upper-left corner of the market opens **Table
   options**: the tabletop id, the screen diagonal (check it against a bank
   card outline), the screen/viewport geometry the phones are told about,
-  full screen, a new table, the animation demo, and **Turn to trader**
+  full screen, a new table, the animation demo, **Turn to trader**
   (rotate the market toward the active player; off by default because a
-  phone in AR locks onto the pre-rotation capture and flips).
+  phone in AR locks onto the pre-rotation capture and flips), **Show
+  hands** and **Shield** (for a card shield laid over each hand: the cards
+  move to the player's edge of the mat and a row of card backs peeks out
+  half a card above them, so the opponent still sees how many you hold).
 - Any phone can **Play using phone** (the only option without WebXR, as on
   iPhone): a plain page from the same relay in one of two forms the phone
   remembers — **Minimal** shows just the hand (tap to select or deselect a

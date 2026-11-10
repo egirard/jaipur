@@ -800,6 +800,7 @@
       startMusic(); // plays now where autoplay is allowed, else on the first gesture
       const savedHands = localStorage.getItem('jaipur:tabletop:show-hands');
       if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
+      shieldMode = localStorage.getItem('jaipur:tabletop:shield') === 'on';
       showArTargets = localStorage.getItem('jaipur:tabletop:ar-targets') === 'on';
       showArDiag = localStorage.getItem('jaipur:tabletop:ar-diag') === 'on';
       regHistory = loadRegHistory();
@@ -1092,6 +1093,17 @@
   const showHands = $derived(showHandsChoice === 'auto' ? Boolean(lobby.bot) || hasPhonelessPlayer : showHandsChoice === 'on');
   // Show hands changes what the AR phones may see (placed return cards): republish.
   $effect(() => { void showHands; publishAr(); });
+  // "Shield" (Table options): for a card shield laid over each human's hand.
+  // The hand sits at the player's edge of the mat and a second card back
+  // lies under each card, shifted half a card toward the market, so the
+  // shield covers the cards themselves (face up with Show hands, or held to
+  // peek) while a row of half backs stays out from under it: the opponent
+  // counts those, the owner reads the cards. Off by default; a computer
+  // opponent's hand is never shielded (nothing to hide behind).
+  let shieldMode = $state(false);
+  const shielded = (uid: string) => shieldMode && uid !== lobby.bot?.uid;
+  // The hand row moves on the mat with the setting: the AR hand nodes follow its rects.
+  $effect(() => { void shieldMode; publishAr(); });
   // A staged sale is table-local state (not in the store): the phones learn of it here.
   $effect(() => { void pendingSale; publishAr(); });
   // What the phones may do depends on `busy` (sale offers, the AR sale preview): a
@@ -1247,6 +1259,11 @@
   function toggleShowHands() {
     showHandsChoice = showHands ? 'off' : 'on';
     localStorage.setItem('jaipur:tabletop:show-hands', showHandsChoice);
+  }
+
+  function toggleShield() {
+    shieldMode = !shieldMode;
+    localStorage.setItem('jaipur:tabletop:shield', shieldMode ? 'on' : 'off');
   }
 
   function toggleMarketFacing() {
@@ -3045,7 +3062,9 @@
     <div class="seat-body">
       <div
         class="tabletop-hand"
+        class:shielded={shielded(player.uid)}
         data-table-hand={player.uid}
+        data-shielded={shielded(player.uid) || undefined}
         role="group"
         aria-label={`${player.displayName} has ${lobby.round?.hands[player.uid]?.length ?? 0} face-down cards`}
       >
@@ -3059,6 +3078,12 @@
           {@const card = entry.card}
           {@const selected = selectedReturnIds(player.uid).includes(card.id)}
           {@const loaded = Object.values(exchangeLoads(player.uid)).includes(card.id)}
+          {#if shielded(player.uid)}
+            <!-- Shield mode: the back that peeks out above the shield (hidden with the card while it arrives). -->
+            <span class="shield-back" class:arriving={arrivingCardIds.includes(card.id)} aria-hidden="true" data-shield-back={card.id}>
+              <img src={componentImage('card-back')} alt="" draggable="false" />
+            </span>
+          {/if}
           <button
             type="button"
             class="table-hand-card"
@@ -3538,6 +3563,17 @@
           onclick={toggleShowHands}
         >Show hands {showHands ? 'on' : 'off'}</button>
         <small>Hand cards lie face up on the table. On by default against a computer opponent{showHandsChoice === 'auto' ? ' (as now)' : ''}; off with two players, whose phones show them their cards. Hold a card to peek either way.</small>
+      </div>
+      <div class="facing-option">
+        <button
+          type="button"
+          class="orientation-toggle"
+          aria-pressed={shieldMode}
+          aria-label="Shield mode: a row of card backs peeks out above each hand"
+          data-shield-mode={shieldMode ? 'on' : 'off'}
+          onclick={toggleShield}
+        >Shield {shieldMode ? 'on' : 'off'}</button>
+        <small>For a card shield laid over each hand: the cards move to the player's edge of the mat and a second row of backs peeks out half a card above them. The owner reads the cards under the shield (face up with Show hands, or held to peek); the opponent sees only how many backs there are. Off by default; a computer opponent's hand is never shielded.</small>
       </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArTargets} data-ar-targets-option onchange={(e) => setArDebug({ targets: (e.currentTarget as HTMLInputElement).checked })} /> Show AR tracking targets</label>
@@ -4037,6 +4073,20 @@
     object-fit: cover;
   }
   .tabletop-hand > .hand-cell + .hand-cell { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
+  /* Shield mode (Table options): the hand row sits at the player's edge of
+     the mat and each card has a full card back under it, shifted half a
+     card toward the market (the seat's own "up": seat 1's content is
+     rotated with it). A shield over the cards leaves the half backs out. */
+  .tabletop-hand.shielded { align-items: end; }
+  .tabletop-hand.shielded .hand-cell { position: relative; }
+  .tabletop-hand.shielded .hand-cell > .table-hand-card { z-index: 1; }
+  .shield-back {
+    position: absolute; left: 0; top: -50%; z-index: 0;
+    display: block; width: var(--hand-card-size); height: var(--hand-card-size);
+    padding: 0.18rem; border: 2px solid #315f58; border-radius: 0.55rem; background: #183a37;
+    pointer-events: none;
+  }
+  .shield-back > img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 0.35rem; }
   .table-hand-card, .table-herd-card { cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; }
   .table-hand-card.ghost { display: block; visibility: hidden; border-color: transparent; background: none; }
   /* Released ghost: it has moved to the slot side and looks exactly like an
