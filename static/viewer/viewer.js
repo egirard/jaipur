@@ -1619,7 +1619,15 @@ function animateCards(dt, t) {
     // runs 0..PI, so sin peaks mid-flip), and rises slightly as it's zoomed
     // so an enlarged card floats above its unrevealed neighbors.
     const flipLift = Math.sin(THREE.MathUtils.clamp(node.current, 0, Math.PI)) * 0.05;
-    node.group.position.y = 0.001 + node.zBias + flipLift + (scale - 1) * 0.02;
+    // A tile (a sale number, a bonus mark, the ✕, a rail coin's preview)
+    // lies over a card or coin: 6 mm up, above every card plane (zBias tops
+    // out at 4.4 mm), so the card face never hides it and a tap reaches it
+    // first. Tiles shared the cards' planes before, and a number whose
+    // per-id offset fell below its card's was drawn under the face: of a
+    // raised set only the odd number showed, with the ✕ (beyond the card's
+    // corner) always visible.
+    const tileLift = node.kind === 'tile' ? 0.006 : 0;
+    node.group.position.y = 0.001 + tileLift + node.zBias + flipLift + (scale - 1) * 0.02;
   }
 }
 
