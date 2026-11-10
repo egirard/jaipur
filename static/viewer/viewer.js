@@ -598,10 +598,15 @@ function buildNode(n) {
   // table frame documented in docs/ARCHITECTURE.md.
   if (n.kind !== 'badge') {
     const frontGeo = new THREE.PlaneGeometry(wM, hM).rotateX(-Math.PI / 2);
+    // A tile (a sale number, a bonus mark, the ✕, a preview coin) is drawn
+    // after the cards and without depth testing, like a count badge: it lies
+    // over a card or coin and must show whatever plane that piece is on.
+    const tile = n.kind === 'tile';
     const front = new THREE.Mesh(
       frontGeo,
-      new THREE.MeshBasicMaterial({ map: n.getFaceTex(), transparent: true })
+      new THREE.MeshBasicMaterial({ map: n.getFaceTex(), transparent: true, ...(tile ? { depthTest: false, depthWrite: false } : {}) })
     );
+    if (tile) front.renderOrder = 95;
     front.userData.cardId = n.id;
     flip.add(front);
     raycastMeshes.push(front);
