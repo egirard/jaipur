@@ -23,6 +23,7 @@ const nameInput = document.getElementById('name');
 const nameLabel = document.getElementById('nameLabel');
 const goBtn = document.getElementById('go');
 const goFlatBtn = document.getElementById('goFlat');
+const flagHint = document.getElementById('flagHint');
 const seatedMsg = document.getElementById('seated');
 // One button does everything: it joins the table AND enters AR in the
 // same tap (entering AR without joining left the player locked out).
@@ -155,6 +156,30 @@ function renderJoin() {
   goFlatBtn.classList.toggle('primary', noXr);
   goFlatBtn.disabled = !(flatReady && nameOk && tableOk && open);
   goFlatBtn.textContent = needsName() ? 'Join table & play using phone' : 'Play using phone';
+  renderFlagHint();
+}
+
+// Image tracking (auto-alignment on the table) sits behind
+// chrome://flags/#webxr-incubations. Chromium exposes the Image Tracking
+// interfaces only while that feature is on — XRFrame.getImageTrackingResults
+// is absent otherwise — so a phone with WebXR can tell before any session;
+// failing that, the last AR session on this phone remembers whether it got
+// the feature (arviewer:image-tracking). true / false / null (no way to know).
+function imageTrackingEnabled() {
+  if (typeof XRFrame !== 'undefined') return 'getImageTrackingResults' in XRFrame.prototype;
+  try {
+    const seen = localStorage.getItem('arviewer:image-tracking');
+    if (seen === 'yes' || seen === 'no') return seen === 'yes';
+  } catch { /* ignore */ }
+  return null;
+}
+function renderFlagHint() {
+  const known = xrSupported === true ? imageTrackingEnabled() : true;
+  flagHint.classList.toggle('hidden', known === true);
+  if (known === true) return;
+  flagHint.innerHTML = known === false
+    ? 'Image tracking is off in this Chrome: turn on <code>chrome://flags/#webxr-incubations</code> and relaunch for auto-alignment; otherwise tap the table surface to place the cards.'
+    : 'Auto-alignment needs <code>chrome://flags/#webxr-incubations</code>; otherwise tap the table surface to place the cards.';
 }
 
 if (seatToken) {
@@ -334,8 +359,7 @@ async function readyCheck() {
   const pieceCount = ((latestState.v ?? 0) >= 1 ? latestState.nodes : latestState.cards)?.length ?? 0;
   lobbyMsg.textContent =
     `Session ${sessionId} · ${pieceCount} pieces` +
-    `${seatedAs ? '' : ` · Player ${seatNo}`}\n` +
-    'Auto-alignment needs chrome://flags/#webxr-incubations; otherwise tap to place.';
+    `${seatedAs ? '' : ` · Player ${seatNo}`}`;
   renderJoin();
 }
 
@@ -1028,6 +1052,7 @@ async function enterAR() {
   const died = new Promise((resolve) => xrSession.addEventListener('end', resolve, { once: true }));
 
   imageTrackingActive = xrSession.enabledFeatures?.includes('image-tracking') ?? false;
+  try { localStorage.setItem('arviewer:image-tracking', imageTrackingActive ? 'yes' : 'no'); } catch { /* ignore */ }
   startDiagReports();
   applyDebugFlags();
   const hitTestAvailable = xrSession.enabledFeatures?.includes('hit-test') ?? true;

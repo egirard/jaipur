@@ -20,20 +20,26 @@
   }
   #lobby h1 { font-size: 18px; letter-spacing: 3px; margin: 0; }
   #lobby p { max-width: 300px; line-height: 1.35; opacity: 0.8; white-space: pre-line; margin: 0; }
-  #join { display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: min(100%, 260px); }
+  #join { display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: min(100%, 300px); }
   #join label { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; opacity: 0.7; }
   #name {
     font-size: 15px; padding: 9px 12px; border-radius: 10px; width: 100%; text-align: center;
     border: 1px solid #39435c; background: #141b30; color: #dfe6f5;
   }
   #name:focus { outline: 2px solid #3f8cff; }
-  #go {
-    font-size: 15px; font-weight: 600; padding: 11px 18px; border-radius: 999px; width: 100%;
-    border: none; background: #3f8cff; color: #fff; cursor: pointer;
+  /* Both ways in are full-width pills of a thumb's height (the phone view's
+     button used to be a bare browser button, 19 px tall). */
+  #join button {
+    font-size: 16px; font-weight: 600; padding: 13px 14px; min-height: 48px; border-radius: 999px; width: 100%;
+    border: none; background: #3f8cff; color: #fff; cursor: pointer; font-family: inherit;
   }
   #go:disabled { background: #39435c; opacity: 0.5; }
   #join .secondary { background: #141b30; color: #dfe6f5; border: 1px solid #39435c; }
   #join .secondary:disabled { opacity: 0.5; }
+  /* The webxr-incubations note, right under Enter AR, only while the flag is
+     not known to be on (see imageTrackingEnabled in viewer.js). */
+  #flagHint { font-size: 11px; line-height: 1.35; color: #ffd27a; opacity: 0.85; margin: -2px 0 2px; text-align: center; }
+  #flagHint code { font-family: inherit; font-weight: 600; overflow-wrap: anywhere; }
   #flat {
     position: fixed; inset: 0; z-index: 4; overflow: auto; box-sizing: border-box;
     padding: calc(10px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
@@ -205,6 +211,7 @@
       <label id="nameLabel" for="name" class="hidden">Your trader name</label>
       <input id="name" class="hidden" maxlength="32" placeholder="Your trader name" autocapitalize="words">
       <button id="go" type="submit" disabled>Enter AR</button>
+      <p id="flagHint" class="hidden"></p>
       <button id="goFlat" type="button" class="secondary" disabled>Play using phone</button>
     </form>
     <p id="lobbyMsg">Connecting to the table…</p>
@@ -268,7 +275,7 @@
     </div>
     <div id="hud"></div>
   </div>
-  <span id="build">build c632fb5·table</span>
+  <span id="build">build 9ac8495·table</span>
   <script>
     // Any script failure lands in the lobby instead of a silently dead page.
     (function () {
@@ -281,8 +288,8 @@
       window.addEventListener('unhandledrejection', function (e) { show(String(e.reason && e.reason.message || e.reason)); });
     })();
   </script>
-  <!-- c632fb5·table is stamped by the Pages workflow so the HTML always loads
+  <!-- 9ac8495·table is stamped by the Pages workflow so the HTML always loads
        the script it was published with (Pages caches both for 10 min). -->
-  <script type="module" src="./viewer.js?v=c632fb5·table"></script>
+  <script type="module" src="./viewer.js?v=9ac8495·table"></script>
 </body>
 </html>
