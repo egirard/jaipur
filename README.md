@@ -93,6 +93,13 @@ see their private cards in AR, while all play happens on the table.
   [docs/BACKGROUND-ADAPTATION.md](docs/BACKGROUND-ADAPTATION.md).
 - Hold a face-down hand card to peek at it on the table (shield it with
   your other hand); the AR phones are not told.
+- Selling happens behind the shield: tap a hand card and it rises with
+  every card of its kind, each carrying the worth of selling it and the
+  cards to its left (a greyed number cannot be sold on its own), the bonus
+  token it would earn face down at its foot, and an ✕ on the last. Tap a
+  number to sell that many; tap a market card instead to place the tapped
+  card as a trade return. The prompt pill and the token rails say nothing
+  about a raised set.
 - The gear in each player's upper-left corner of the market opens **Table
   options**: the tabletop id, the screen diagonal (check it against a bank
   card outline), the screen/viewport geometry the phones are told about,

@@ -1881,10 +1881,12 @@
       await publishIntent(uid, [...selectedReturnIds(uid), loadedReturn], nextLoads);
       return;
     }
-    const returnCardId = selectedReturnIds(uid)[0];
+    const sale = handSale?.uid === uid ? handSale : null; // a raised set: the tapped card is the return, the rest lower
+    const returnCardId = sale?.primary ?? selectedReturnIds(uid)[0];
     if (!returnCardId) return;
+    if (sale) handSale = null;
     startIntentFlight(uid, returnCardId, marketCardId);
-    let remaining = selectedReturnIds(uid).filter((id) => id !== returnCardId);
+    let remaining = sale ? [] : selectedReturnIds(uid).filter((id) => id !== returnCardId);
     const nextLoads = { ...loads, [marketCardId]: returnCardId };
     // Play improvement: placing a camel re-selects the next free camel, so
     // a multi-camel trade is one tap per market card.
@@ -1989,6 +1991,64 @@
   function salePoints(kind: Good, count: number): number {
     return lobby.round?.goodsTokens[kind].slice(0, count).reduce((sum, token) => sum + token.value, 0) ?? 0;
   }
+
+  // Selling from the hand, behind the shield. A tap on a hand card raises
+  // it with every card of its kind (they are the selection, the tapped one
+  // first), and each raised card carries the worth of selling it and the
+  // cards to its left (toward the slots): "5, 10, 15" over three silver,
+  // the 5 greyed since one silver alone cannot be sold. A tap on a number
+  // sells that many (the usual sale animation); an ✕ on the last card
+  // lowers them; a tap on a market card instead places the tapped card as
+  // a trade return and lowers the rest, the numbers gone. The prompt pill
+  // and the token rails say nothing about it: it is the player's business
+  // behind the shield. Table-local, like the rail's staged sale.
+  let handSale = $state<{ uid: string; kind: Good; primary: string } | null>(null);
+  const seatOf = (uid: string): Seat => (lobby.players.find((p) => p.uid === uid)?.seat === 1 ? 1 : 2);
+  async function tapHandCard(uid: string, cardId: string) {
+    if (!canSelectReturns(uid)) return;
+    const loads = exchangeLoads(uid);
+    if (Object.values(loads).includes(cardId)) return;
+    if (handSale?.uid === uid && selectedReturnIds(uid).includes(cardId)) { await cancelHandSale(); return; } // a raised card lowers the set
+    const kind = lobby.round?.hands[uid]?.find((c) => c.id === cardId)?.kind;
+    const group = kind && isGood(kind) && Object.keys(loads).length === 0 ? (lobby.round?.hands[uid] ?? []).filter((c) => c.kind === kind).map(({ id }) => id) : [];
+    if (kind && isGood(kind) && group.length > 0 && lobby.round && isLegalSale(lobby.round, uid, kind, group)) {
+      handSale = { uid, kind, primary: cardId };
+      await publishIntent(uid, [cardId, ...group.filter((id) => id !== cardId)], loads);
+      return;
+    }
+    handSale = null;
+    await toggleReturn(uid, cardId);
+  }
+  async function cancelHandSale() {
+    const sale = handSale;
+    handSale = null;
+    if (sale) await publishIntent(sale.uid, [], exchangeLoads(sale.uid));
+  }
+  async function sellFromHand(count: number) {
+    const sale = handSale;
+    if (!sale || busy || !saleCounts(sale.uid, sale.kind).includes(count)) return;
+    handSale = null;
+    await sell(sale.kind, seatOf(sale.uid), count);
+  }
+  /** What the number on a raised card says: its place in the set (from the slots), the worth so far, whether that many may be sold, the bonus it would earn, and whether it is the last (the ✕ goes there). */
+  function saleStep(uid: string, cardId: string) {
+    const sale = handSale;
+    if (!sale || sale.uid !== uid) return null;
+    const group = handLayout(uid).flatMap((entry) => (entry.card?.kind === sale.kind ? [entry.card.id] : []));
+    const k = group.indexOf(cardId) + 1;
+    if (k === 0) return null;
+    const size: '3' | '4' | '5' | null = k >= 5 ? '5' : k === 4 ? '4' : k === 3 ? '3' : null;
+    return { k, total: salePoints(sale.kind, k), legal: saleCounts(uid, sale.kind).includes(k), last: k === group.length, bonus: size && (lobby.round?.bonusTokens[size].length ?? 0) > 0 ? size : null };
+  }
+  // The raised set lapses when it stops describing the table: the turn
+  // passes, a trade begins, the selection changes under it.
+  $effect(() => {
+    if (!handSale) return;
+    const { uid, kind } = handSale;
+    const selected = selectedReturnIds(uid);
+    const group = (lobby.round?.hands[uid] ?? []).filter((c) => c.kind === kind).map(({ id }) => id);
+    if (lobby.round?.activeUid !== uid || pendingDraw || Object.keys(exchangeLoads(uid)).length > 0 || selected.length === 0 || !selected.every((id) => group.includes(id))) handSale = null;
+  });
 
   // Selling takes two taps like every other move: the first stages the
   // sale (the stack shows a ✓ with an ✕ beside it, its coins glow with the
@@ -3144,8 +3204,8 @@
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
             data-card-revealed={(showHands && player.uid !== lobby.bot?.uid) || revealedCardIds.includes(card.id) || undefined}
             onclick={(e) => { e.preventDefault(); }}
-            onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && canSelectReturns(player.uid) && !loaded) { e.preventDefault(); void toggleReturn(player.uid, card.id); } }}
-            onpointerdown={(e) => startLongPress(e, card.id, canSelectReturns(player.uid) && !loaded ? () => { void toggleReturn(player.uid, card.id); } : undefined)}
+            onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && canSelectReturns(player.uid) && !loaded) { e.preventDefault(); void tapHandCard(player.uid, card.id); } }}
+            onpointerdown={(e) => startLongPress(e, card.id, canSelectReturns(player.uid) && !loaded ? () => { void tapHandCard(player.uid, card.id); } : undefined)}
             onpointerup={(e) => endLongPress(e, card.id)}
             onpointercancel={(e) => endLongPress(e, card.id)}
             onpointerleave={(e) => endLongPress(e, card.id)}
@@ -3156,6 +3216,30 @@
               <img class="peek-back" src={componentImage('card-back')} alt="" draggable="false" />
               <img class="peek-face" src={componentImage(card.kind)} alt="" draggable="false" />
             </span>
+            {#if selected && handSale?.uid === player.uid && handSale.kind === card.kind}
+              {@const step = saleStep(player.uid, card.id)}
+              {#if step}
+                <!-- The sale, behind the shield: the worth of this card and those to its left; the bonus it would earn; ✕ on the last. -->
+                <span
+                  class="sale-step"
+                  class:illegal={!step.legal}
+                  role="button"
+                  tabindex="-1"
+                  aria-label={step.legal ? `Sell ${step.k} for ${step.total} points` : `${step.k} cannot be sold`}
+                  data-hand-sale-count={step.k}
+                  data-hand-sale-legal={step.legal || undefined}
+                  onpointerdown={(e) => e.stopPropagation()}
+                  onclick={(e) => { e.stopPropagation(); e.preventDefault(); if (step.legal) void sellFromHand(step.k); }}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (step.legal) void sellFromHand(step.k); } }}
+                >{step.total}</span>
+                {#if step.bonus}
+                  <span class="sale-bonus" aria-hidden="true" data-hand-sale-bonus={step.bonus}><TokenChip token={{ id: `preview-bonus-${step.bonus}`, kind: `bonus-${step.bonus}`, value: 0 }} hidden /></span>
+                {/if}
+                {#if step.last}
+                  <span class="sale-cancel" role="button" tabindex="-1" aria-label="Lower the cards" data-hand-sale-cancel onpointerdown={(e) => e.stopPropagation()} onclick={(e) => { e.stopPropagation(); e.preventDefault(); void cancelHandSale(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); void cancelHandSale(); } }}>✕</span>
+                {/if}
+              {/if}
+            {/if}
           </button>
           {/if}
           </span>
@@ -3424,7 +3508,7 @@
         {:else if Object.keys(promptLoads).length === 1}
           <span>1 return placed · place another, or cancel.</span>
           <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Cancel</button>
-        {:else if promptReturns.length > 0}
+        {:else if promptReturns.length > 0 && handSale?.uid !== activeUid}
           <span>{promptReturns.length} selected · tap a return area or token stack.</span>
           <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Clear</button>
         {:else}
@@ -4199,6 +4283,13 @@
   .herd-badge { position: absolute; right: -0.2rem; bottom: -0.4rem; z-index: 3; min-width: 1.6rem; padding: 0.15rem 0.4rem; border-radius: 99rem; background: #66ffcc; color: #0d2622; font-weight: 800; font-size: 0.9rem; text-align: center; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); }
   .table-hand-card.selected, .table-herd-card.selected { transform: translateY(-14%); box-shadow: 0 0 0 3px #66ffcc, 0 0.5rem 1rem rgb(10 32 30 / 35%); z-index: 1; }
   .table-hand-card.loaded, .table-herd-card.loaded { opacity: 0.45; }
+  /* The sale behind the shield (handSale): a number on each raised card
+     (greyed where that many cannot be sold), the bonus token it would earn
+     face down at its foot, and an ✕ on the last card. */
+  .sale-step { position: absolute; left: 50%; top: 30%; z-index: 4; display: grid; place-items: center; min-width: 1.9em; height: 1.9em; padding: 0 0.35em; transform: translate(-50%, -50%); border: 2px solid #eafff0; border-radius: 99rem; background: #1d7a4a; color: #eafff0; font-size: clamp(0.85rem, 2.2vmin, 2rem); font-weight: 900; line-height: 1; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); cursor: pointer; }
+  .sale-step.illegal { background: #777; color: #e4e4e4; opacity: 0.7; cursor: default; }
+  .sale-cancel { position: absolute; right: -0.45em; top: -0.45em; z-index: 5; display: grid; width: 1.6em; height: 1.6em; place-items: center; border: 2px solid #fff4f0; border-radius: 50%; background: #a6442d; color: #fff4f0; font-size: clamp(0.8rem, 2vmin, 1.8rem); font-weight: 900; line-height: 1; box-shadow: 0 0.15rem 0.4rem rgb(0 0 0 / 35%); cursor: pointer; }
+  .sale-bonus { position: absolute; left: 50%; bottom: 5%; z-index: 4; width: 44%; aspect-ratio: 1; transform: translateX(-50%); pointer-events: none; filter: drop-shadow(0 0.1rem 0.25rem rgb(0 0 0 / 40%)); }
   .market-card :global(.piece-image) { width: 100%; height: 100%; object-fit: cover; }
   .tabletop-herd {
     display: grid;
