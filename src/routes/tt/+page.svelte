@@ -4280,18 +4280,22 @@
   .tabletop-hand.shielded { align-items: end; }
   .tabletop-hand.shielded .hand-cell { position: relative; }
   .tabletop-hand.shielded .hand-cell > .table-hand-card { z-index: 1; }
-  /* Only the half that peeks out is drawn (clip-path): the lower half of a
-     back lies under the card, and an open slot's outline would otherwise
-     cross the slot's own dashed field. */
-  .shield-back, .shield-slot { clip-path: inset(0 0 50% 0); }
-  .shield-back {
+  /* Each is a true half: half a card tall, open along the edge where it
+     meets the card or slot (no bottom border, square bottom corners), the
+     back's art showing its top half. Nothing of it reaches the card's own
+     field, and the main slots' dashed outlines are not drawn in Shield mode
+     (they lie under the shield; the half outlines count the open slots), so
+     no line runs under a half card. */
+  .shield-back, .shield-slot {
     position: absolute; left: 0; top: -50%; z-index: 0;
-    display: block; width: var(--hand-card-size); height: var(--hand-card-size);
-    padding: 0.18rem; border: 2px solid #315f58; border-radius: 0.55rem; background: #183a37;
-    pointer-events: none;
+    display: block; width: var(--hand-card-size); height: calc(var(--hand-card-size) / 2);
+    border: 2px solid #315f58; border-bottom: none; border-radius: 0.55rem 0.55rem 0 0;
+    overflow: hidden; pointer-events: none;
   }
-  .shield-back > img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 0.35rem; }
-  .shield-slot { position: absolute; left: 0; top: -50%; z-index: 0; display: block; width: var(--hand-card-size); height: var(--hand-card-size); border: 2px dashed #b7aa8d; border-radius: 0.55rem; opacity: 0.6; pointer-events: none; }
+  .shield-back { padding: 0.18rem 0.18rem 0; background: #183a37; }
+  .shield-back > img { display: block; width: 100%; height: calc(var(--hand-card-size) - 0.36rem - 4px); object-fit: cover; border-radius: 0.35rem; }
+  .shield-slot { border-style: dashed; border-color: #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0; opacity: 0.6; } /* like the main slots: open on the right, so overlapping slots do not double their lines */
+  .tabletop-hand.shielded .hand-slot, .tabletop-hand.shielded .table-hand-card.ghost.as-slot { border-color: transparent; }
   .table-hand-card, .table-herd-card { cursor: pointer; transition: transform 160ms ease, box-shadow 160ms ease; }
   .table-hand-card.ghost { display: block; visibility: hidden; border-color: transparent; background: none; }
   /* Released ghost: it has moved to the slot side and looks exactly like an
