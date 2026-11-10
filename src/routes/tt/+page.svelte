@@ -3749,6 +3749,7 @@
           {/if}
         </div>
       </div>
+      <p class="panel-build" data-panel-build>Build {buildHash} · {status}</p>
     </section>
   {/if}
 
@@ -4680,9 +4681,13 @@
     0%, 52% { transform: rotateY(0deg); }
     78%, 100% { transform: rotateY(180deg); }
   }
-  .table-status { position: fixed; z-index: 15; right: calc(var(--rail-width) + 1rem); bottom: 0.4rem; margin: 0; color: #315f58; font-size: 0.65rem; font-weight: 700; }
-  .table-status.for-top { top: 0.4rem; right: auto; bottom: auto; left: calc(var(--rail-width) + 1rem); transform: rotate(180deg); }
-  .table-status[data-status='error'] { color: #a3212a; }
+  /* The status and build stamp sit on the cloth to the left of the bottom
+     mat (it used to sit to the right, under the log pill and the herd);
+     for the top player it turns to the left of their mat in their frame. */
+  .table-status { position: fixed; z-index: 15; left: calc(var(--rail-width) + 1rem); bottom: 0.4rem; margin: 0; color: #fff4d6; text-shadow: 0 0 3px #2a0a05, 0 0 6px #2a0a05; font-size: 0.7rem; font-weight: 700; pointer-events: none; }
+  .table-status.for-top { top: 0.4rem; left: auto; bottom: auto; right: calc(var(--rail-width) + 1rem); transform: rotate(180deg); }
+  .table-status[data-status='error'] { color: #ffb3a7; }
+  .scale-panel .panel-build { margin: 0.8rem 0 0; padding-top: 0.5rem; border-top: 1px solid #d9ccb0; color: #5d5240; font-size: 0.8rem; }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
