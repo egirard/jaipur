@@ -44,7 +44,7 @@ Table → relay → phones (the relay caches each of these for late joiners):
 | `tracking` | the static picture of the screen the phones register against: a down-scaled whole-screen JPEG and cut-out regions (three market-band columns for everyone, token-rail rows per seat), each with its size in metres | on attach, and whenever the static layer changes (debounced ~1.2 s) |
 | `assets` | artwork by id (card faces, coin tiles); shared, plus a private set per seat | when the set changes |
 | `state` | the shared scene: market cards, deck, discard, tokens, badges, as nodes positioned in metres | on every store change, throttled to ~12/s |
-| `stateFor` (per seat) | that seat's private scene: hand, herd, staged pieces, sale preview (each glowing coin printed with its value), bonus values, the market band turned to face the seat (same ids as the shared pieces; private wins), who holds the seat, bot offers, turn flag, notes, buttons | on discrete events, not throttled |
+| `stateFor` (per seat) | that seat's private scene: hand, herd, staged pieces, sale preview (each glowing coin printed with its value), bonus values, the sale raised in the hand (`handSale`: the numbers, bonus marks and ✕ the phone draws on its cards, and `sale:` tiles standing over the cards in AR), the market band turned to face the seat (same ids as the shared pieces; private wins), who holds the seat, bot offers, turn flag, notes, buttons | on discrete events, not throttled |
 
 Phones → relay → table (the relay stamps the phone's `viewerId` and seat
 token on every action, so the table never trusts what a phone claims):

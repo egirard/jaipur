@@ -41,7 +41,7 @@
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
   import { ArTabletop, type ArTrackingTargets, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type PhonePrompt, type SalePreview } from '$lib/ar/arTabletop';
   import { bundledViewerBase, lanEndpoints, loadLanAddress, probeBundledViewer, probeSameOriginRelay, resolveArEndpoints, sameOriginEndpoints, saveLanAddress, type ArEndpointInput, type ArEndpoints } from '$lib/ar/arEndpoints';
-  import type { ArRelayStatus } from '$lib/ar/arHost';
+  import type { ArRelayStatus, ArScene } from '$lib/ar/arHost';
   import {
     WASH_LEVELS, applyMove, brightnessPercent, checkEngagement, isEngaged, loadCloth, noEvidenceReason, saveCloth, screenKey, startSweep,
     stepSweep, sweepIdle, sweepWaiting, sweepWash, trackedShare, washIndex, type ClothRecord, type PhoneSample, type SweepState
@@ -987,6 +987,7 @@
         if (player && player.uid !== lobby.bot?.uid) void marketTapFromPhone(player.uid, cardId);
       };
       ar.salesFor = (uid) => phoneSales(uid);
+      ar.handSaleFor = (uid) => handSaleScene(uid);
       ar.promptFor = (uid) => phonePrompt(uid);
       ar.previewFor = (kind) => (isGood(kind) ? salePreview(kind) : null); // AR-only sale preview
       ar.onViewersChanged = (n) => (arViewers = n);
@@ -1731,7 +1732,7 @@
   async function toggleFromPhone(uid: string, cardId: string) {
     if (!canSelectReturns(uid)) return;
     const herd = lobby.round?.herds[uid] ?? [];
-    if (!herd.some((c) => c.id === cardId)) return toggleReturn(uid, cardId);
+    if (!herd.some((c) => c.id === cardId)) return tapHandCard(uid, cardId); // raises the set with its numbers, as a tap on the table does
     const loads = exchangeLoads(uid);
     if (Object.values(loads).includes(cardId)) return;
     const selected = selectedReturnIds(uid);
@@ -1766,6 +1767,10 @@
     if (id === 'trade-cancel') return cancelTrade(uid);
     if (id === 'sale-confirm') { if (pendingSale?.uid === uid) confirmSale(); return; }
     if (id === 'sale-cancel') { if (pendingSale?.uid === uid) cancelSale(); return; }
+    // The sale raised in the hand, driven from the phone or AR: a number sells that many, the ✕ lowers the set.
+    if (id === 'sale:cancel') { if (handSale?.uid === uid) await cancelHandSale(); return; }
+    const step = /^sale:([a-z]+):(\d+)$/.exec(id);
+    if (step) { if (handSale?.uid === uid && handSale.kind === step[1]) await sellFromHand(Number(step[2])); return; }
     const sell = /^sell:([a-z]+)$/.exec(id);
     if (sell && isGood(sell[1]) && !pendingSale && canSell(sell[1])) tapSell(sell[1], seat);
   }
@@ -2046,6 +2051,19 @@
     const size: '3' | '4' | '5' | null = k >= 5 ? '5' : k === 4 ? '4' : k === 3 ? '3' : null;
     return { k, total: salePoints(sale.kind, k), legal: saleCounts(uid, sale.kind).includes(k), last: k === group.length, bonus: size && (lobby.round?.bonusTokens[size].length ?? 0) > 0 ? size : null };
   }
+  /** The raised set as the phone sees it (ArScene.handSale): one step per raised card, in the hand's order. */
+  function handSaleScene(uid: string): NonNullable<ArScene['handSale']> | null {
+    const sale = handSale;
+    if (!sale || sale.uid !== uid) return null;
+    const steps = handLayout(uid).flatMap((entry) => {
+      if (entry.card?.kind !== sale.kind) return [];
+      const step = saleStep(uid, entry.card.id);
+      return step ? [{ id: entry.card.id, ...step }] : [];
+    });
+    return steps.length ? { kind: sale.kind, steps } : null;
+  }
+  // The phones see the raised set (numbers on their cards, tiles in AR).
+  $effect(() => { void handSale; publishAr(); });
   // The raised set lapses when it stops describing the table: the turn
   // passes, a trade begins, the selection changes under it.
   $effect(() => {

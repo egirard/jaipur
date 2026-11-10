@@ -97,6 +97,16 @@ export type ArScene = {
    *  in the hand; `control` names the button to send to start that sale
    *  when the host allows it right now. */
   sales?: { kind: string; cards: number; base: number; bonus: string | null; legal: boolean; why?: string; control?: string }[];
+  /** The sale raised in the hand (the table's behind-the-shield sale), for
+   *  the phone view to draw on the cards: per raised card its place from
+   *  the open slots (`k`), the worth of selling it and the cards before it
+   *  (`total`), whether that many may be sold (`legal`: a greyed number
+   *  otherwise), the bonus size it would earn ('3' | '4' | '5' | null) and
+   *  whether it is the last (the ✕ goes there). Pressing a number sends
+   *  `control` `sale:<kind>:<k>`, the ✕ `sale:cancel`. In AR the same
+   *  numbers stand as `sale:` tiles over the cards and are tapped with
+   *  `select`; the bonus tiles (`salebonus:<k>`) are inert. */
+  handSale?: { kind: string; steps: { id: string; k: number; total: number; legal: boolean; bonus: '3' | '4' | '5' | null; last: boolean }[] };
   /** Diagnostics the host asks viewers to show (shared scene only):
    *  `targets` outlines the tracking targets in AR, `diag` prints the
    *  viewer's registration numbers on screen, `regcheck` asks the named

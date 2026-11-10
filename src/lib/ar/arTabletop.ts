@@ -414,6 +414,10 @@ export class ArTabletop {
   /** Page-supplied: the move in progress for a player (a draw, a trade or a
    *  sale awaiting confirmation), as lines and buttons for the phone. */
   promptFor: ((uid: string) => PhonePrompt | null) | null = null;
+  /** Page-supplied: the sale raised in a player's hand (the behind-the-shield
+   *  sale), or null. Published as `handSale` for the phone view and as
+   *  `sale:` tiles over the raised cards in AR. */
+  handSaleFor: ((uid: string) => NonNullable<ArScene['handSale']> | null) | null = null;
   /** Set by the page; published to a seat while a bot may still be seated opposite it. */
   botOffers: ArBotOffer[] = [];
   /** Page-supplied: what selling `kind` earns the active trader now. */
@@ -482,8 +486,9 @@ export class ArTabletop {
         // own pieces. Only the seat's own pieces are honoured. (AR `tap` on
         // anything else stays viewer-local: an inspect, never a selection.)
         if (a.action === 'select' && seat && typeof a.nodeId === 'string') {
-          const m = /^(hand|herd|mkt):(.+)$/.exec(a.nodeId);
+          const m = /^(hand|herd|mkt|sale):(.+)$/.exec(a.nodeId);
           if (m && m[1] === 'mkt') this.onMarketTap?.(seat, m[2]);
+          else if (m && m[1] === 'sale') this.onControl?.(seat, a.nodeId); // a number or the ✕ over a raised card, tapped in AR
           else if (m) this.onToggleReturn?.(seat, m[2]);
         }
         // Registration reports from phones in AR: shown, never answered.
@@ -941,6 +946,27 @@ export class ArTabletop {
           }
         }
       }
+      // The sale raised in the hand: its numbers, bonus marks and ✕ stand
+      // over the raised cards where the table draws them.
+      const handSale = player ? this.handSaleFor?.(player.uid) ?? null : null;
+      if (handSale) {
+        for (const step of handSale.steps) {
+          const card = document.querySelector(`[data-table-hand-card="${CSS.escape(step.id)}"]`);
+          if (!card) continue;
+          const place = (el: Element | null, id: string, face: string, img: () => string, tap: boolean, glow: string | false) => {
+            const rect = el?.getBoundingClientRect();
+            if (!rect || !rect.width) return;
+            const w = rect.width * this.mPerPx;
+            if (!seatAssets[face]) seatAssets[face] = { img: img(), wM: w, hM: w };
+            const { xM, zM } = this.toMeters(rect);
+            handNodes.push({ id, kind: 'tile', xM, zM, rotY: tileRot, faceUp: true, peek: false, glow, face, ...(tap ? {} : { tap: false }) });
+          };
+          place(card.querySelector('[data-hand-sale-count]'), `sale:${handSale.kind}:${step.k}`, step.legal ? `sale-${step.total}` : `salex-${step.total}`,
+            () => (step.legal ? drawCoinTile(String(step.total), '#1d7a4a', '#eafff0') : drawCoinTile(String(step.total), '#777777', '#e4e4e4')), step.legal, step.legal ? '#66ffcc' : false);
+          if (step.bonus) place(card.querySelector('[data-hand-sale-bonus]'), `salebonus:${step.k}`, `bonusdown-${step.bonus}`, () => drawCoinTile(step.bonus === '5' ? '5+' : step.bonus!, '#183a37', '#f8e7b7'), false, false);
+          if (step.last) place(card.querySelector('[data-hand-sale-cancel]'), 'sale:cancel', 'sale-x', () => drawCoinTile('✕', '#a6442d', '#fff4f0'), true, '#ffd27a');
+        }
+      }
       if (player && round) {
         for (const token of round.ownedBonusTokens[player.uid] ?? []) {
           const rect = document
@@ -988,7 +1014,8 @@ export class ArTabletop {
         ...(name ? { player: { name } } : {}),
         ...(canSeatBot ? { offers: { bot: this.botOffers } } : {}),
         ...(player && round ? { turn: myTurn, notes, score, sales } : {}),
-        ...(controls ? { controls } : {})
+        ...(controls ? { controls } : {}),
+        ...(handSale ? { handSale } : {})
       };
       const json = JSON.stringify(scene);
       if (this.lastSeatSceneJson.get(seat) !== json) {

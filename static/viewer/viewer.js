@@ -494,7 +494,7 @@ function normalizeChannel(state, channel) {
         glow: n.glow ?? false,
         // This seat's own hand card or camel: a tap in AR stages it on the
         // table (a `select` intent), the same as a tap on the table itself.
-        own: channel === 'seat' && /^(hand|herd):/.test(String(n.id)),
+        own: channel === 'seat' && /^(hand|herd|sale):/.test(String(n.id)), // sale: the numbers and ✕ over a raised set
         tap: n.tap !== false,
         tag: typeof n.tag === 'string' ? n.tag : '',
         count: n.count ?? 0,
@@ -761,6 +761,34 @@ function renderFlat() {
   const flip = hand.some((n) => Math.abs((n.rotY ?? 0) - Math.PI) < 0.01) ? -1 : 1;
   hand.sort((a, b) => flip * ((a.xM ?? 0) - (b.xM ?? 0)));
   flatHand.replaceChildren(...hand.map((n) => flatCard(n, assets, true, own)).filter(Boolean));
+  // The sale raised in the hand (the host's `handSale`): on each raised card
+  // the worth of selling it and the cards before it (greyed where that
+  // many cannot be sold), the bonus it would earn, and an ✕ on the last.
+  // A number or the ✕ sends a `control` — the host sells or lowers; the
+  // phone keeps nothing. (Spans with a role: the cell is itself a button.)
+  const handSale = own && seat?.handSale && typeof seat.handSale.kind === 'string' && Array.isArray(seat.handSale.steps) ? seat.handSale : null;
+  if (handSale) {
+    const control = (id, label) => (ev) => { ev.stopPropagation(); ev.preventDefault(); sendAction('control', undefined, { id }); flatMsg.textContent = label; };
+    const mark = (cls, text, role) => { const el = document.createElement('span'); el.className = cls; el.textContent = text; if (role) { el.setAttribute('role', 'button'); el.tabIndex = 0; } return el; };
+    for (const step of handSale.steps) {
+      if (!step || typeof step.id !== 'string') continue;
+      const cell = flatHand.querySelector(`[data-node="hand:${CSS.escape(step.id)}"]`);
+      if (!cell) continue;
+      const number = mark(`sale-step${step.legal ? '' : ' illegal'}`, String(step.total ?? ''), step.legal);
+      number.dataset.saleCount = String(step.k);
+      number.setAttribute('aria-label', step.legal ? `Sell ${step.k} for ${step.total}` : `${step.k} cannot be sold`);
+      if (step.legal) number.addEventListener('click', control(`sale:${handSale.kind}:${step.k}`, `Selling ${step.k}…`));
+      cell.append(number);
+      if (step.bonus) cell.append(mark('sale-bonus', step.bonus === '5' ? '5+' : String(step.bonus)));
+      if (step.last) {
+        const x = mark('sale-cancel', '✕', true);
+        x.dataset.saleCancel = '1';
+        x.setAttribute('aria-label', 'Lower the cards');
+        x.addEventListener('click', control('sale:cancel', 'Lowering…'));
+        cell.append(x);
+      }
+    }
+  }
   document.getElementById('flatHandCount').textContent = hand.length ? `${hand.length} / 7` : '';
   const herd = nodes.filter((n) => typeof n.id === 'string' && n.id.startsWith('herd:'));
   flatHerdWrap.classList.toggle('hidden', !own || (!herd.length && !hand.length));
@@ -851,8 +879,8 @@ function renderFlat() {
       ? (myTurn
         ? (complete
           ? 'Your turn. Tap a market card above to take it (a camel takes the whole herd), or select cards from your hand and tap market cards to trade; tap a sale below to sell. Each move asks you to confirm.'
-          : 'Your turn. Tap a card to select or deselect it; make the move on the table.')
-        : (complete ? 'Watch the table. Your cards stay private here.' : 'Your cards stay private here. Tap a card to select it; moves happen on the table.'))
+          : 'Your turn. Tap a card to raise it with the others of its kind: a number on a raised card sells that many, the ✕ lowers them; tap a market card on the table to trade instead.')
+        : (complete ? 'Watch the table. Your cards stay private here.' : 'Your cards stay private here. On your turn, tap a card to raise it with its kind and sell from the numbers; trades happen on the table.'))
       : seatedAs ? 'Waiting for the round to open…' : 'Joining the table…')
     : 'This link has no seat.';
 }
@@ -1199,7 +1227,9 @@ function onSelect(event) {
       if (node?.own) {
         if (node.tap) {
           sendAction('select', id);
-          setHud('Sent to the table — a glow on the card confirms it is staged; tap again to unstage. Use the market or token stacks on the table to finish the move.');
+          setHud(id.startsWith('sale:')
+            ? (id === 'sale:cancel' ? 'Sent to the table — lowering the cards.' : 'Sent to the table — selling.')
+            : 'Sent to the table — a glow on the card confirms it is staged; tap again to unstage. A number over a raised card sells that many; the ✕ lowers them.');
         } else {
           setHud(node.tag === 'On table'
             ? 'That card is already placed face-down on the table; take it back from the table.'
