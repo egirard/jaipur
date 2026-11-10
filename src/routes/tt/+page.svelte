@@ -2004,6 +2004,14 @@
     }
   });
 
+  // The worth of everything in the player's token row. While a bonus
+  // token of theirs is still face down the total is as secret as the
+  // token (hold the chip to see it); once scoring has turned them over,
+  // or the round is complete, it is shown openly.
+  const tokenTotal = (uid: string) => ownedTokens(uid).reduce((sum, token) => sum + token.value, 0);
+  const totalSecret = (uid: string) =>
+    (lobby.round?.ownedBonusTokens[uid] ?? []).some((token) => !(scoring ? scoring.revealedBonus.includes(token.id) : lobby.round?.status === 'complete'));
+
   function ownedTokens(uid: string): Token[] {
     if (!lobby.round) return [];
     return [
@@ -3184,7 +3192,30 @@
           oncontextmenu={(e) => e.preventDefault()}
         ><TokenChip {token} hidden={!(revealedTokenIds.includes(token.id) || (scoring ? scoring.revealedBonus.includes(token.id) : lobby.round?.status === 'complete'))} /></span>
       {/each}
-      {#if ownedTokens(player.uid).length === 0}<small>No tokens yet</small>{/if}
+      {#if ownedTokens(player.uid).length === 0}
+        <small>No tokens yet</small>
+      {:else}
+        {@const secret = totalSecret(player.uid)}
+        {@const shown = !secret || revealedTokenIds.includes(`total:${player.uid}`)}
+        <!-- The row's total, after the coins: "?" while a bonus token is still secret, held to see. -->
+        <span class="total-eq" aria-hidden="true">=</span>
+        <span
+          class="earned total"
+          class:secret
+          class:peeking={secret && shown}
+          data-token-total={player.uid}
+          data-token-total-shown={shown ? tokenTotal(player.uid) : undefined}
+          role="button"
+          tabindex="-1"
+          aria-label={secret ? 'Total of the tokens; hold to see it' : `Total of the tokens: ${tokenTotal(player.uid)}`}
+          onpointerdown={(e) => startTokenPress(e, `total:${player.uid}`)}
+          onpointerup={(e) => endTokenPress(e, `total:${player.uid}`)}
+          onpointercancel={(e) => endTokenPress(e, `total:${player.uid}`)}
+          onpointerleave={(e) => endTokenPress(e, `total:${player.uid}`)}
+          onlostpointercapture={(e) => endTokenPress(e, `total:${player.uid}`)}
+          oncontextmenu={(e) => e.preventDefault()}
+        >{shown ? tokenTotal(player.uid) : '?'}</span>
+      {/if}
     </div>
   </section>
 {/snippet}
@@ -4147,6 +4178,12 @@
   .seat-tokens .earned.arriving { visibility: hidden; }
   .seat-tokens .earned.bonus { filter: saturate(0.7); touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer; }
   .seat-tokens .earned.bonus.peeking { filter: none; z-index: 2; transform: scale(1.35); box-shadow: 0 0 0 3px #ffd27a; border-radius: 50%; transition: transform 160ms ease; }
+  /* The row's total: a cream-on-teal disc after the coins, "?" while a
+     bonus token is still face down (held to see, like the token). */
+  .seat-tokens .total-eq { margin-left: 0.2rem; font-size: clamp(0.8rem, 1.8vmin, 1.6rem); font-weight: 900; color: #5d5240; }
+  .seat-tokens .earned.total { display: grid; place-items: center; border: 0.14rem solid #f8e7b7; border-radius: 50%; background: #183a37; color: #fff4d6; font-size: clamp(0.7rem, 1.7vmin, 1.6rem); font-weight: 900; line-height: 1; box-shadow: 0 0.16rem 0.28rem rgb(24 58 55 / 34%); }
+  .seat-tokens .earned.total.secret { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer; }
+  .seat-tokens .earned.total.peeking { z-index: 2; transform: scale(1.35); box-shadow: 0 0 0 3px #ffd27a; transition: transform 160ms ease; }
   /* Empty hand slots sit to the left of the fanned cards; only the edges
      a real card would show are drawn (top, bottom, left — the right edge
      hides under the next card). */
