@@ -166,7 +166,7 @@ export class ArHost {
 
   // Everything published is remembered so a reconnect (ours or the relay's
   // restart) can replay the full picture.
-  private tracking: { image: string; widthM: number; epoch?: number; regions?: ArTrackingRegion[] } | null = null;
+  private tracking: { image: string; widthM: number; heightM?: number; epoch?: number; regions?: ArTrackingRegion[] } | null = null;
   private assets: Record<string, ArAsset> | null = null;
   private seatAssets = new Map<string, Record<string, ArAsset>>();
   private scene: ArScene | null = null;
@@ -297,10 +297,12 @@ export class ArHost {
    *  whenever the static layer or the physical scale changes. The layer must
    *  be feature-rich or phones will not lock — see the API doc. */
   /** What was last published as `tracking` (dev hooks and tests read it). */
-  get lastTracking(): { image: string; widthM: number; epoch?: number; regions?: ArTrackingRegion[] } | null { return this.tracking; }
+  get lastTracking(): { image: string; widthM: number; heightM?: number; epoch?: number; regions?: ArTrackingRegion[] } | null { return this.tracking; }
 
-  publishTracking(imageJpegDataUrl: string, widthM: number, epoch?: number, regions?: ArTrackingRegion[]): void {
-    this.tracking = { image: imageJpegDataUrl, widthM, ...(epoch != null ? { epoch } : {}), ...(regions?.length ? { regions } : {}) };
+  /** `heightM`: the screen's physical height, for a phone that registers
+   *  the display by its bezel (it needs the panel's size, not the image's). */
+  publishTracking(imageJpegDataUrl: string, widthM: number, epoch?: number, regions?: ArTrackingRegion[], heightM?: number): void {
+    this.tracking = { image: imageJpegDataUrl, widthM, ...(heightM != null ? { heightM } : {}), ...(epoch != null ? { epoch } : {}), ...(regions?.length ? { regions } : {}) };
     this.send({ type: 'tracking', tracking: this.tracking });
   }
 

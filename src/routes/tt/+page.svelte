@@ -95,6 +95,35 @@
   let phoneSamples = $state<Record<string, PhoneSample[]>>({});
   /** When each phone in AR first locked onto the table (its engagement window starts there). */
   let phoneFirstSeen = $state<Record<string, number>>({});
+  // AR calibration gate: while a phone is in AR and still searching for the
+  // table, the market cards stay off the screen so the phone has the whole
+  // market band of cloth to register from (the cards are occlusion to the
+  // tracker, and the band's columns are the targets). The gate lifts when
+  // every such phone has locked, left AR, been waved through from the
+  // prompt, or has been searching for CALIBRATION_GRACE_MS. Off by the
+  // option in Table options.
+  const CALIBRATION_GRACE_MS = 90_000;
+  let marketGate = $state(true);
+  let phoneFirstReport = $state<Record<string, number>>({});
+  let calibrationWaived = $state<Record<string, true>>({});
+  let gateTick = $state(0);
+  const calibratingPhones = (): PhoneDiag[] => {
+    void gateTick;
+    const now = Date.now();
+    return Object.entries(phoneDiags)
+      .filter(([id, d]) => d.state === 'searching' && !d.seen && !calibrationWaived[id] && now - (phoneFirstReport[id] ?? d.at) < CALIBRATION_GRACE_MS)
+      .map(([, d]) => d);
+  };
+  const marketHidden = $derived(marketGate && calibratingPhones().length > 0);
+  function waiveCalibration() {
+    const waived = { ...calibrationWaived };
+    for (const [id, d] of Object.entries(phoneDiags)) if (d.state === 'searching' && !d.seen) waived[id] = true;
+    calibrationWaived = waived;
+  }
+  function setMarketGate(on: boolean) {
+    marketGate = on;
+    try { localStorage.setItem('jaipur:tabletop:market-gate', on ? 'on' : 'off'); } catch { /* private mode */ }
+  }
   const clothBrightness = () => brightnessPercent(liveWash);
   /** Engaged phones' tracking over the last six seconds (the Evaluate button and the sweep pill). */
   const phonesTracking = () => trackedShare(phoneSamples, Date.now() - 6000);
@@ -306,11 +335,25 @@
     r.status === 'armed' ? 'waiting for the phone to enter AR (the phone says what to do)'
       : r.status === 'running' ? `step ${r.step + 1} of ${r.totalSteps}: ${r.stepTitle ?? r.stepId ?? ''}`
       : r.status === 'aborted' ? `the phone left AR during step ${r.step + 1}`
-      : `done${r.score ? ` · images ${r.score}` : ''}${r.epoch != null ? ` · epoch ${r.epoch}` : ''}`;
+      : `done${r.mode ? ` · ${r.mode}` : ''}${r.score ? ` · images ${r.score}` : ''}${r.epoch != null ? ` · epoch ${r.epoch}` : ''}${r.mode === 'bezel' ? ` · ${bezelLine(r)}` : ''}`;
   const phoneDiagFor = (seat: Seat): PhoneDiag | undefined =>
     Object.values(phoneDiags).filter((d) => d.seat === String(seat)).sort((a, b) => b.at - a.at)[0];
   const diagWord = (d: PhoneDiag | undefined) =>
     !d ? 'no phone' : d.state === 'tracked' ? 'locked' : d.state === 'emulated' ? 'holding' : d.state === 'lost' ? 'lost' : d.state === 'searching' ? 'searching' : d.state === 'no-tracking' ? 'no image tracking' : 'left AR';
+  /** Bezel mode in a phrase: found share, solve time, the gap to the image tracker, the captured ring. */
+  const bezelLine = (d: PhoneDiag | ArRegCheckReport) => {
+    if (d.mode !== 'bezel') return '';
+    const b = d.bezel;
+    if (!b) return 'bezel: no report';
+    if (!b.on) return `bezel off (${b.why ?? 'unavailable'})`;
+    return [
+      `bezel ${b.found ?? 0}/${b.analysed ?? 0} found`,
+      b.ms != null ? `${b.ms} ms` : '',
+      b.agreeMm != null ? `vs image ${Math.round(b.agreeMm)} mm ${b.agreeDeg?.toFixed(1) ?? '?'}°` : 'no image pose to compare',
+      b.profile ? `ring ${b.profile.bezelMm != null ? `${b.profile.bezelMm} mm` : '?'} grey ${b.profile.ring}/${b.profile.screen}` : 'capturing',
+      b.reason && !b.found ? b.reason : ''
+    ].filter(Boolean).join(' · ');
+  };
   const diagLine = (d: PhoneDiag) => {
     const parts = [
       `${d.tracked}/${d.frames} frames tracked${d.emulated ? `, ${d.emulated} held` : ''}`,
@@ -318,7 +361,9 @@
       d.targetId ? `target ${d.targetId}` : 'no target yet',
       d.scale ? `scale ×${d.scale.toFixed(2)}` : '',
       d.score ? `image ${d.score}` : '',
-      d.epoch != null ? `epoch ${d.epoch}` : ''
+      d.epoch != null ? `epoch ${d.epoch}` : '',
+      d.mode ? `mode ${d.mode}` : '',
+      bezelLine(d)
     ].filter(Boolean);
     return parts.join(' · ');
   };
@@ -340,7 +385,8 @@
       `${d.state} · frames ${d.frames} · tracked ${d.tracked} · held ${d.emulated} · ${d.fps} fps · report ${age}s ago`,
       `target ${d.targetId ?? 'none yet'} of ${d.targets} · scale ×${d.scale.toFixed(3)} · image ${d.score ?? 'unrated'} · epoch ${d.epoch ?? '?'} (table ${arTargets?.epoch ?? '?'})`,
       `seen ${d.seen ? 'yes' : 'no'} · last result ${d.sinceResultMs == null ? '—' : `${d.sinceResultMs} ms ago`}`,
-      d.untrackable?.length ? `untrackable: ${d.untrackable.join(' ')}` : ''
+      d.untrackable?.length ? `untrackable: ${d.untrackable.join(' ')}` : '',
+      d.mode ? `mode ${d.mode}${d.mode === 'bezel' ? ` · ${bezelLine(d)}` : ''}` : ''
     ].filter(Boolean).join('\n');
   };
   let arDiag = $state(55);
@@ -804,6 +850,7 @@
       shieldMode = localStorage.getItem('jaipur:tabletop:shield') === 'on';
       sortHands = localStorage.getItem('jaipur:tabletop:sort-hands') !== 'off';
       showArTargets = localStorage.getItem('jaipur:tabletop:ar-targets') === 'on';
+      marketGate = localStorage.getItem('jaipur:tabletop:market-gate') !== 'off';
       showArDiag = localStorage.getItem('jaipur:tabletop:ar-diag') === 'on';
       regHistory = loadRegHistory();
       const pageParams = new URLSearchParams(location.search);
@@ -1005,9 +1052,13 @@
         // The engagement window opens at the phone's first lock and closes for good when it leaves AR.
         if (report.state === 'ended') {
           if (viewerId in phoneFirstSeen) { const { [viewerId]: _gone, ...rest } = phoneFirstSeen; phoneFirstSeen = rest; }
+          // The next session of this phone calibrates afresh.
+          if (viewerId in phoneFirstReport) { const { [viewerId]: _r, ...rest } = phoneFirstReport; phoneFirstReport = rest; }
+          if (viewerId in calibrationWaived) { const { [viewerId]: _w, ...rest } = calibrationWaived; calibrationWaived = rest; }
         } else if (report.seen && phoneFirstSeen[viewerId] == null) {
           phoneFirstSeen = { ...phoneFirstSeen, [viewerId]: Date.now() };
         }
+        if (report.state !== 'ended' && phoneFirstReport[viewerId] == null) phoneFirstReport = { ...phoneFirstReport, [viewerId]: Date.now() };
       };
       ar.onTrackingPublished = (targets) => (arTargets = targets);
       ar.onViewerRegCheck = (_viewerId, seat, report) => {
@@ -1025,6 +1076,7 @@
         const cutoff = Date.now() - 12000;
         const fresh = Object.fromEntries(Object.entries(phoneDiags).filter(([, d]) => d.at > cutoff && d.state !== 'ended'));
         if (Object.keys(fresh).length !== Object.keys(phoneDiags).length) phoneDiags = fresh;
+        gateTick += 1; // the calibration gate's grace period is a function of the clock
       }, 3000);
       ar.attach();
       arDiag = currentDiagInches();
@@ -2430,6 +2482,11 @@
       arTracking: () => ({ tracking: ar?.host.lastTracking ?? null, targets: ar?.lastTargets ?? null }),
       // The registration checks phones have run against this table (newest first).
       regChecks: () => regHistory,
+      // A phone's diag report, as if it had arrived over the relay (drives
+      // the calibration gate and the diagnostics headless).
+      phoneDiag: (viewerId: string, seat: number, report: Partial<ArViewerDiag>) =>
+        ar?.onViewerDiag?.(viewerId, String(seat), { state: 'searching', frames: 60, tracked: 0, emulated: 0, fps: 30, seen: false, score: null, epoch: null, target: -1, targets: 0, scale: 1, sinceResultMs: null, ...report }),
+      marketHidden: () => marketHidden,
       // Play one move for whoever is active (the apprentice heuristic
       // stands in for a human), or run the whole game to its summary —
       // used to capture screens for the progress log.
@@ -3546,6 +3603,7 @@
         aria-label="Tabletop action prompt"
         aria-live="polite"
         data-pending-draw={pendingDraw?.kind}
+        data-market-calibrating={marketHidden || undefined}
         data-pending-sale={pendingSale?.kind}
         data-prompt-seat={marketFacingSeat}
         data-prompt-phase={actionAnimating ? 'action' : turnPause ? 'pause' : turnTransitioning ? 'rotation' : 'ready'}
@@ -3556,6 +3614,10 @@
           <span>Turn complete</span>
         {:else if turnTransitioning}
           <span>Passing turn…</span>
+        {:else if marketHidden}
+          {@const who = calibratingPhones().map((d) => (d.seat ? playerForSeat(Number(d.seat) as Seat)?.displayName ?? `Player ${d.seat}` : 'a phone'))}
+          <span data-calibration-prompt>Calibrating {who.join(' and ')}'s phone{who.length === 1 ? '' : 's'} · the market stays hidden until the phone finds the table. Hold the phone so the whole screen is in view.</span>
+          <button type="button" class="cancel" data-waive-calibration onclick={waiveCalibration}>Show the market</button>
         {:else if pendingDraw}
           <span>{pendingDraw.kind === 'camels' ? `Take all ${pendingDraw.cardIds.length} camels? Tap a ✓ camel to confirm.` : 'Take this card? Tap it again to confirm — or tap a card or camel of yours to trade it for this one.'}</span>
           <button type="button" disabled={busy} data-confirm-draw onclick={confirmPendingDraw}>Confirm</button>
@@ -3637,6 +3699,10 @@
             isLegalExchange(round, activeUid, Object.keys(exchangeLoads(activeUid)), Object.values(exchangeLoads(activeUid)))}
           {@const offering = card.kind !== 'camel' && !pendingDraw && !loadedReturnId && (selectedReturnIds(activeUid).length > 0 || handSale?.uid === activeUid)}
           {@const chosen = card.kind !== 'camel' && (Boolean(loadedReturnId) || isPendingDrawCard(card.id))}
+          {#if marketHidden}
+            <!-- Calibration gate: the slot keeps its place, the card stays off the glass. -->
+            <div class="table-market-slot" data-market-slot-index={marketIndex} data-market-calibrating style={`--market-rotation:${marketRotation}deg`}></div>
+          {:else}
           <div
             class="table-market-slot"
             data-market-slot-index={marketIndex}
@@ -3719,6 +3785,7 @@
               <span class="trade-spot" aria-hidden="true" data-table-exchange-target={card.kind !== 'camel' ? card.id : undefined} data-return-seat={marketFacingSeat}></span>
             {/if}
           </div>
+          {/if}
           {/snippet}
           </StableMarketLayout>
         </div>
@@ -3825,6 +3892,10 @@
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArTargets} data-ar-targets-option onchange={(e) => setArDebug({ targets: (e.currentTarget as HTMLInputElement).checked })} /> Show AR tracking targets</label>
         <small>Outlines the static cloth patches the phones register from: three across the market band (every phone) and two on each token rail (that player's phone only). A patch turns green while a phone is registered from it, amber while a phone is holding on it out of view. Phones in AR draw the same outlines on the table.</small>
+      </div>
+      <div class="facing-option diag-option">
+        <label><input type="checkbox" checked={marketGate} data-market-gate-option onchange={(e) => setMarketGate((e.currentTarget as HTMLInputElement).checked)} /> Hide the market while phones calibrate</label>
+        <small>While a phone in AR is still searching for the table, the market cards stay off the screen so the phone has the whole band of cloth to register from. The prompt names the phone and offers to show the market anyway; the gate also lifts on its own after 90 s.</small>
       </div>
       <div class="facing-option diag-option">
         <label><input type="checkbox" checked={showArDiag} data-ar-diag-option onchange={(e) => setArDebug({ diag: (e.currentTarget as HTMLInputElement).checked })} /> Show AR diagnostics</label>

@@ -45,6 +45,24 @@ export type ArViewerDiag = {
    *  on the table, +90 face-down), and the farthest it moved (m) and
    *  turned (°) from where the interval began. Null without a viewer pose. */
   pitch?: number | null; moved?: number | null; turned?: number | null;
+  /** Which registration scheme the phone entered AR with (ARViewer ≥ the
+   *  bezel entry point): `screen` registers from the image targets alone,
+   *  `bezel` also finds the display's black frame in the camera image. */
+  mode?: 'screen' | 'bezel';
+  /** Bezel mode's numbers over the interval: frames analysed and found, the
+   *  solve time, how far its pose sits from the image tracker's (`agreeMm`,
+   *  `agreeDeg`), and the profile captured at the session's start (the
+   *  bezel's width in mm, the grey levels of ring and screen). `on: false`
+   *  with `why` when the phone asked for it and could not get it. */
+  bezel?: ArBezelReport | null;
+};
+export type ArBezelReport = {
+  on: boolean; why?: string;
+  analysed?: number; found?: number; totalAnalysed?: number; totalFound?: number; locks?: number;
+  ms?: number; sinceFoundMs?: number | null; agreeMm?: number | null; agreeDeg?: number | null; agreeN?: number;
+  distance?: number | null; reason?: string | null; reasons?: Record<string, number>; flipY?: boolean | null;
+  frame?: [number, number] | null; camera?: [number, number] | null;
+  profile?: { bezelMm: number | null; ring: number; screen: number; surround: number | null; threshold: number; samples: number } | null;
 };
 
 /** One step of a phone's registration walk-through, as the phone measured it. */
@@ -68,6 +86,8 @@ export type ArRegCheckReport = {
   step: number; stepId: string | null; stepTitle?: string | null; totalSteps: number;
   steps: ArRegCheckStep[];
   score?: string | null; epoch?: number | null; targets?: number;
+  /** The registration scheme the check ran under, and bezel mode's numbers. */
+  mode?: 'screen' | 'bezel'; bezel?: ArBezelReport | null;
   /** What the phone holds and draws (see ARViewer docs/TRACKING-DIAGNOSTICS.md): read from the relay, not the table. */
   probe?: unknown;
   /** The phone's offscreen renderings of its virtual layer, in the finished report only. */
@@ -700,7 +720,7 @@ export class ArTabletop {
         this.trackingEpoch += 1;
         const out: ArTrackingTarget[] = [];
         const regions = this.trackingRegions(canvas, scale, out);
-        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, regions);
+        this.host.publishTracking(jpeg, innerWidth * this.mPerPx, this.trackingEpoch, regions, innerHeight * this.mPerPx);
         const bytes = jpeg.length + regions.reduce((n, r) => n + r.mat.length, 0);
         this.lastTargets = { epoch: this.trackingEpoch, at: Date.now(), captureMs: Math.round(performance.now() - started), bytes, regions: out };
         this.onTrackingPublished?.(this.lastTargets);

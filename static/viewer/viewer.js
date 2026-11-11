@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { drawFace, drawBack } from '../shared/cards.js';
 import { resolveRelay } from '../shared/relay.js';
+import { greyFromRGBA, findScreen, poseFromCorners, BezelProfile, median } from './bezel.js';
 
 const params = new URLSearchParams(location.search);
 const sessionId = (params.get('s') ?? '').toUpperCase();
@@ -22,7 +23,14 @@ const joinForm = document.getElementById('join');
 const nameInput = document.getElementById('name');
 const nameLabel = document.getElementById('nameLabel');
 const goBtn = document.getElementById('go');
+const goBezelBtn = document.getElementById('goBezel');
 const goFlatBtn = document.getElementById('goFlat');
+// Two ways into AR, side by side so the two registration schemes can be
+// compared on the same table: 'screen' registers from the table's image
+// targets alone (the original); 'bezel' adds the display's own black
+// frame, found in the camera image (bezel.js) and fused with the image
+// tracker. ?mode=bezel preselects the second for a deep link.
+let arMode = params.get('mode') === 'bezel' ? 'bezel' : 'screen';
 const flagHint = document.getElementById('flagHint');
 const seatedMsg = document.getElementById('seated');
 // One button does everything: it joins the table AND enters AR in the
@@ -153,6 +161,14 @@ function renderJoin() {
   goBtn.textContent = noXr ? 'Enter AR — not available in this browser'
     : needsName() ? 'Join table & enter AR' : seatedAs ? `Enter AR as ${seatedAs}` : 'Enter AR';
   goBtn.classList.toggle('unavailable', noXr);
+  // The second entry point: the same gate, hidden where AR is not available
+  // at all. With ?mode=bezel the primary button is the bezel one and this
+  // one offers the screen-only scheme instead.
+  const primaryBezel = params.get('mode') === 'bezel';
+  goBezelBtn.classList.toggle('hidden', noXr);
+  goBezelBtn.disabled = goBtn.disabled;
+  goBezelBtn.textContent = primaryBezel ? (needsName() ? 'Join & enter AR, screen only' : 'Enter AR, screen only') : needsName() ? 'Join & enter AR with bezel' : 'Enter AR with bezel';
+  if (primaryBezel && !noXr) goBtn.textContent = needsName() ? 'Join & enter AR with bezel' : seatedAs ? `Enter AR with bezel as ${seatedAs}` : 'Enter AR with bezel';
   goFlatBtn.classList.toggle('primary', noXr);
   goFlatBtn.disabled = !(flatReady && nameOk && tableOk && open);
   goFlatBtn.textContent = needsName() ? 'Join table & play using phone' : 'Play using phone';
@@ -186,9 +202,7 @@ if (seatToken) {
   nameInput.value = joinName;
   nameInput.addEventListener('input', renderJoin);
 }
-joinForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  if (goBtn.disabled) return;
+function joinThenEnterAR(mode) {
   if (needsName()) {
     joinName = nameInput.value.trim().slice(0, 32);
     if (!joinName) return;
@@ -196,7 +210,17 @@ joinForm.addEventListener('submit', (e) => {
     joinRequested = true;
     sendJoin();
   }
+  arMode = mode;
   void enterAR(); // same user gesture: WebXR needs it
+}
+joinForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (goBtn.disabled) return;
+  joinThenEnterAR(params.get('mode') === 'bezel' ? 'bezel' : 'screen');
+});
+goBezelBtn.addEventListener('click', () => {
+  if (goBezelBtn.disabled) return;
+  joinThenEnterAR(params.get('mode') === 'bezel' ? 'screen' : 'bezel');
 });
 goFlatBtn.addEventListener('click', () => {
   if (goFlatBtn.disabled) return;
@@ -1051,7 +1075,10 @@ async function enterAR() {
     slowTimer = setTimeout(() => note('Still waiting for Chrome to start the AR session — look for a camera/AR permission prompt, or tap Quit and retry.'), 6000);
     xrSession = await navigator.xr.requestSession('immersive-ar', {
       requiredFeatures: ['local'],
-      optionalFeatures: ['image-tracking', 'hit-test', 'dom-overlay'],
+      // 'camera-access' (raw camera frames, bezel mode only): optional, so a
+      // Chrome without it still starts and the session reports the scheme
+      // it actually got.
+      optionalFeatures: ['image-tracking', 'hit-test', 'dom-overlay', ...(arMode === 'bezel' ? ['camera-access'] : [])],
       trackedImages,
       domOverlay: { root: overlay },
     });
@@ -1067,6 +1094,7 @@ async function enterAR() {
 
   imageTrackingActive = xrSession.enabledFeatures?.includes('image-tracking') ?? false;
   try { localStorage.setItem('arviewer:image-tracking', imageTrackingActive ? 'yes' : 'no'); } catch { /* ignore */ }
+  startBezel(xrSession);
   startDiagReports();
   applyDebugFlags();
   const hitTestAvailable = xrSession.enabledFeatures?.includes('hit-test') ?? true;
@@ -1079,12 +1107,15 @@ async function enterAR() {
   lobby.classList.add('hidden');
   overlay.classList.remove('hidden');
   setHud(
-    imageTrackingActive
+    bezelActive
+      ? `Searching for the table${imageTrackingActive ? ' and its bezel' : ' by its bezel (image tracking is off)'}… (or tap the table surface to place the cards by hand)`
+      : imageTrackingActive
       ? 'Searching for the table… (or tap the table surface to place the cards by hand)'
       : hitTestAvailable
         ? 'Image tracking unavailable (enable chrome://flags/#webxr-incubations and relaunch Chrome) — tap the table surface to place the cards.'
         : 'No tracking features available on this device.'
   );
+  if (arMode === 'bezel' && !bezelActive) note(`Bezel registration could not start (${bezelOff}); this session registers from the screen only.`);
   if (imageTrackingActive) {
     // If the tracker can't find the table, say so instead of staying silent:
     // the usual cause is a stale tracked image (table page changed after this
@@ -1107,6 +1138,7 @@ async function enterAR() {
     hitTestSource = null;
     placed = false;
     tableSeen = false;
+    stopBezel();
     smoothScale = 1;
     tableRoot.scale.setScalar(1);
     clearTimeout(searchHintTimer);
@@ -1155,7 +1187,7 @@ async function enterAR() {
   // session is cold, so its first step measures a real first detection);
   // otherwise the ordinary first-lock cue.
   if (regCheck && !regCheck.running) startRegCheck();
-  else if (imageTrackingActive) startOnboardGuide();
+  else if (imageTrackingActive || bezelActive) startOnboardGuide();
 
   if (imageTrackingActive && xrSession.getTrackedImageScores) {
     xrSession.getTrackedImageScores().then((scores) => {
@@ -1378,13 +1410,14 @@ function reportDiag(final = false) {
   const emulated = arvDiag.emulated - diagPrev.emulated;
   diagPrev = { frames: arvDiag.frames, tracked: arvDiag.tracked, emulated: arvDiag.emulated, at: now };
   const sinceResult = arvDiag.lastResultAt ? Date.now() - arvDiag.lastResultAt : null;
-  const state = final ? 'ended' : !imageTrackingActive ? 'no-tracking' : sinceResult != null && sinceResult < 1500 ? (tracked > 0 ? 'tracked' : 'emulated') : arvDiag.tableSeen ? 'lost' : 'searching';
+  const state = final ? 'ended' : !imageTrackingActive && !bezelActive ? 'no-tracking' : sinceResult != null && sinceResult < 1500 ? (tracked > 0 || bezelFoundRecently() ? 'tracked' : 'emulated') : arvDiag.tableSeen ? 'lost' : 'searching';
   sendAction('diag', undefined, {
     state, frames, tracked, emulated, fps: Math.round((frames * 1000) / dtMs),
     seen: arvDiag.tableSeen, score: arvDiag.trackScore, epoch: arvDiag.epoch,
     untrackable: arvDiag.scores.filter((x) => x.score !== 'trackable').map((x) => x.id),
     target: arvDiag.lastTarget, targetId: trackedTargets[arvDiag.lastTarget]?.id ?? null, targets: trackedTargets.length,
     scale: Number(arvDiag.lastScale.toFixed(3)), sinceResultMs: sinceResult,
+    mode: arMode, bezel: bezelReport(),
     ...takeViewerMotion(),
   });
 }
@@ -1505,7 +1538,7 @@ function renderDiagOverlay(now) {
   const t = trackedTargets[arvDiag.lastTarget];
   const measured = arvDiag.lastMeasuredWidthM;
   const since = arvDiag.lastResultAt ? Date.now() - arvDiag.lastResultAt : null;
-  const state = !imageTrackingActive ? 'no-tracking' : since != null && since < 1500 ? (counts.tracked ? 'tracked' : 'emulated') : tableSeen ? 'lost' : 'searching';
+  const state = !imageTrackingActive && !bezelActive ? 'no-tracking' : since != null && since < 1500 ? (counts.tracked || bezelFoundRecently() ? 'tracked' : 'emulated') : tableSeen ? 'lost' : 'searching';
   const dist = tableRoot.visible ? camera.position.distanceTo(tableRoot.position) : null;
   diagEl.textContent = [
     `state ${state} · ${fpsValue} fps · frame ${arvDiag.frames}`,
@@ -1517,6 +1550,7 @@ function renderDiagOverlay(now) {
     arvDiag.scores.some((x) => x.score !== 'trackable') ? `untrackable: ${arvDiag.scores.filter((x) => x.score !== 'trackable').map((x) => x.id).join(' ')}` : '',
     `seen ${tableSeen ? 'yes' : 'no'} · placed ${placed ? 'manual' : 'no'} · last result ${since == null ? '—' : `${since} ms ago`}`,
     dist != null ? `table ${dist.toFixed(2)} m from the camera` : 'table not shown',
+    `mode ${arMode}${arMode === 'bezel' ? ` · ${bezelActive ? bezelLine() : `bezel off (${bezelOff})`}` : ''}`,
     viewerMotion.pitch != null ? `pitch ${Math.round(viewerMotion.pitch)}° · moved ${viewerMotion.moved.toFixed(3)} m · turned ${viewerMotion.turned.toFixed(1)}° this interval` : '',
   ].filter(Boolean).join('\n');
 }
@@ -1530,6 +1564,13 @@ function updateTracking(frame) {
   arvDiag.trackScore = trackScore ?? null;
   arvDiag.epoch = latestTracking?.epoch ?? null;
   arvDiag.declaredWidthM = declaredWidthM;
+
+  // Bezel mode: every few frames the camera image is read back and the
+  // screen's frame looked for; a pose from it stands beside the image
+  // tracker's this frame (fusion below), or alone when the tracker has
+  // nothing.
+  const bezelPose = bezelActive ? bezelFrame(frame, refSpace) : null;
+  let imagePoseApplied = false;
 
   if (imageTrackingActive && frame.getImageTrackingResults) {
     const results = frame.getImageTrackingResults();
@@ -1555,6 +1596,7 @@ function updateTracking(frame) {
       // table's own axes, which the target shares: step back by that offset
       // along the target's axes to land on the table origin.
       if (target.xM || target.zM) tmpPos.add(tmpOffset.set(-target.xM, 0, -target.zM).applyQuaternion(tmpQuat));
+      if (bezelPose) noteBezelAgreement(tmpPos, tmpQuat, result.trackingState);
       if (!tableSeen) {
         smoothPos.copy(tmpPos);
         smoothQuat.copy(tmpQuat);
@@ -1570,6 +1612,7 @@ function updateTracking(frame) {
         smoothPos.lerp(tmpPos, alpha);
         smoothQuat.slerp(tmpQuat, alpha);
       }
+      imagePoseApplied = result.trackingState === 'tracked';
       // ARCore measures the physical size of the tracked image; use it to
       // correct the layout scale, so a slightly wrong screen-diagonal
       // setting on the table can't offset the outer cards.
@@ -1583,6 +1626,28 @@ function updateTracking(frame) {
       tableRoot.quaternion.copy(smoothQuat);
       tableRoot.visible = true;
     }
+  }
+
+  // Fusion: a bezel pose pulls the table toward the screen's observed
+  // frame. Beside a direct image sighting it is a gentle second opinion
+  // (0.2); when the tracker only extrapolates, or has nothing, it is the
+  // sighting (0.5), and the first one is the lock.
+  if (bezelPose) {
+    const alpha = imagePoseApplied ? 0.2 : 0.5;
+    if (!tableSeen) {
+      smoothPos.copy(bezelPose.position);
+      smoothQuat.copy(bezelPose.quaternion);
+      tableSeen = true;
+      bezel.locks += 1;
+      clearTimeout(searchHintTimer);
+      setHud(`Locked onto the table by its bezel. ${playHint()}`);
+    } else {
+      smoothPos.lerp(bezelPose.position, alpha);
+      smoothQuat.slerp(bezelPose.quaternion, alpha);
+    }
+    tableRoot.position.copy(smoothPos);
+    tableRoot.quaternion.copy(smoothQuat);
+    tableRoot.visible = true;
   }
 
   if (hitTestSource) {
@@ -1686,7 +1751,7 @@ function buildProbe() {
   return {
     at: new Date().toISOString(), line: diagLine(), diag: { ...diag }, debugFlags: { targets: debugFlags.targets, diag: debugFlags.diag },
     session: sessionId, seatToken, seatedAs, joinRequested, href: location.href.replace(/([?&]relay=)[^&]*/, '$1…'),
-    xr: { active: Boolean(xrSession), presenting: renderer.xr.isPresenting, layerPath: session ? (session.renderState?.baseLayer ? 'XRWebGLLayer' : 'projection-layer') : null, forceBaseLayer, imageTracking: imageTrackingActive, features: session?.enabledFeatures ?? null, framebuffer: layer ? [layer.framebufferWidth, layer.framebufferHeight] : null, pixelRatio: devicePixelRatio, viewport: [innerWidth, innerHeight], flat: flatActive },
+    xr: { active: Boolean(xrSession), presenting: renderer.xr.isPresenting, layerPath: session ? (session.renderState?.baseLayer ? 'XRWebGLLayer' : 'projection-layer') : null, forceBaseLayer, imageTracking: imageTrackingActive, mode: arMode, bezel: bezelReport(), features: session?.enabledFeatures ?? null, framebuffer: layer ? [layer.framebufferWidth, layer.framebufferHeight] : null, pixelRatio: devicePixelRatio, viewport: [innerWidth, innerHeight], flat: flatActive },
     tracking: { tableSeen, placed, targets: trackedTargets.length, epoch: latestTracking?.epoch ?? null, score: trackScore ?? null, frames: arvDiag.frames, tracked: arvDiag.tracked, emulated: arvDiag.emulated, untracked: arvDiag.untracked, lastScale: +arvDiag.lastScale.toFixed(3), lastTarget: trackedTargets[arvDiag.lastTarget]?.id ?? null, lastResultAgoMs: arvDiag.lastResultAt ? Date.now() - arvDiag.lastResultAt : null },
     shared: { nodes: latestState?.nodes?.length ?? null, nodeKinds: (latestState?.nodes ?? []).reduce((a, n) => ((a[String(n.id).split(':')[0]] = (a[String(n.id).split(':')[0]] ?? 0) + 1), a), {}), assets: assetsOf(sharedAssets) },
     seat: { player: latestSeatState?.player ?? null, turn: latestSeatState?.turn ?? null, notes: latestSeatState?.notes ?? null, controls: latestSeatState?.controls ?? null, nodes: seatNodes, assets: Object.keys(seatAssets ?? {}) },
@@ -1736,6 +1801,300 @@ function captureShot(label) {
 }
 window.__arvProbe = buildProbe; // DevTools/test hooks
 window.__arvShot = captureShot;
+
+// ---- Bezel registration (the second entry point) ----------------------------
+// With 'camera-access' granted, every BEZEL_EVERY frames the view's camera
+// image is drawn into a small framebuffer (long side BEZEL_LONG_SIDE px),
+// read back, greyed, and searched for the display's black frame
+// (bezel.js: the one near-black ring in the frame; the screen is its
+// hole). The screen's four corners and its physical size (the table
+// publishes widthM/heightM) give the table's pose in view space, composed
+// with the view's transform into the reference space.
+//
+// What a session captures at its start (BezelProfile): the ring's width
+// in metres, its grey level, the screen's and the room's, and the dark
+// threshold that found it — the display in use and the player's position
+// decide these, so they are learned fresh each session; later detections
+// must look like the captured ring (lighting drift allowed) or they are
+// dropped. The camera's row order is settled the same way: the first
+// detections are solved both ways up, and the one whose table comes out
+// the right way up (y up in the reference space) wins the vote.
+//
+// The two schemes are evaluated side by side: every `diag` report carries
+// `mode` and a `bezel` block (frames analysed, found, the solve time, how
+// far the bezel pose and the image tracker's pose disagree), the
+// registration check report the same, and the diagnostics overlay shows
+// the detected quad as a green outline.
+const BEZEL_EVERY = 3;
+const BEZEL_LONG_SIDE = 480;
+const bezelSvg = document.getElementById('bezelSvg');
+const bezelPoly = document.getElementById('bezelPoly');
+let bezelActive = false;
+let bezelOff = 'not requested';
+let glBinding = null;
+const bezel = {
+  analysed: 0, found: 0, locks: 0, lastMs: 0, lastFoundAt: 0, lastFoundFrame: -1, lastReason: null, reasons: {},
+  profile: new BezelProfile(6), flipY: null, votes: { up: 0, down: 0 }, agreeMm: null, agreeDeg: null, agreeN: 0,
+  lastCorners: null, frameSize: null, cameraSize: null, pose: null, distance: null,
+};
+let bezelPrev = { analysed: 0, found: 0 };
+const bezelFoundRecently = () => bezel.lastFoundAt > 0 && Date.now() - bezel.lastFoundAt < 600;
+
+function startBezel(session) {
+  bezelActive = false;
+  glBinding = null;
+  Object.assign(bezel, { analysed: 0, found: 0, locks: 0, lastMs: 0, lastFoundAt: 0, lastFoundFrame: -1, lastReason: null, reasons: {}, profile: new BezelProfile(6), flipY: null, votes: { up: 0, down: 0 }, agreeMm: null, agreeDeg: null, agreeN: 0, lastCorners: null, frameSize: null, cameraSize: null, pose: null, distance: null });
+  bezelPrev = { analysed: 0, found: 0 };
+  if (arMode !== 'bezel') { bezelOff = 'screen-only session'; return; }
+  if (!(session.enabledFeatures?.includes('camera-access'))) { bezelOff = 'camera-access not granted by this Chrome'; return; }
+  if (typeof XRWebGLBinding === 'undefined') { bezelOff = 'no XRWebGLBinding'; return; }
+  const gl = renderer.getContext();
+  if (!(gl instanceof WebGL2RenderingContext)) { bezelOff = 'needs WebGL2'; return; }
+  if (!latestTracking?.widthM) { bezelOff = 'the table published no physical size'; return; }
+  try { glBinding = new XRWebGLBinding(session, gl); } catch (err) { bezelOff = `XRWebGLBinding: ${err?.message ?? err}`; return; }
+  bezelActive = true;
+  bezelOff = '';
+  bezelSvg.classList.remove('hidden');
+}
+function stopBezel() {
+  bezelActive = false;
+  glBinding = null;
+  bezelSvg.classList.add('hidden');
+  if (camReader) { try { const gl = renderer.getContext(); gl.deleteFramebuffer(camReader.fbo); gl.deleteTexture(camReader.tex); gl.deleteProgram(camReader.prog); gl.deleteBuffer(camReader.buf); gl.deleteVertexArray(camReader.vao); } catch { /* context gone */ } camReader = null; }
+}
+
+// The read-back: a tiny GL program copies the camera texture into an
+// RGBA framebuffer of the analysis size, then readPixels. three.js's GL
+// state is saved around it and put back exactly (its own cache must stay
+// true), so the frame renders as usual afterwards.
+let camReader = null;
+function ensureCamReader(gl, W, H) {
+  if (camReader && camReader.W === W && camReader.H === H) return camReader;
+  if (camReader) { gl.deleteFramebuffer(camReader.fbo); gl.deleteTexture(camReader.tex); }
+  else {
+    const vs = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs, '#version 300 es\nin vec2 p; out vec2 v; void main(){ v = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }');
+    gl.compileShader(vs);
+    const fs = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs, '#version 300 es\nprecision mediump float; uniform sampler2D t; in vec2 v; out vec4 o; void main(){ o = texture(t, v); }');
+    gl.compileShader(fs);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(`camera copy program: ${gl.getProgramInfoLog(prog)}`);
+    gl.deleteShader(vs); gl.deleteShader(fs);
+    const buf = gl.createBuffer();
+    const prevBuf = gl.getParameter(gl.ARRAY_BUFFER_BINDING), prevVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, 'p');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(prevVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, prevBuf);
+    camReader = { prog, buf, vao, uT: gl.getUniformLocation(prog, 't') };
+  }
+  const tex = gl.createTexture();
+  const prevActive = gl.getParameter(gl.ACTIVE_TEXTURE);
+  gl.activeTexture(gl.TEXTURE0);
+  const prevTex = gl.getParameter(gl.TEXTURE_BINDING_2D);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_2D, prevTex);
+  gl.activeTexture(prevActive);
+  const fbo = gl.createFramebuffer();
+  const prevFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, prevFbo);
+  Object.assign(camReader, { fbo, tex, W, H, pixels: new Uint8Array(W * H * 4) });
+  return camReader;
+}
+function readCameraRGBA(gl, cameraTex, W, H) {
+  const r = ensureCamReader(gl, W, H);
+  const prev = {
+    fbo: gl.getParameter(gl.FRAMEBUFFER_BINDING), viewport: gl.getParameter(gl.VIEWPORT), prog: gl.getParameter(gl.CURRENT_PROGRAM),
+    active: gl.getParameter(gl.ACTIVE_TEXTURE), vao: gl.getParameter(gl.VERTEX_ARRAY_BINDING),
+    scissor: gl.isEnabled(gl.SCISSOR_TEST), depth: gl.isEnabled(gl.DEPTH_TEST), blend: gl.isEnabled(gl.BLEND), cull: gl.isEnabled(gl.CULL_FACE),
+    mask: gl.getParameter(gl.COLOR_WRITEMASK), pack: gl.getParameter(gl.PACK_ALIGNMENT),
+  };
+  gl.activeTexture(gl.TEXTURE0);
+  prev.tex0 = gl.getParameter(gl.TEXTURE_BINDING_2D);
+  try {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, r.fbo);
+    gl.viewport(0, 0, W, H);
+    gl.disable(gl.SCISSOR_TEST); gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+    gl.colorMask(true, true, true, true);
+    gl.useProgram(r.prog);
+    gl.bindTexture(gl.TEXTURE_2D, cameraTex);
+    gl.uniform1i(r.uT, 0);
+    gl.bindVertexArray(r.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, r.pixels);
+  } finally {
+    gl.pixelStorei(gl.PACK_ALIGNMENT, prev.pack);
+    gl.bindVertexArray(prev.vao);
+    gl.bindTexture(gl.TEXTURE_2D, prev.tex0);
+    gl.activeTexture(prev.active);
+    gl.useProgram(prev.prog);
+    gl.colorMask(prev.mask[0], prev.mask[1], prev.mask[2], prev.mask[3]);
+    if (prev.scissor) gl.enable(gl.SCISSOR_TEST); if (prev.depth) gl.enable(gl.DEPTH_TEST); if (prev.blend) gl.enable(gl.BLEND); if (prev.cull) gl.enable(gl.CULL_FACE);
+    gl.viewport(prev.viewport[0], prev.viewport[1], prev.viewport[2], prev.viewport[3]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prev.fbo);
+  }
+  return r.pixels;
+}
+
+const bezelViewMat = new THREE.Matrix4(), bezelTableMat = new THREE.Matrix4(), bezelOut = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), scale: new THREE.Vector3() };
+/** One analysed frame: the camera image → the screen's corners → the
+ *  table's pose in the reference space, or null. Keeps the bezel stats. */
+function bezelFrame(frame, refSpace) {
+  bezelLastPose = null;
+  if (!glBinding || arvDiag.frames % BEZEL_EVERY !== 0) return null;
+  const vp = frame.getViewerPose?.(refSpace);
+  const view = vp?.views?.[0];
+  if (!view?.camera) { bezel.lastReason = 'no camera on the view'; return null; }
+  const t0 = performance.now();
+  bezel.analysed += 1;
+  let result = null;
+  try {
+    const gl = renderer.getContext();
+    const cameraTex = glBinding.getCameraImage(view.camera);
+    if (!cameraTex) { bezel.lastReason = 'no camera image'; return null; }
+    const cw = view.camera.width, ch = view.camera.height;
+    bezel.cameraSize = [cw, ch];
+    const s = BEZEL_LONG_SIDE / Math.max(cw, ch);
+    const W = Math.max(4, Math.round((cw * s) / 4) * 4), H = Math.max(4, Math.round((ch * s) / 4) * 4);
+    bezel.frameSize = [W, H];
+    const rgba = readCameraRGBA(gl, cameraTex, W, H);
+    const P = view.projectionMatrix;
+    const widthM = latestTracking.widthM;
+    const heightM = latestTracking.heightM ?? (widthM * 9) / 16;
+    const threshold = bezel.profile.threshold;
+    // Which way up the rows are is settled by the first detections (the
+    // table must come out y-up); until then both are tried.
+    const flips = bezel.flipY == null ? [true, false] : [bezel.flipY];
+    for (const flipY of flips) {
+      const g = greyFromRGBA(rgba, W, H, flipY);
+      const det = findScreen(g, W, H, threshold != null ? { threshold } : {});
+      if (!det.ok) { bezel.lastReason = det.reason; bezel.reasons[det.reason] = (bezel.reasons[det.reason] ?? 0) + 1; continue; }
+      if (!bezel.profile.accepts(det)) { bezel.lastReason = 'unlike the captured bezel'; bezel.reasons.profile = (bezel.reasons.profile ?? 0) + 1; continue; }
+      const solved = solveBezelPose(det, W, H, P, widthM, heightM, view.transform.matrix);
+      if (!solved) { bezel.lastReason = 'pose rejected'; bezel.reasons.pose = (bezel.reasons.pose ?? 0) + 1; continue; }
+      if (bezel.flipY == null) {
+        bezel.votes[flipY ? 'up' : 'down'] += 1;
+        if (bezel.votes.up + bezel.votes.down >= 5) bezel.flipY = bezel.votes.up >= bezel.votes.down;
+      }
+      // The profile learns from the first detections: metres per pixel at
+      // the screen from the solved distance and the quad's width.
+      const pxWide = Math.hypot(det.corners[1][0] - det.corners[0][0], det.corners[1][1] - det.corners[0][1]);
+      if (pxWide > 0) bezel.profile.add(det, widthM / pxWide);
+      result = solved;
+      bezel.found += 1;
+      bezel.lastFoundAt = Date.now();
+      bezel.lastFoundFrame = arvDiag.frames;
+      bezel.lastReason = null;
+      bezel.lastCorners = det.corners;
+      bezel.distance = solved.distance;
+      arvDiag.lastResultAt = Date.now();
+      drawBezelOutline(det.corners, W, H, true);
+      break;
+    }
+    if (!result) drawBezelOutline(null);
+  } catch (err) {
+    bezel.lastReason = `error: ${err?.message ?? err}`;
+    bezel.reasons.error = (bezel.reasons.error ?? 0) + 1;
+    noteError('bezel', err?.message ?? err);
+  }
+  bezel.lastMs = performance.now() - t0;
+  bezelLastPose = result; // what the agreement check compares the image tracker's pose with
+  return result;
+}
+
+const bezelUp = new THREE.Vector3(), bezelCandQuat = new THREE.Quaternion();
+/** The pose from a detection: both 180° assignments are solved; the one
+ *  nearer the table's current pose wins once locked, else the one that
+ *  puts this seat's edge nearest the camera (seat 2 sits at the bottom
+ *  edge, +z; seat 1 at the top). Rejected unless the table comes out
+ *  level and the right way up, 0.2–3 m away. */
+function solveBezelPose(det, W, H, P, widthM, heightM, viewMatrix) {
+  bezelViewMat.fromArray(viewMatrix);
+  let best = null;
+  for (const rotate of [0, 2]) {
+    const pose = poseFromCorners(det.corners, W, H, P, widthM, heightM, rotate);
+    if (!pose || pose.ortho > 0.2 || Math.abs(Math.log(pose.aspect)) > 0.25) continue;
+    if (pose.distance < 0.2 || pose.distance > 3) continue;
+    bezelTableMat.fromArray(pose.matrix).premultiply(bezelViewMat);
+    bezelTableMat.decompose(bezelOut.position, bezelOut.quaternion, bezelOut.scale);
+    bezelUp.set(0, 1, 0).applyQuaternion(bezelOut.quaternion);
+    if (bezelUp.y < 0.6) continue; // not level, or the image's rows were the wrong way up
+    let score;
+    if (tableSeen) score = bezelOut.quaternion.angleTo(smoothQuat);
+    else {
+      // This seat's edge: distance from the camera (the view's origin) to the
+      // midpoint of the +z (seat 2) or −z (seat 1) edge, in view space.
+      const own = seatNo === '1' ? -heightM / 2 : heightM / 2;
+      const m = pose.matrix;
+      const near = Math.hypot(m[12] + m[8] * own, m[13] + m[9] * own, m[14] + m[10] * own);
+      const far = Math.hypot(m[12] - m[8] * own, m[13] - m[9] * own, m[14] - m[10] * own);
+      score = near - far; // negative when the seat's edge is the near one
+    }
+    if (!best || score < best.score) best = { score, position: bezelOut.position.clone(), quaternion: bezelOut.quaternion.clone(), distance: pose.distance, ortho: pose.ortho, aspect: pose.aspect };
+  }
+  if (best) bezel.pose = { ortho: +best.ortho.toFixed(3), aspect: +best.aspect.toFixed(3) };
+  return best;
+}
+
+/** How far the bezel's pose and the image tracker's disagree this frame
+ *  (smoothed): the number that says whether the two schemes see the same
+ *  table. */
+function noteBezelAgreement(imgPos, imgQuat, trackingState) {
+  const bp = bezelLastPose; if (!bp) return;
+  const mm = imgPos.distanceTo(bp.position) * 1000;
+  const degs = THREE.MathUtils.radToDeg(imgQuat.angleTo(bp.quaternion));
+  bezel.agreeN += 1;
+  bezel.agreeMm = bezel.agreeMm == null ? mm : bezel.agreeMm * 0.8 + mm * 0.2;
+  bezel.agreeDeg = bezel.agreeDeg == null ? degs : bezel.agreeDeg * 0.8 + degs * 0.2;
+  bezel.agreeState = trackingState;
+}
+let bezelLastPose = null;
+
+function drawBezelOutline(corners, W, H, found) {
+  if (!bezelSvg || bezelSvg.classList.contains('hidden')) return;
+  if (!corners) { bezelPoly.setAttribute('points', ''); return; }
+  const sx = innerWidth / W, sy = innerHeight / H;
+  bezelPoly.setAttribute('points', corners.map(([x, y]) => `${(x * sx).toFixed(1)},${(y * sy).toFixed(1)}`).join(' '));
+  bezelPoly.setAttribute('stroke', found ? '#2f9e44' : '#e0a100');
+}
+
+function bezelReport() {
+  if (arMode !== 'bezel') return null;
+  if (!bezelActive) return { on: false, why: bezelOff };
+  const analysed = bezel.analysed - bezelPrev.analysed, found = bezel.found - bezelPrev.found;
+  bezelPrev = { analysed: bezel.analysed, found: bezel.found };
+  const p = bezel.profile.settled;
+  return {
+    on: true, analysed, found, totalAnalysed: bezel.analysed, totalFound: bezel.found, locks: bezel.locks,
+    ms: +bezel.lastMs.toFixed(1), sinceFoundMs: bezel.lastFoundAt ? Date.now() - bezel.lastFoundAt : null,
+    agreeMm: bezel.agreeMm == null ? null : +bezel.agreeMm.toFixed(1), agreeDeg: bezel.agreeDeg == null ? null : +bezel.agreeDeg.toFixed(2), agreeN: bezel.agreeN,
+    distance: bezel.distance == null ? null : +bezel.distance.toFixed(3), pose: bezel.pose, reason: bezel.lastReason, reasons: bezel.reasons,
+    flipY: bezel.flipY, frame: bezel.frameSize, camera: bezel.cameraSize,
+    profile: p ? { bezelMm: p.bezelM == null ? null : +(p.bezelM * 1000).toFixed(1), ring: Math.round(p.bezel), screen: Math.round(p.inside), surround: Number.isFinite(p.surround) ? Math.round(p.surround) : null, threshold: p.threshold, samples: p.samples } : null,
+  };
+}
+function bezelLine() {
+  const p = bezel.profile.settled;
+  return `bezel ${bezel.found}/${bezel.analysed} found · ${bezel.lastMs.toFixed(1)} ms · ${bezelFoundRecently() ? `seen ${bezel.distance?.toFixed(2)} m` : bezel.lastReason ?? 'searching'}` +
+    (bezel.agreeMm != null ? ` · vs image ${bezel.agreeMm.toFixed(0)} mm ${bezel.agreeDeg.toFixed(1)}°` : '') +
+    (p ? ` · captured ${p.bezelM != null ? `${(p.bezelM * 1000).toFixed(0)} mm` : '?'} ring ${Math.round(p.bezel)}/${Math.round(p.inside)}` : ` · capturing ${bezel.profile.samples.length}/${bezel.profile.need}`) +
+    (bezel.flipY == null ? ` · rows ${bezel.votes.up}↑${bezel.votes.down}↓` : '');
+}
 
 // ---- Guidance: first-lock cue and the registration check ------------------
 // Everything a tester (or a player) must do is said on the PHONE, with a
@@ -1799,7 +2158,7 @@ function hideGuide() {
 
 function startOnboardGuide() {
   onboardLockedAt = 0;
-  showGuide('onboard', { title: 'Find the table', text: 'Point across the table at the middle of the market, about an arm’s length away. Once it locks you can look at your own cards.', cls: 'searching' });
+  showGuide('onboard', { title: 'Find the table', text: bezelActive ? 'Hold the phone so the whole screen is in view, black frame included — step back if it does not fit. Once it locks you can look at your own cards.' : 'Point across the table at the middle of the market, about an arm’s length away. Once it locks you can look at your own cards.', cls: 'searching' });
   guideLiveEl.textContent = 'searching…';
 }
 
@@ -1857,6 +2216,7 @@ function regCheckFrame(results) {
     if (r.trackingState === 'tracked') { tracked = true; const t = trackedTargets[r.index]; if (t) st.targets.add(t.id); }
     else if (r.trackingState === 'emulated') emulated = true;
   }
+  if (bezel.lastFoundFrame === arvDiag.frames) { tracked = true; st.targets.add('bezel'); }
   if (tracked) { st.tracked += 1; if (st.firstTrackedMs == null) st.firstTrackedMs = now - st.startAt; }
   else if (emulated) st.emulated += 1;
   if (st.def.until === 'lock' && st.lockMs == null && tableSeen) { st.lockMs = now - st.startAt; st.endAt = now + 1500; vibrate([30]); }
@@ -1908,6 +2268,7 @@ function sendRegCheck(status) {
     id: regCheck.id, seat: regCheck.seat, status,
     step: regCheck.stepIndex, stepId: st?.id ?? null, stepTitle: st?.def.title ?? null, totalSteps: REG_STEPS.length,
     steps: regCheck.steps, score: trackScore ?? null, epoch: latestTracking?.epoch ?? null, targets: trackedTargets.length,
+    mode: arMode, bezel: bezelReport(),
     probe: buildProbe(),
     ...(final ? {
       shots: { ...shots },
@@ -1934,7 +2295,7 @@ function renderGuide(now) {
     if (!onboardLockedAt) {
       onboardLockedAt = now;
       guideEl.className = 'ok';
-      guideTitleEl.textContent = tableSeen ? 'Locked on' : 'Placed by hand';
+      guideTitleEl.textContent = tableSeen ? (bezel.locks && !arvDiag.tracked ? 'Locked on (bezel)' : 'Locked on') : 'Placed by hand';
       guideTextEl.textContent = tableSeen ? 'Now look at your own cards. If the cards drift, glance back at the market.' : 'Image tracking did not lock; the layout sits where you tapped. Drag sideways to turn it.';
       guideLiveEl.textContent = '';
       vibrate([40]);

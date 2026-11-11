@@ -208,6 +208,7 @@
   @keyframes guidePulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
   #guide.searching #guideLive { animation: guidePulse 1.4s ease-in-out infinite; }
   #armed { color: #7ef0b6; font-size: 13px; font-weight: 600; max-width: 300px; }
+  #bezelSvg { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .hidden { display: none !important; }
 </style>
 <script type="importmap">
@@ -224,6 +225,10 @@
       <input id="name" class="hidden" maxlength="32" placeholder="Your trader name" autocapitalize="words">
       <button id="go" type="submit" disabled>Enter AR</button>
       <p id="flagHint" class="hidden"></p>
+      <!-- The second registration scheme (the display's bezel found in the
+           camera image, fused with the image targets), its own way in so the
+           two can be compared on the same table. -->
+      <button id="goBezel" type="button" class="secondary" disabled>Enter AR with bezel</button>
       <button id="goFlat" type="button" class="secondary" disabled>Play using phone</button>
     </form>
     <p id="lobbyMsg">Connecting to the table…</p>
@@ -274,6 +279,8 @@
     <div id="botOfferFlat" class="bot-offer hidden"></div>
   </div>
   <div id="overlay" class="hidden">
+    <!-- Bezel mode: the screen's frame as the last analysed camera frame found it. -->
+    <svg id="bezelSvg" class="hidden" aria-hidden="true"><polygon id="bezelPoly" points="" fill="none" stroke="#2f9e44" stroke-width="3" /></svg>
     <button id="exit" type="button">Quit AR</button>
     <div id="botOfferAr" class="bot-offer hidden"></div>
     <pre id="diag" class="hidden"></pre>
@@ -287,7 +294,7 @@
     </div>
     <div id="hud"></div>
   </div>
-  <span id="build">build 6e02748·table</span>
+  <span id="build">build 344d7bf·table</span>
   <script>
     // Any script failure lands in the lobby instead of a silently dead page.
     (function () {
@@ -300,8 +307,8 @@
       window.addEventListener('unhandledrejection', function (e) { show(String(e.reason && e.reason.message || e.reason)); });
     })();
   </script>
-  <!-- 6e02748·table is stamped by the Pages workflow so the HTML always loads
+  <!-- 344d7bf·table is stamped by the Pages workflow so the HTML always loads
        the script it was published with (Pages caches both for 10 min). -->
-  <script type="module" src="./viewer.js?v=6e02748·table"></script>
+  <script type="module" src="./viewer.js?v=344d7bf·table"></script>
 </body>
 </html>

@@ -114,7 +114,22 @@ see their private cards in AR, while all play happens on the table.
   sees how many you hold and how much room you have; a seat played from a
   phone is never shielded) and **Sorted hands**
   (on by default: each hand lies diamond → leather from its open slots; a
-  card taken from the market lands by the slots, then slides into place).
+  card taken from the market lands by the slots, then slides into place),
+  and **Hide the market while phones calibrate** (on by default: while a
+  phone in AR is still searching for the table, the five market cards stay
+  off the screen so the phone has the whole band of cloth — and the whole
+  screen, for the bezel scheme — to register from; the prompt names the
+  phone and offers **Show the market**, and the gate lifts on its own after
+  90 s or when the phone locks or leaves AR).
+- The phone's lobby offers two ways into AR, so the two registration
+  schemes can be compared on the same table: **Enter AR** (the image
+  targets alone) and **Enter AR with bezel** (the display's black frame
+  found in the camera image as well, fused with the targets). The table's
+  AR diagnostics and registration-check results say which scheme a phone
+  used (`mode`) and, for the bezel, how often it found the screen, the
+  solve time, how far its pose sits from the image tracker's, and the
+  bezel width the session captured (ARViewer docs/TRACKING-DIAGNOSTICS.md,
+  "Bezel registration").
 - Any phone can **Play using phone** (the only option without WebXR, as on
   iPhone): a plain page from the same relay in one of two forms the phone
   remembers — **Minimal** shows just the hand (tap to select or deselect a
