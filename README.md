@@ -239,11 +239,14 @@ Cards, goods tokens, bonus tokens, camel markers, deck backs, and seals all use
 an original generated gouache component system. See [ASSETS.md](ASSETS.md) for
 the source prompts, inventory, and usage map.
 
-On a turn, clicking a goods card takes it and clicking any market camel takes
-the complete camel group. Each market good has camel and hand-card exchange
-destinations beneath it. Returns can be routed by selecting either end first or
-by dragging a hand card onto a card-back destination with a mouse, pen, or
-touch gesture, then a legal multi-card trade is confirmed as one action. Cards
+On a turn, tapping a goods card takes it (a ✓ asks for a second tap) and
+tapping any market camel takes the complete camel group. A trade starts from
+either end: tap a hand card or the camel pile and every market good shows a
+grey arrow toward you — tap one and your card flies under it, face down, with
+an arrow back into the market, the good's arrow now green; or tap the market
+good first (✓ and a green arrow) and then a card or camel of yours, and the
+draw becomes that trade. Tap a placed card to take it back. A legal
+multi-card trade is then confirmed as one action. Cards
 keep one square physical footprint between the market and either hand; crowded
 hands overlap instead of shrinking the cards. Hand cards can also be selected and sold by
 clicking their matching token stack; clicking a stack with no selection sells

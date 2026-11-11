@@ -1386,11 +1386,6 @@
     delay: number;
   };
   let tutorial = $state<{ seat: Seat; items: TutorialItem[]; fading: boolean } | null>(null);
-  // Stand-in cards by market slot: a camel stand-in hides the slot's return
-  // area; a good stand-in over a camel shows one.
-  const tutorialFakes = $derived<Record<number, CardKind>>(Object.fromEntries(
-    (tutorial?.items ?? []).filter((i) => i.kind === 'card').map((i) => [Number(i.key.replace('card-', '')), i.card ?? 'camel'])
-  ));
   const centre = (r: DOMRect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height });
 
   /** Svelte action: nudge a guide callout back inside the viewport (a small
@@ -1431,7 +1426,7 @@
       i,
       kind: (round.market[i]?.kind ?? 'gold') as CardKind,
       card: slot.querySelector('.market-card')?.getBoundingClientRect() ?? slot.getBoundingClientRect(),
-      target: slot.querySelector('.table-exchange-target')?.getBoundingClientRect() ?? null
+      target: slot.querySelector('.trade-spot')?.getBoundingClientRect() ?? null
     }));
     // Fixed teaching slots: the first card is a camel, the third a trade
     // good (take), the fourth a trade good (trade); stand-ins are drawn over
@@ -1701,6 +1696,11 @@
   }
 
   async function toggleHerd(uid: string) {
+    if (convertibleDraw(uid)) {
+      const top = [...(lobby.round?.herds[uid] ?? [])].reverse()[0];
+      if (top) await convertDrawToTrade(uid, top.id);
+      return;
+    }
     if (!canSelectReturns(uid)) return;
     const herd = lobby.round?.herds[uid] ?? [];
     const loads = Object.values(exchangeLoads(uid));
@@ -1734,6 +1734,7 @@
   // the table's path (which unstages camels first); a named camel is a
   // plain toggle, as on the upstream /hand page.
   async function toggleFromPhone(uid: string, cardId: string) {
+    if (convertibleDraw(uid)) return convertDrawToTrade(uid, cardId); // the ✓ draw becomes a trade for that card
     if (!canSelectReturns(uid)) return;
     const herd = lobby.round?.herds[uid] ?? [];
     if (!herd.some((c) => c.id === cardId)) return tapHandCard(uid, cardId); // raises the set with its numbers, as a tap on the table does
@@ -1864,6 +1865,33 @@
   async function chooseMarket(card: Card) {
     if (!lobby.round || pendingDraw || busy) return;
     await appendFor(lobby.round.activeUid, 'cards/draw-initiated', { cardId: card.id });
+  }
+  // A tap on a market card: a good with a card placed under it takes that
+  // card back; with a card or camel selected (or a set raised in the hand)
+  // it is the trade target for the selection; otherwise, and for a camel
+  // always, it is a draw (the ✓ then asks for the second tap).
+  async function tapMarketCard(card: Card) {
+    const uid = lobby.round?.activeUid;
+    if (!uid) return;
+    if (card.kind !== 'camel' && (card.id in exchangeLoads(uid) || selectedReturnIds(uid).length > 0 || handSale?.uid === uid)) return chooseExchangeTarget(uid, card.id);
+    return chooseMarket(card);
+  }
+  /** A draw of one good waits on its ✓: a tap on a hand card or camel turns it into a trade for that good. */
+  const convertibleDraw = (uid: string) => Boolean(pendingDraw && pendingDraw.kind === 'one' && pendingDraw.activeUid === uid && !busy);
+  async function convertDrawToTrade(uid: string, returnCardId: string) {
+    const draw = pendingDraw;
+    if (!draw || !convertibleDraw(uid) || !lobby.round) return;
+    const marketCardId = draw.cardIds[0];
+    handSale = null;
+    startIntentFlight(uid, returnCardId, marketCardId);
+    await appendFor(uid, 'cards/draw-abandoned', {});
+    let remaining: string[] = [];
+    const herd = lobby.round.herds[uid] ?? [];
+    if (herd.some((c) => c.id === returnCardId)) {
+      const nextCamel = [...herd].reverse().find((c) => c.id !== returnCardId);
+      if (nextCamel) remaining = [nextCamel.id];
+    }
+    await publishIntent(uid, remaining, { ...exchangeLoads(uid), [marketCardId]: returnCardId });
   }
 
   async function abandonPendingDraw() {
@@ -2035,6 +2063,7 @@
   let handSale = $state<{ uid: string; kind: Good; primary: string; at: number; single: boolean } | null>(null);
   const seatOf = (uid: string): Seat => (lobby.players.find((p) => p.uid === uid)?.seat === 1 ? 1 : 2);
   async function tapHandCard(uid: string, cardId: string) {
+    if (convertibleDraw(uid)) return convertDrawToTrade(uid, cardId); // the ✓ draw becomes a trade for that card
     if (!canSelectReturns(uid)) return;
     const loads = exchangeLoads(uid);
     if (Object.values(loads).includes(cardId)) return;
@@ -2978,7 +3007,7 @@
   }
 </script>
 
-{#snippet plusMark()}<svg class="plus-mark" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v13M3.5 10h13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" /></svg>{/snippet}
+{#snippet arrowMark()}<svg class="arrow-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v16M5.5 13l6.5 6.5 6.5-6.5" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" /></svg>{/snippet}
 
 {#snippet joinSeat(seat: Seat)}
   {@const arQr = arQrs.find((candidate) => candidate.seat === seat)}
@@ -3253,15 +3282,15 @@
             class:selected
             class:loaded
             class:revealed={(showHands && player.uid !== lobby.bot?.uid) || revealedCardIds.includes(card.id)}
-            aria-disabled={!canSelectReturns(player.uid) || loaded}
+            aria-disabled={!(canSelectReturns(player.uid) || convertibleDraw(player.uid)) || loaded}
             aria-pressed={selected}
             aria-label={`${selected ? 'Deselect' : 'Select'} face-down card for a trade; hold to peek at it`}
             data-table-hand-card={card.id}
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
             data-card-revealed={(showHands && player.uid !== lobby.bot?.uid) || revealedCardIds.includes(card.id) || undefined}
             onclick={(e) => { e.preventDefault(); }}
-            onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && canSelectReturns(player.uid) && !loaded) { e.preventDefault(); void tapHandCard(player.uid, card.id); } }}
-            onpointerdown={(e) => startLongPress(e, card.id, canSelectReturns(player.uid) && !loaded ? () => { void tapHandCard(player.uid, card.id); } : undefined)}
+            onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && (canSelectReturns(player.uid) || convertibleDraw(player.uid)) && !loaded) { e.preventDefault(); void tapHandCard(player.uid, card.id); } }}
+            onpointerdown={(e) => startLongPress(e, card.id, (canSelectReturns(player.uid) || convertibleDraw(player.uid)) && !loaded ? () => { void tapHandCard(player.uid, card.id); } : undefined)}
             onpointerup={(e) => endLongPress(e, card.id)}
             onpointercancel={(e) => endLongPress(e, card.id)}
             onpointerleave={(e) => endLongPress(e, card.id)}
@@ -3314,7 +3343,7 @@
         <button
           type="button"
           class="herd-pile"
-          disabled={!canSelectReturns(player.uid) || (lobby.round?.herds[player.uid]?.length ?? 0) === 0}
+          disabled={!(canSelectReturns(player.uid) || convertibleDraw(player.uid)) || (lobby.round?.herds[player.uid]?.length ?? 0) === 0}
           aria-label={`Camel pile: tap to select the next camel for a trade (${herdSelectedCount(player.uid)} selected)`}
           data-table-herd-pile={player.uid}
           use:tapDown={() => toggleHerd(player.uid)}
@@ -3528,7 +3557,7 @@
         {:else if turnTransitioning}
           <span>Passing turn…</span>
         {:else if pendingDraw}
-          <span>{pendingDraw.kind === 'camels' ? `Take all ${pendingDraw.cardIds.length} camels? Tap a ✓ camel to confirm.` : 'Take this card? Tap it again to confirm.'}</span>
+          <span>{pendingDraw.kind === 'camels' ? `Take all ${pendingDraw.cardIds.length} camels? Tap a ✓ camel to confirm.` : 'Take this card? Tap it again to confirm — or tap a card or camel of yours to trade it for this one.'}</span>
           <button type="button" disabled={busy} data-confirm-draw onclick={confirmPendingDraw}>Confirm</button>
           <button type="button" disabled={busy} data-abandon-draw onclick={abandonPendingDraw}>Undo</button>
         {:else if pendingSale}
@@ -3558,7 +3587,7 @@
           <button type="button" class="cancel" disabled={busy} data-cancel-sale onclick={cancelSale}>Cancel</button>
         {:else if Object.keys(promptLoads).length >= 2}
           {@const problem = exchangeProblem(activeUid)}
-          <span>{problem ?? `${Object.keys(promptLoads).length} returns placed · tap a ✓ card or Trade.`}</span>
+          <span>{problem ?? `${Object.keys(promptLoads).length} cards placed under the market · tap a ✓ card or Trade.`}</span>
           <button
             type="button"
             disabled={!isLegalExchange(lobby.round, activeUid, Object.keys(promptLoads), Object.values(promptLoads))}
@@ -3567,10 +3596,10 @@
           >Trade {Object.keys(promptLoads).length} for {Object.values(promptLoads).length}</button>
           <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Cancel</button>
         {:else if Object.keys(promptLoads).length === 1}
-          <span>1 return placed · place another, or cancel.</span>
+          <span>1 card placed under the market · place another, or cancel.</span>
           <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Cancel</button>
         {:else if promptReturns.length > 0 && handSale?.uid !== activeUid}
-          <span>{promptReturns.length} selected · tap a return area or token stack.</span>
+          <span>{promptReturns.length} selected · tap a market card to trade for it, or a token stack to sell.</span>
           <button type="button" class="cancel" disabled={busy} data-cancel-trade onclick={() => cancelTrade(activeUid)}>Clear</button>
         {:else}
           {@const activeName = lobby.players.find((p) => p.uid === activeUid)?.displayName ?? 'Trader'}
@@ -3604,14 +3633,19 @@
           {@const card = round.market[marketIndex]}
           {@const activeUid = round.activeUid}
           {@const loadedReturnId = exchangeLoads(activeUid)[card.id]}
-          {@const fake = tutorialFakes[marketIndex]}
           {@const exchangeReady = Boolean(loadedReturnId) && !pendingDraw &&
             isLegalExchange(round, activeUid, Object.keys(exchangeLoads(activeUid)), Object.values(exchangeLoads(activeUid)))}
+          {@const offering = card.kind !== 'camel' && !pendingDraw && !loadedReturnId && (selectedReturnIds(activeUid).length > 0 || handSale?.uid === activeUid)}
+          {@const chosen = card.kind !== 'camel' && (Boolean(loadedReturnId) || isPendingDrawCard(card.id))}
           <div
             class="table-market-slot"
             data-market-slot-index={marketIndex}
             style={`--market-rotation:${marketRotation}deg`}
           >
+            {#if offering || chosen}
+              <!-- The arrow toward the player's side: grey on every good a selected card could trade for, green on the one chosen (a card placed under it, or the ✓ draw). -->
+              <span class="trade-arrow" class:chosen aria-hidden="true" data-trade-arrow={card.id} data-trade-arrow-state={chosen ? 'chosen' : 'offered'}>{@render arrowMark()}</span>
+            {/if}
             {#if isPendingDrawCard(card.id)}
               <button
                 type="button"
@@ -3645,56 +3679,44 @@
               class="market-card"
               class:camel={card.kind === 'camel'}
               class:arriving={arrivingCardIds.includes(card.id)}
-              disabled={busy || Boolean(pendingDraw) || (card.kind !== 'camel' && (round.hands[activeUid]?.length ?? 0) >= 7)}
-              aria-label={card.kind === 'camel' ? `Take all ${round.market.filter(({ kind }) => kind === 'camel').length} camels` : `Take ${label(card.kind)} ${card.id}`}
+              class:trade-target={offering}
+              class:loaded={Boolean(loadedReturnId)}
+              disabled={busy || Boolean(pendingDraw) || (card.kind !== 'camel' && !offering && !loadedReturnId && (round.hands[activeUid]?.length ?? 0) >= 7)}
+              aria-label={card.kind === 'camel' ? `Take all ${round.market.filter(({ kind }) => kind === 'camel').length} camels` : loadedReturnId ? `Take back the card placed under ${label(card.kind)}` : offering ? `Trade the selected card for ${label(card.kind)}` : `Take ${label(card.kind)} ${card.id}`}
               data-market-card-id={card.id}
               data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
-              use:tapDown={() => { void chooseMarket(card); }}
+              use:tapDown={() => { void tapMarketCard(card); }}
             >
               <PieceArt kind={card.kind} label={label(card.kind)} detail={card.id} />
             </button>
             {/if}
-            {#if card.kind !== 'camel'}
+            <!-- The trade spot on the player's side of the market card: empty (and
+                 unseen) until a card is placed, then that card, face down (a camel
+                 face up: it is public), an arrow on it pointing into the market. A
+                 tap takes it back. The spot keeps its place so a placed card has
+                 somewhere to fly to. -->
+            {#if card.kind !== 'camel' && loadedReturnId}
+              {@const loadedCamel = round.herds[activeUid]?.some(({ id }) => id === loadedReturnId)}
               <button
                 type="button"
-                class="table-exchange-target"
-                class:loaded={Boolean(loadedReturnId)}
-                class:tut-hidden={fake === 'camel'}
-                disabled={busy || Boolean(pendingDraw) || (!loadedReturnId && selectedReturnIds(activeUid).length === 0)}
-                aria-pressed={Boolean(loadedReturnId)}
-                aria-label={loadedReturnId
-                  ? `Return the face-down card beside ${label(card.kind)} to your selection`
-                  : `Place a selected private card face-down beside ${label(card.kind)}`}
+                class="trade-spot loaded"
+                disabled={busy || Boolean(pendingDraw)}
+                aria-label={`Take back the card placed under ${label(card.kind)}`}
                 data-table-exchange-target={card.id}
                 data-return-seat={marketFacingSeat}
                 use:tapDown={() => { void chooseExchangeTarget(activeUid, card.id); }}
               >
-                {#if loadedReturnId}
-                  {@const loadedCamel = round.herds[activeUid]?.some(({ id }) => id === loadedReturnId)}
-                  {@const loadedKind = showHands && activeUid !== lobby.bot?.uid ? round.hands[activeUid]?.find(({ id }) => id === loadedReturnId)?.kind : undefined}
-                  <!-- Show hands: the placed card lies face up here too. -->
-                  <img
-                    class:arriving={arrivingCardIds.includes(loadedReturnId)}
-                    src={componentImage(loadedCamel ? 'camel' : loadedKind ?? 'card-back')}
-                    alt=""
-                    data-loaded-return={loadedReturnId}
-                    data-card-arriving={arrivingCardIds.includes(loadedReturnId) || undefined}
-                  />
-                {:else}
-                  {@render plusMark()}
-                  <small>Return</small>
-                {/if}
+                <img
+                  class:arriving={arrivingCardIds.includes(loadedReturnId)}
+                  src={componentImage(loadedCamel ? 'camel' : 'card-back')}
+                  alt=""
+                  data-loaded-return={loadedReturnId}
+                  data-card-arriving={arrivingCardIds.includes(loadedReturnId) || undefined}
+                />
+                <span class="spot-arrow" aria-hidden="true">{@render arrowMark()}</span>
               </button>
             {:else}
-              <button
-                type="button"
-                class="table-exchange-target target-placeholder"
-                class:tut-visible={Boolean(fake) && fake !== 'camel'}
-                disabled
-                aria-hidden="true"
-                tabindex="-1"
-                data-return-seat={marketFacingSeat}
-              >{#if fake && fake !== 'camel'}{@render plusMark()}<small>Return</small>{/if}</button>
+              <span class="trade-spot" aria-hidden="true" data-table-exchange-target={card.kind !== 'camel' ? card.id : undefined} data-return-seat={marketFacingSeat}></span>
             {/if}
           </div>
           {/snippet}
@@ -4405,7 +4427,7 @@
   .hand-slot { display: block; width: var(--hand-card-size); height: var(--hand-card-size); flex: 0 0 auto; border: 2px dashed #b7aa8d; border-right: none; border-radius: 0.55rem 0 0 0.55rem; opacity: 0.45; }
   .shared-market {
     --table-market-card-size: clamp(4rem, min(18vh, 10.5vw), 20rem);
-    --table-target-height: clamp(2.7rem, 6.5vh, 7rem);
+    --table-target-height: clamp(3rem, 7.4vh, 8rem);
     --stable-market-gap: clamp(0.3rem, 0.73vw, 1rem); /* the gap BETWEEN market cards (14 px on the 55" screen: half of what the stretched grid left) */
     --market-edge-inset: clamp(0.9rem, 1.6vmin, 2.5rem);
     position: relative;
@@ -4598,6 +4620,9 @@
     place-items: center;
     gap: clamp(0.2rem, 0.7vh, 0.4rem);
   }
+  /* One column: the card, its arrow and the trade spot stack in it (an
+     auto-placed card would otherwise skip to a second column past the arrow). */
+  .table-market-slot > * { grid-column: 1; }
   .market-card {
     width: var(--table-market-card-size);
     height: var(--table-market-card-size);
@@ -4634,23 +4659,33 @@
   }
   .market-prompt.rotating { opacity: 0; }
   .market-prompt button { min-height: 36px; padding: 0.3rem 0.65rem; border-radius: 99rem; }
-  .draw-pending .table-exchange-target { visibility: hidden; }
   @keyframes pending-draw-turn {
     from { opacity: 0.45; transform: rotateY(80deg); }
     to { opacity: 1; transform: rotateY(0); }
   }
   .market-card.camel { border-color: #a6442d; }
-  .table-exchange-target { display: grid; width: var(--table-market-card-size); height: var(--table-target-height); min-height: var(--table-target-height); grid-row: 1; grid-template-columns: auto 1fr; place-items: center; gap: 0.2rem; padding: 0.2rem; border: 2px dashed #315f58; border-radius: 0.6rem; background: rgb(255 250 240 / 72%); color: #315f58; font-weight: 700; transform: rotate(var(--market-rotation)); transition: transform 420ms ease-in-out; }
-  .shared-market[data-market-facing-seat='2'] .table-exchange-target { grid-row: 3; }
-  .target-placeholder { visibility: hidden; }
-  /* Table guide stand-ins: a camel drawn over a good loses its return area; a good drawn over a camel gains one. */
-  .table-exchange-target.tut-hidden { visibility: hidden; }
-  .target-placeholder.tut-visible { visibility: visible; }
-  .table-exchange-target:disabled { opacity: 0.48; }
-  .table-exchange-target.loaded { border-style: solid; border-color: #d38b21; background: #fff4d6; opacity: 1; }
-  .table-exchange-target .plus-mark { width: 1.2rem; height: 1.2rem; }
-  .table-exchange-target small { font-size: clamp(0.55rem, 1.1vmin, 0.72rem); }
-  .table-exchange-target img { width: clamp(2.25rem, 5.7vh, 3.4rem); height: clamp(2.25rem, 5.7vh, 3.4rem); border: 1px solid #315f58; border-radius: 0.35rem; object-fit: cover; }
+  /* The trade spot on the player's side of each market good (row 1 toward
+     the top player, row 3 toward the bottom one): nothing until a card is
+     placed there, then the card, as tall as the row, face down, with an
+     arrow on it pointing into the market. */
+  .trade-spot { position: relative; display: grid; grid-row: 1; grid-column: 1; width: var(--table-market-card-size); height: var(--table-target-height); place-items: center; padding: 0; border: 0; background: none; }
+  .shared-market[data-market-facing-seat='2'] .trade-spot { grid-row: 3; }
+  .trade-spot:not(.loaded) { pointer-events: none; }
+  .trade-spot.loaded img { width: var(--table-target-height); height: var(--table-target-height); border: 2px solid #d38b21; border-radius: 0.45rem; object-fit: cover; box-shadow: 0 0.2rem 0.5rem rgb(10 32 30 / 35%); transform: rotate(var(--market-rotation)); transition: transform 420ms ease-in-out; }
+  .trade-spot:disabled img { opacity: 0.7; }
+  /* The arrows. On a market good: toward the player's side, at the card's
+     near edge — grey while the good is one the selection could trade for,
+     green once chosen (a card placed under it, or the ✓ draw). On a placed
+     card: the other way, into the market. */
+  .trade-arrow, .spot-arrow { display: grid; place-items: center; width: clamp(1.5rem, 3.6vmin, 3.2rem); height: clamp(1.5rem, 3.6vmin, 3.2rem); border-radius: 50%; background: rgb(255 250 240 / 92%); color: #8e8675; box-shadow: 0 0.15rem 0.4rem rgb(10 32 30 / 40%); pointer-events: none; }
+  .trade-arrow svg, .spot-arrow svg { width: 72%; height: 72%; }
+  .trade-arrow { grid-row: 2; grid-column: 1; z-index: 4; align-self: end; justify-self: center; transform: translateY(45%); }
+  .shared-market[data-market-facing-seat='1'] .trade-arrow { align-self: start; transform: translateY(-45%) rotate(180deg); }
+  .trade-arrow.chosen { background: #1d7a4a; color: #eafff0; }
+  .spot-arrow { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(180deg); background: #1d7a4a; color: #eafff0; }
+  .shared-market[data-market-facing-seat='1'] .spot-arrow { transform: translate(-50%, -50%); }
+  .market-card.trade-target { box-shadow: 0 0 0 3px rgb(255 250 240 / 70%), 0 0.4rem 1rem rgb(10 32 30 / 30%); }
+  .market-card.loaded { border-color: #1d7a4a; }
   /* Gold on the cloth: the dark green it used to be vanished into the mandala. */
   .tabletop-mark { display: grid; place-content: center; place-items: center; gap: 0.25rem; color: #ffd27a; font-weight: 700; text-shadow: 0 1px 2px rgb(10 32 30 / 85%), 0 0 0.6rem rgb(10 32 30 / 60%); }
   .tabletop-mark img { width: clamp(3rem, 9vh, 5rem); border-radius: 0.55rem; }

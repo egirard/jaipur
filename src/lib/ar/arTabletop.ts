@@ -179,7 +179,7 @@ const STATIC_CAPTURE_IGNORE = [
   '.player-seat > *', '.join-seat > *',
   // The market band: only the cloth (and its border) is the target; the
   // deck, cards, return slots, prompts, overlays and labels all move.
-  '.market-stage', '.market-prompt', '.table-exchange-target', '.scoring-overlay', '.end-overlay',
+  '.market-stage', '.market-prompt', '.trade-spot', '.trade-arrow', '.scoring-overlay', '.end-overlay',
   '.help-icon', '.help-corner', '.corner-log', '.music-control', '.options-gear', '.scale-panel', '.tutorial', '.tabletop-mark',
   '.table-card-flight', '.table-token-flight', '.bonus-stack', '.seat-tokens',
   // Token rails: the stack boxes, their art and names stay (a rail's rows
@@ -1028,8 +1028,8 @@ export class ArTabletop {
     }
   }
 
-  /** A card on a market return slot, sized to the image the table draws
-   *  there (hand-size or market-size art, whichever is closer). */
+  /** A card placed under a market good (the trade spot), sized to the image
+   *  the table draws there (hand-size or market-size art, whichever is closer). */
   private returnNode(round: NonNullable<GameState['round']>, uid: string, targetId: string, cardId: string, marketWM: number, reveal: boolean): ArNode | undefined {
     const rect = (document.querySelector(`[data-loaded-return="${CSS.escape(cardId)}"]`)
       ?? document.querySelector(`[data-table-exchange-target="${CSS.escape(targetId)}"]`))?.getBoundingClientRect();
