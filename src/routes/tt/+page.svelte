@@ -3229,7 +3229,7 @@
         {#each Array(2) as _, sealIndex}
           <img
             class:earned={sealIndex < (lobby.seals[player.uid] ?? 0)}
-            class:arriving={sealIndex === (lobby.seals[player.uid] ?? 0) - 1 && sealStillOnSummary(player.uid)}
+            class:awaited={sealIndex === (lobby.seals[player.uid] ?? 0) - 1 && sealStillOnSummary(player.uid)}
             data-seat-seal-index={sealIndex}
             src={componentImage('seal')}
             alt=""
@@ -4886,7 +4886,12 @@
   .seat-seals { display: inline-flex; align-items: center; gap: 0.2rem; }
   .seat-seals img { width: clamp(2rem, 5vmin, 3.6rem); height: clamp(2rem, 5vmin, 3.6rem); border-radius: 50%; object-fit: cover; filter: grayscale(1); opacity: 0.25; transition: filter 300ms, opacity 300ms; }
   .seat-seals img.earned { filter: none; opacity: 1; }
-  .seat-seals img.earned.arriving { filter: grayscale(1); opacity: 0.25; transition: none; }
+  /* A seal still on the round summary (or in flight to this mat): the slot
+     stays the grey placeholder it was, so the winner's mat gives nothing
+     away before the seal lands. (Its own class: "arriving" is the one that
+     hides a card in flight, and had blanked this slot for the whole
+     scoring sequence.) */
+  .seat-seals img.earned.awaited { filter: grayscale(1); opacity: 0.25; transition: none; }
   .table-seal-flight { position: fixed; z-index: 45; top: var(--start-top); left: var(--start-left); width: var(--start-size); height: var(--start-size); pointer-events: none; --flight-delay: 0ms; animation: seal-flight-across 1800ms cubic-bezier(0.3, 0.6, 0.35, 1) both, seal-flight-lift 1800ms ease-in-out both; }
   .table-seal-flight img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; filter: drop-shadow(0 0.5rem 0.6rem rgb(0 0 0 / 32%)); }
   @keyframes seal-flight-across {
