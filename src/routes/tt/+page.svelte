@@ -3172,7 +3172,7 @@
     class:round-winner={scoring?.winnerBanner && scoring.winnerUid === player.uid}
     data-seat={seat}
     data-player-uid={player.uid}
-    aria-label={`Player ${seat}, ${player.displayName}`}
+    aria-label={player.displayName === `Player ${seat}` ? player.displayName : `Player ${seat}, ${player.displayName}`}
   >
     {#if scoring?.winnerBanner && scoring.winnerUid === player.uid}
       <div class="round-winner-banner" data-round-winner-banner role="status">Round winner</div>
@@ -3192,7 +3192,7 @@
     {/if}
     <header>
       <div>
-        <span class="seat-kicker">Player {seat}</span>
+        {#if player.displayName !== `Player ${seat}`}<span class="seat-kicker">Player {seat}</span>{/if}
         <h2>{player.displayName}</h2>
       </div>
       <strong class="turn-state">{isActive ? 'Your turn' : 'Waiting'}</strong>
@@ -3972,7 +3972,7 @@
           {@const holder = playerForSeat(arQr.seat)}
           <figure>
             <img src={arQr.image} alt={`AR viewer QR for Player ${arQr.seat}`} />
-            <figcaption>Player {arQr.seat}{holder ? ` · ${holder.displayName}` : ' · open'}<br /><small>{holder ? 'rescan to rejoin' : 'scan to sit here'}</small></figcaption>
+            <figcaption>Player {arQr.seat}{holder ? (holder.displayName === `Player ${arQr.seat}` ? '' : ` · ${holder.displayName}`) : ' · open'}<br /><small>{holder ? 'rescan to rejoin' : 'scan to sit here'}</small></figcaption>
           </figure>
         {/each}
         <p><small>{arViewers} phone{arViewers === 1 ? '' : 's'} connected{arSeatsOnline?.size ? ` (seat ${[...arSeatsOnline].sort().join(' and ')})` : ''} · session {ar?.host.session} · relay {arRelayStatus}</small></p>
