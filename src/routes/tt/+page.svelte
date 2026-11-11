@@ -4153,6 +4153,7 @@
        so the market pattern shows on either side of them. */
     --edge-size: minmax(0, 25vh);
     --hand-card-size: clamp(3.4rem, 8.4vh, 10rem);
+    --hand-overlap: clamp(-1.1rem, -1.9vw, -0.35rem); /* how far each hand cell tucks under the one before */
     --mat-width: 62%; /* was 78%: a fifth narrower, pieces unchanged — only the whitespace between them went */
     position: fixed;
     inset: 0;
@@ -4325,7 +4326,7 @@
     color: white;
     object-fit: cover;
   }
-  .tabletop-hand > .hand-cell + .hand-cell { margin-left: clamp(-1.1rem, -1.9vw, -0.35rem); }
+  .tabletop-hand > .hand-cell + .hand-cell { margin-left: var(--hand-overlap); }
   /* Shield mode (Table options): the hand row sits at the player's edge of
      the mat and each card has a full card back under it, shifted half a
      card toward the market (the seat's own "up": seat 1's content is
@@ -4405,12 +4406,16 @@
      worth. A token still in flight is kept invisible here (`arriving`). */
   .seat-tokens { --earned-size: clamp(1.4rem, 3.2vmin, 3.6rem); display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); max-height: calc(2 * var(--earned-size) + 0.2rem + 0.3rem + 2px); overflow: hidden; padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 1.4rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .seat-tokens.dense { --earned-size: clamp(1.1rem, 2.5vmin, 2.8rem); }
-  /* Shield mode: the row never wraps or runs past the mat. Once the coins
-     (--n of them, plus the "=" and the total) no longer fit side by side,
-     each overlaps the one before by exactly the excess shared out — the
-     later coin on top — so a row of thirty still ends inside the mat. */
-  .seat-tokens.shielded { flex-wrap: nowrap; --earned-size: clamp(1.4rem, 3.2vmin, 3.6rem); }
-  .seat-tokens.shielded .earned:not(.total) + .earned:not(.total) { margin-left: min(0px, calc((100% - 3 * var(--earned-size) - var(--n) * (var(--earned-size) + 0.2rem)) / max(1, var(--n) - 1))); }
+  /* Shield mode: the row is exactly as wide as the hand's seven cells and
+     starts where they start, so a card shield laid over the hand covers
+     the coins too; it never wraps. The space between coins (--n of them,
+     with the "=" and the total after) is whatever the row has to share
+     out: the usual gap while there is room, then less as coins arrive,
+     then overlap — each coin tucked under the next by at most 72% — so a
+     row of thirty still ends inside the shield's width. */
+  .seat-tokens.shielded { flex-wrap: nowrap; --earned-size: clamp(1.4rem, 3.2vmin, 3.6rem); gap: 0; box-sizing: border-box; width: calc(7 * var(--hand-card-size) + 6 * var(--hand-overlap)); max-width: 100%; justify-self: start; }
+  .seat-tokens.shielded .earned:not(.total) + .earned:not(.total) { margin-left: clamp(calc(-0.72 * var(--earned-size)), calc((100% - 3 * var(--earned-size) - var(--n) * var(--earned-size)) / max(1, var(--n) - 1)), 0.2rem); }
+  .seat-tokens.shielded .earned.total { margin-left: 0.2rem; }
   .seat-tokens .earned { width: var(--earned-size); height: var(--earned-size); flex: 0 0 auto; }
   .seat-tokens .earned.arriving { visibility: hidden; }
   .seat-tokens .earned.bonus { filter: saturate(0.7); touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: pointer; }
