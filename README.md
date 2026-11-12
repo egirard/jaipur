@@ -122,6 +122,11 @@ see their private cards in AR, while all play happens on the table.
   bezel scheme — to register from; the prompt names the
   phone and offers **Show the market**, and the gate lifts on its own after
   90 s or when the phone locks or leaves AR).
+- The link's latency is measured at both ends (the table and every phone
+  ping the relay) and shown in Table options and on the phone; over 300 ms
+  the market header and the phone both warn that taps will lag, and the
+  table offers the LAN server as the way out (docs/CONNECTIVITY.md,
+  "Latency").
 - The phone's lobby offers two ways into AR, so the two registration
   schemes can be compared on the same table: **Enter AR** (the image
   targets alone) and **Enter AR with bezel** (the display's black frame

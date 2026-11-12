@@ -9,7 +9,7 @@
   import { cubicOut } from 'svelte/easing';
   import QRCode from 'qrcode';
   import OnScreenKeyboard from '$lib/OnScreenKeyboard.svelte';
-  import type { ArRegCheckReport, ArRegCheckStep, ArViewerDiag } from '$lib/ar/arTabletop';
+  import type { ArRegCheckReport, ArRegCheckStep, ArViewerDiag, ArViewerLatency } from '$lib/ar/arTabletop';
   import PieceArt from '$lib/PieceArt.svelte';
   import { describeTieBreak } from '$lib/score-summary';
   import { configureSfx, playSfx, setSfxEnabled, setSfxVolume, unlockSfx } from '$lib/sfx';
@@ -242,6 +242,39 @@
   // (a phone that stops reporting drops out after 12 s).
   type PhoneDiag = ArViewerDiag & { seat?: string; at: number };
   let phoneDiags = $state<Record<string, PhoneDiag>>({});
+  // Latency: the table's own round trip to the relay (ArHost pings it every
+  // 3 s) and every phone's (reported every ~6 s from the lobby, the phone
+  // view or AR). A tap travels about half of each. Over LINK_SLOW_MS for
+  // any of them the market header warns and offers the LAN server (the
+  // fallback: a relay on the local network answers in a few ms); the
+  // warning clears under LINK_OK_MS.
+  const LINK_SLOW_MS = 300;
+  const LINK_OK_MS = 200;
+  const LINK_STALE_MS = 30_000;
+  type PhoneLatency = ArViewerLatency & { seat?: string; at: number };
+  let phoneLatency = $state<Record<string, PhoneLatency>>({});
+  let relayRttMs = $state<number | null>(null);
+  const phoneLabel = (seat: string | undefined) => (seat ? `${playerForSeat(Number(seat) as Seat)?.displayName ?? `Player ${seat}`}'s phone` : 'a phone');
+  /** The slowest link right now: the table's or a phone's. */
+  const linkWorst = $derived.by((): { ms: number; who: string } | null => {
+    void gateTick;
+    const now = Date.now();
+    let worst = relayRttMs != null ? { ms: relayRttMs, who: 'the table' } : null;
+    for (const l of Object.values(phoneLatency)) {
+      if (l.avgMs == null || now - l.at > LINK_STALE_MS) continue;
+      if (!worst || l.avgMs > worst.ms) worst = { ms: l.avgMs, who: phoneLabel(l.seat) };
+    }
+    return worst;
+  });
+  let slowLatched = false; // the hysteresis memory (not state: written from the derived below)
+  const slowLink = $derived.by(() => {
+    const w = linkWorst;
+    if (!w) { slowLatched = false; return false; }
+    if (!slowLatched && w.ms > LINK_SLOW_MS) slowLatched = true;
+    else if (slowLatched && w.ms < LINK_OK_MS) slowLatched = false;
+    return slowLatched;
+  });
+  const msText = (ms: number | null | undefined) => (ms == null ? '—' : `${Math.round(ms)} ms`);
   // Diagnostics options (Table options): outline the AR tracking targets on
   // the screen and print each phone's registration numbers on its seat.
   // Both are also published to the phones (scene.debug), which draw the
@@ -363,6 +396,7 @@
       d.score ? `image ${d.score}` : '',
       d.epoch != null ? `epoch ${d.epoch}` : '',
       d.mode ? `mode ${d.mode}` : '',
+      d.rttMs != null ? `rtt ${Math.round(d.rttMs)} ms` : '',
       bezelLine(d)
     ].filter(Boolean);
     return parts.join(' · ');
@@ -1060,6 +1094,10 @@
         }
         if (report.state !== 'ended' && phoneFirstReport[viewerId] == null) phoneFirstReport = { ...phoneFirstReport, [viewerId]: Date.now() };
       };
+      ar.onViewerLatency = (viewerId, seat, report) => {
+        phoneLatency = { ...phoneLatency, [viewerId]: { ...report, seat, at: Date.now() } };
+      };
+      ar.onRelayLatency = (ms) => (relayRttMs = ms);
       ar.onTrackingPublished = (targets) => (arTargets = targets);
       ar.onViewerRegCheck = (_viewerId, seat, report) => {
         const s = Number(seat ?? report.seat) as Seat;
@@ -1076,6 +1114,8 @@
         const cutoff = Date.now() - 12000;
         const fresh = Object.fromEntries(Object.entries(phoneDiags).filter(([, d]) => d.at > cutoff && d.state !== 'ended'));
         if (Object.keys(fresh).length !== Object.keys(phoneDiags).length) phoneDiags = fresh;
+        const liveLinks = Object.fromEntries(Object.entries(phoneLatency).filter(([, l]) => Date.now() - l.at <= LINK_STALE_MS));
+        if (Object.keys(liveLinks).length !== Object.keys(phoneLatency).length) phoneLatency = liveLinks;
         gateTick += 1; // the calibration gate's grace period is a function of the clock
       }, 3000);
       ar.attach();
@@ -2487,6 +2527,12 @@
       phoneDiag: (viewerId: string, seat: number, report: Partial<ArViewerDiag>) =>
         ar?.onViewerDiag?.(viewerId, String(seat), { state: 'searching', frames: 60, tracked: 0, emulated: 0, fps: 30, seen: false, score: null, epoch: null, target: -1, targets: 0, scale: 1, sinceResultMs: null, ...report }),
       marketHidden: () => marketHidden,
+      // A phone's link report and the table's own round trip, for the
+      // latency warning headless.
+      phoneLatency: (viewerId: string, seat: number, report: Partial<ArViewerLatency>) =>
+        ar?.onViewerLatency?.(viewerId, String(seat), { rttMs: 80, avgMs: 80, maxMs: 120, n: 3, lost: 0, mode: 'ar', ...report }),
+      relayRtt: () => relayRttMs,
+      slowLink: () => slowLink,
       // Play one move for whoever is active (the apprentice heuristic
       // stands in for a human), or run the whole game to its summary —
       // used to capture screens for the progress log.
@@ -3590,6 +3636,13 @@
       {:else if arRelayStatus === 'closed'}
         <span class="relay-warning" data-relay-warning="closed">AR {arUsingLan ? 'LAN server' : 'relay'} offline — phones will reconnect when it returns</span>
       {/if}
+      {#if slowLink && linkWorst && arRelayStatus === 'connected'}
+        <!-- The link is up but slow: taps from the phones arrive late. The
+             way out is a relay on the local network (the LAN stand-in). -->
+        <span class="relay-warning" data-relay-warning="slow">Slow AR link · {Math.round(linkWorst.ms)} ms round trip for {linkWorst.who} — taps from the phones will lag{arUsingLan ? '' : '. A LAN server would answer in a few ms'}</span>
+        {#if !arLan}<button type="button" class="relay-action" data-set-lan onclick={openLanSettings}>Set LAN server</button>
+        {:else if !arUsingLan}<button type="button" class="relay-action" data-use-lan onclick={() => void useLan()}>Use LAN server</button>{/if}
+      {/if}
     </header>
     {#if lobby.round?.status === 'active'}
       {@const activeUid = lobby.round.activeUid}
@@ -4050,6 +4103,7 @@
           </figure>
         {/each}
         <p><small>{arViewers} phone{arViewers === 1 ? '' : 's'} connected{arSeatsOnline?.size ? ` (seat ${[...arSeatsOnline].sort().join(' and ')})` : ''} · session {ar?.host.session} · relay {arRelayStatus}</small></p>
+        <p class="ar-latency" data-ar-latency><small>Round trip to the relay: table {msText(relayRttMs)}{#each Object.values(phoneLatency).filter((l) => Date.now() - l.at <= LINK_STALE_MS) as l}{' · '}{phoneLabel(l.seat)} {msText(l.avgMs)}{l.mode === 'ar' ? ' in AR' : l.mode === 'phone' ? ' in the phone view' : ' in the lobby'}{l.lost ? `, ${l.lost} lost` : ''}{/each}{slowLink ? ' · slow: over 300 ms, taps lag' : ''}</small></p>
         {#if arEndpoints}
           <p class="ar-endpoints"><small>Relay <code>{arEndpoints.relayUrl}</code> · viewer <code>{arEndpoints.viewerBase}</code> · from {arEndpoints.source === 'param' ? 'the URL' : arEndpoints.source === 'saved' ? 'a remembered setting' : arEndpoints.source === 'env' ? 'the build' : arEndpoints.source === 'same-origin' ? 'this page\'s own server' : arEndpoints.source === 'lan' ? 'the LAN server below' : arEndpoints.source === 'bundled' ? 'the hosted relay and this table\'s own copy of the phone page' : 'the hosted defaults'}.</small></p>
         {/if}

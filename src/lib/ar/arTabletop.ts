@@ -30,6 +30,14 @@ import { ArHost, type ArRelayStatus, type ArDebugFlags, type ArAction, type ArAs
 import { captureScale, centreMeters, overlappingColumns, pieces, type Rect } from './trackingGeometry';
 import { facingOverrides } from './arFacing';
 
+/** What a phone reports about its link every ~6 s, in any view: its round
+ *  trip to the relay (last, running average, worst), pings lost, whether
+ *  it is warning, and which view it is in. */
+export type ArViewerLatency = {
+  rttMs: number | null; avgMs: number | null; maxMs: number; n: number; lost: number; slow?: boolean;
+  mode: 'ar' | 'phone' | 'lobby';
+};
+
 /** What a phone reports about its registration every couple of seconds. */
 export type ArViewerDiag = {
   state: 'searching' | 'tracked' | 'emulated' | 'lost' | 'no-tracking' | 'ended';
@@ -38,6 +46,8 @@ export type ArViewerDiag = {
   target: number; targets: number; scale: number; sinceResultMs: number | null;
   /** The target registered from, by region id (null before the first lock). */
   targetId?: string | null;
+  /** The phone's round trip to the relay, ms (running average). */
+  rttMs?: number | null;
   /** Target ids ARCore rated untrackable (`score` then reads "k/n trackable"). */
   untrackable?: string[];
   /** The phone's pose over the interval (ARViewer ≥ the pose report): the
@@ -461,6 +471,10 @@ export class ArTabletop {
   readonly seatTokens: SeatTokens;
   /** A phone's registration report (see the API doc's `diag` action). */
   onViewerDiag: ((viewerId: string, seat: string | undefined, report: ArViewerDiag) => void) | null = null;
+  /** A phone's link report (round trip to the relay), in any view. */
+  onViewerLatency: ((viewerId: string, seat: string | undefined, report: ArViewerLatency) => void) | null = null;
+  /** The table's own round trip to the relay (running average, ms; null while down). */
+  onRelayLatency: ((ms: number | null) => void) | null = null;
   /** The tracking regions just published (band columns, rail rows), with their screen rectangles. */
   onTrackingPublished: ((targets: ArTrackingTargets) => void) | null = null;
   lastTargets: ArTrackingTargets | null = null;
@@ -516,6 +530,10 @@ export class ArTabletop {
         if (a.action === 'diag' && a.viewerId && a.data && typeof a.data === 'object') {
           this.onViewerDiag?.(a.viewerId, seat, a.data as ArViewerDiag);
         }
+        // Link reports (round trip to the relay) from phones in any view.
+        if (a.action === 'latency' && a.viewerId && a.data && typeof a.data === 'object') {
+          this.onViewerLatency?.(a.viewerId, seat, a.data as ArViewerLatency);
+        }
         // Registration walk-through progress and results.
         if (a.action === 'regcheck' && a.viewerId && a.data && typeof a.data === 'object') {
           this.onViewerRegCheck?.(a.viewerId, seat, a.data as ArRegCheckReport);
@@ -526,6 +544,7 @@ export class ArTabletop {
           if (typeof id === 'string' && id.length <= 40) this.onControl?.(seat, id);
         }
       },
+      onLatency: (ms) => this.onRelayLatency?.(ms),
       onPeers: ({ viewers, seats }) => {
         this.viewers = viewers;
         this.onViewersChanged?.(viewers);

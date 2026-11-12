@@ -83,6 +83,35 @@ a tap on the screen; the phones only ever see the result come back through
   connected to this session" until it returns; a phone that scanned a stale
   QR (the table was reloaded onto a new session) says to rescan.
 
+## Latency
+
+Every tap from a phone crosses the relay twice (phone → relay → table) and
+the table's answer crosses it back, so a slow link shows up as lag between
+the tap and the card moving. Both ends measure it: the table pings the relay
+every 3 s (`ArHost`), each phone every 2 s in whichever view it is in (the
+lobby, the phone view, AR), and the phone reports its figures to the table
+every third reading (`latency` action: last, running average, worst, pings
+lost). Where to read them:
+
+- the phone: a small line under the lobby message ("Relay round trip 85 ms"),
+  a pill in the phone view's header, the first line of the AR diag panel
+  (`rtt`);
+- the table: Table options, under the join codes — "Round trip to the relay:
+  table 45 ms · Player 2's phone 120 ms in AR"; the seat's AR diagnostics
+  line carries `rtt` too.
+
+**The warning.** Over 300 ms on the running average (three readings in) the
+phone shows an amber notice in place — lobby, phone view or AR — saying taps
+will lag and that a LAN server on the table brings it down, and buzzes once;
+the table's market header says "Slow AR link · 450 ms round trip for Player
+1's phone" and offers the fallback: **Set LAN server** (opens Table options)
+or, with an address already saved, **Use LAN server** (switches at once:
+QRs re-render, phones rescan). Both clear under 200 ms, so a link hovering
+around the threshold does not flicker. The hosted relay (Render, free tier)
+is a few hundred ms away from some networks and much more while it wakes;
+a relay on the LAN answers in a few ms. Nothing switches on its own: a
+relay change means every phone rescans, which is the players' call.
+
 ## Where the relay and the viewer are
 
 `src/lib/ar/arEndpoints.ts` resolves the pair once per table load, each

@@ -31,6 +31,8 @@ export type ArAsset = { img: string; wM: number; hM: number };
 export type ArRelayStatus = 'connecting' | 'connected' | 'closed' | 'unreachable' | 'displaced';
 const UNREACHABLE_FAILURES = 3;
 const UNREACHABLE_AFTER_MS = 15_000;
+const PING_MS = 3000;
+const PING_LOST_MS = 5000;
 
 /** A static patch of the screen the phones register from, published
  *  alongside the whole-screen image: a column of the market band, or a
@@ -136,6 +138,8 @@ export type ArHostOptions = {
   /** Reuse a session code (e.g. restored from storage); default: generated. */
   session?: string;
   onAction?: (a: ArAction) => void;
+  /** The table's own round trip to the relay, ms (a running average), after every ping; null when the socket is down. */
+  onLatency?: (ms: number | null) => void;
   onViewers?: (count: number) => void;
   /** Who is connected: the phone count and the seat tokens with at least
    *  one phone (`seats` is null when the relay predates per-seat presence). */
@@ -158,6 +162,11 @@ export class ArHost {
   private viewerBase: string;
   private opts: ArHostOptions;
   private ws: WebSocket | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pendingPing: number | null = null;
+  private rtt: number | null = null;
+  /** The table's round trip to the relay, ms (running average), or null. */
+  get relayRttMs(): number | null { return this.rtt; }
   private closed = false;
   private displaced = false;
   private everOpened = false;
@@ -233,8 +242,35 @@ export class ArHost {
   close(): void {
     this.closed = true;
     if (this.sceneTimer) clearTimeout(this.sceneTimer);
+    this.stopPings();
     this.ws?.close(1000);
     this.ws = null;
+  }
+
+  // Latency: a ping every 3 s while the socket is open; the relay echoes the
+  // stamp. The table shows its own round trip beside the phones' and warns
+  // (offering the LAN server) when either is long. An unanswered ping counts
+  // as 5 s when the next one is due.
+  private startPings(): void {
+    this.stopPings();
+    this.pingTimer = setInterval(() => this.ping(), PING_MS);
+    this.ping();
+  }
+  private stopPings(): void {
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = null;
+    this.pendingPing = null;
+    if (this.rtt != null) { this.rtt = null; this.opts.onLatency?.(null); }
+  }
+  private ping(): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (this.pendingPing != null && performance.now() - this.pendingPing >= PING_LOST_MS) this.notePong(PING_LOST_MS);
+    if (this.pendingPing == null) { this.pendingPing = performance.now(); this.send({ type: 'ping', t: this.pendingPing }); }
+  }
+  private notePong(rtt: number): void {
+    this.pendingPing = null;
+    this.rtt = this.rtt == null ? rtt : this.rtt * 0.7 + rtt * 0.3;
+    this.opts.onLatency?.(this.rtt);
   }
 
   private open(): void {
@@ -247,6 +283,7 @@ export class ArHost {
       this.failures = 0;
       this.downSince = null;
       this.opts.onStatus?.('connected');
+      this.startPings();
       this.send({ v: 1, type: 'join', role: 'table', session: this.session, game: 'jaipur' });
       // Replay the whole published picture for the fresh connection.
       if (this.tracking) this.send({ type: 'tracking', tracking: this.tracking });
@@ -265,7 +302,9 @@ export class ArHost {
         return;
       }
       if (msg.type === 'action') this.opts.onAction?.(msg as ArAction);
-      else if (msg.type === 'peers' || msg.type === 'joined') {
+      else if (msg.type === 'pong') {
+        if (typeof msg.t === 'number' && msg.t === this.pendingPing) this.notePong(performance.now() - msg.t);
+      } else if (msg.type === 'peers' || msg.type === 'joined') {
         if (typeof msg.viewers === 'number') {
           this.opts.onViewers?.(msg.viewers);
           const seats = Array.isArray(msg.seats) ? msg.seats.filter((x): x is string => typeof x === 'string') : null;
@@ -279,6 +318,7 @@ export class ArHost {
     };
     ws.onclose = () => {
       if (this.ws !== ws) return; // replaced by setEndpoints: not ours to retry
+      this.stopPings();
       this.failures += 1;
       this.downSince ??= Date.now();
       const unreachable = (!this.everOpened && this.failures >= UNREACHABLE_FAILURES) || Date.now() - this.downSince > UNREACHABLE_AFTER_MS;
