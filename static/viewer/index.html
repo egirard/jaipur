@@ -175,10 +175,12 @@
   }
   /* "Show AR diagnostics" (Table options): the registration numbers, live. */
   #diag {
-    position: fixed; top: calc(10px + env(safe-area-inset-top)); left: 10px; z-index: 5; max-width: calc(100vw - 130px);
-    padding: 6px 8px; border-radius: 6px; background: rgba(0,0,0,0.55); color: #d8f0ff;
-    font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; pointer-events: none;
+    position: fixed; top: calc(52px + env(safe-area-inset-top)); left: 8px; right: 8px; z-index: 7;
+    padding: 8px 10px; border-radius: 8px; background: rgba(0,0,0,0.7); color: #d8f0ff;
+    font: 600 13px/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre; overflow: hidden; pointer-events: none;
   }
+  /* Under the panel the guide card steps down by the panel's height (set from its measured height). */
+  #overlay.has-diag #guide { top: calc(60px + env(safe-area-inset-top) + var(--diag-h, 0px)); }
   /* Step-by-step guidance in AR: the first-lock cue every session starts
      with, and the registration check the table can ask a seat to run. The
      phone carries every instruction and countdown (the table has no
@@ -294,7 +296,7 @@
     </div>
     <div id="hud"></div>
   </div>
-  <span id="build">build 344d7bf·table</span>
+  <span id="build">build b86e59e·table</span>
   <script>
     // Any script failure lands in the lobby instead of a silently dead page.
     (function () {
@@ -307,8 +309,8 @@
       window.addEventListener('unhandledrejection', function (e) { show(String(e.reason && e.reason.message || e.reason)); });
     })();
   </script>
-  <!-- 344d7bf·table is stamped by the Pages workflow so the HTML always loads
+  <!-- b86e59e·table is stamped by the Pages workflow so the HTML always loads
        the script it was published with (Pages caches both for 10 min). -->
-  <script type="module" src="./viewer.js?v=344d7bf·table"></script>
+  <script type="module" src="./viewer.js?v=b86e59e·table"></script>
 </body>
 </html>

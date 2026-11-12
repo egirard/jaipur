@@ -3616,7 +3616,7 @@
           <span>Passing turn…</span>
         {:else if marketHidden}
           {@const who = calibratingPhones().map((d) => (d.seat ? playerForSeat(Number(d.seat) as Seat)?.displayName ?? `Player ${d.seat}` : 'a phone'))}
-          <span data-calibration-prompt>Calibrating {who.join(' and ')}'s phone{who.length === 1 ? '' : 's'} · the market stays hidden until the phone finds the table. Hold the phone so the whole screen is in view.</span>
+          <span data-calibration-prompt>Calibrating {who.join(' and ')}'s phone{who.length === 1 ? '' : 's'} · the market and the deck stay off the screen until the phone finds the table. Hold the phone so the whole screen is in view.</span>
           <button type="button" class="cancel" data-waive-calibration onclick={waiveCalibration}>Show the market</button>
         {:else if pendingDraw}
           <span>{pendingDraw.kind === 'camels' ? `Take all ${pendingDraw.cardIds.length} camels? Tap a ✓ camel to confirm.` : 'Take this card? Tap it again to confirm — or tap a card or camel of yours to trade it for this one.'}</span>
@@ -3681,7 +3681,10 @@
           >?</button>
       </div>
       <div class="market-stage">
-        <span class="deck" aria-label={`Deck, ${lobby.round.deck.length} cards`}>
+        <!-- While an AR phone calibrates the deck goes off the screen with the
+             market (the cell stays, so nothing else moves): the phone wants the
+             whole middle of the screen bare. -->
+        <span class="deck" class:calibrating={marketHidden} data-deck-calibrating={marketHidden || undefined} aria-label={`Deck, ${lobby.round.deck.length} cards`}>
           <img class="deck-card" src={componentImage('card-back')} alt="" />
           <!-- The count sits in a corner of the deck, once for each player
                (the top player's reads the right way up from their side). -->
@@ -4656,6 +4659,7 @@
   }
   .orientation-toggle[aria-pressed='true'] { border-color: #a6442d; background: #fff4d6; color: #a6442d; }
   .deck { position: relative; display: grid; grid-template-rows: var(--table-market-card-size); place-items: center; }
+  .deck.calibrating > * { visibility: hidden; }
   .deck-badge { position: absolute; z-index: 2; right: -0.4rem; bottom: -0.4rem; min-width: 2em; padding: 0.12em 0.5em; border: 1.5px solid #315f58; border-radius: 99rem; background: rgb(255 250 240 / 96%); color: #183a37; font-size: clamp(0.8rem, 1.5vmin, 1.5rem); font-weight: 800; line-height: 1.2; text-align: center; box-shadow: 0 0.1rem 0.3rem rgb(10 32 30 / 35%); }
   .deck-badge.for-top { right: auto; bottom: auto; left: -0.4rem; top: -0.4rem; transform: rotate(180deg); }
   .deck-card {

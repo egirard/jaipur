@@ -519,8 +519,14 @@ export class BezelProfile {
     if (Math.abs(ring - p.bezel) > 60) return false;
     return true;
   }
-  /** The threshold to use for the next frame. */
-  get threshold() { return this.settled ? Math.round(Math.min(72, Math.max(20, this.settled.bezel + (this.settled.inside - this.settled.bezel) * 0.3))) : null; }
+  /** The threshold to use for the next frame: a third of the way from the
+   *  ring's grey up to the darker of its two neighbours (the screen, or the
+   *  table around it — a dark table must not be swept in with the ring). */
+  get threshold() {
+    const p = this.settled; if (!p) return null;
+    const neighbour = Number.isFinite(p.surround) ? Math.min(p.inside, p.surround) : p.inside;
+    return Math.round(Math.min(72, Math.max(20, p.bezel + Math.max(0, neighbour - p.bezel) * 0.3)));
+  }
 }
 
 export function median(xs) {

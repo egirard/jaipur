@@ -116,15 +116,17 @@ see their private cards in AR, while all play happens on the table.
   (on by default: each hand lies diamond → leather from its open slots; a
   card taken from the market lands by the slots, then slides into place),
   and **Hide the market while phones calibrate** (on by default: while a
-  phone in AR is still searching for the table, the five market cards stay
-  off the screen so the phone has the whole band of cloth — and the whole
-  screen, for the bezel scheme — to register from; the prompt names the
+  phone in AR is still searching for the table, the five market cards and
+  the deck stay off the screen (their cells stay, so nothing else moves)
+  so the phone has the whole band of cloth — and the whole screen, for the
+  bezel scheme — to register from; the prompt names the
   phone and offers **Show the market**, and the gate lifts on its own after
   90 s or when the phone locks or leaves AR).
 - The phone's lobby offers two ways into AR, so the two registration
   schemes can be compared on the same table: **Enter AR** (the image
   targets alone) and **Enter AR with bezel** (the display's black frame
-  found in the camera image as well, fused with the targets). The table's
+  found in the camera image as well; while it keeps being found it holds
+  the table and the targets only take over when it is lost). The table's
   AR diagnostics and registration-check results say which scheme a phone
   used (`mode`) and, for the bezel, how often it found the screen, the
   solve time, how far its pose sits from the image tracker's, and the

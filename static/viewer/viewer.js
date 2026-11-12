@@ -1526,8 +1526,16 @@ let diagShownAt = 0;
 let fpsFrames = 0, fpsAt = 0, fpsValue = 0;
 function applyDebugFlags() {
   targetsGroup.visible = debugFlags.targets;
-  diagEl.classList.toggle('hidden', !debugFlags.diag || !xrSession);
+  const show = Boolean(debugFlags.diag && xrSession);
+  diagEl.classList.toggle('hidden', !show);
+  overlay.classList.toggle('has-diag', show); // the guide card steps down under the panel
+  if (!show) overlay.style.removeProperty('--diag-h');
 }
+// The panel is a fixed grid of lines (the same line count and field
+// order every refresh, numbers padded), so it never reflows or jumps; it
+// stays up for the whole session while the table's option is on.
+const padN = (v, w, d = 0) => (v == null || Number.isNaN(v) ? '—' : Number(v).toFixed(d)).padStart(w);
+const clip = (t, w) => (t.length > w ? `${t.slice(0, w - 1)}…` : t);
 function renderDiagOverlay(now) {
   fpsFrames += 1;
   if (now - fpsAt >= 1000) { fpsValue = Math.round((fpsFrames * 1000) / (now - fpsAt)); fpsFrames = 0; fpsAt = now; }
@@ -1540,19 +1548,28 @@ function renderDiagOverlay(now) {
   const since = arvDiag.lastResultAt ? Date.now() - arvDiag.lastResultAt : null;
   const state = !imageTrackingActive && !bezelActive ? 'no-tracking' : since != null && since < 1500 ? (counts.tracked || bezelFoundRecently() ? 'tracked' : 'emulated') : tableSeen ? 'lost' : 'searching';
   const dist = tableRoot.visible ? camera.position.distanceTo(tableRoot.position) : null;
-  diagEl.textContent = [
-    `state ${state} · ${fpsValue} fps · frame ${arvDiag.frames}`,
-    `this frame: ${counts.tracked} tracked · ${counts.emulated} emulated · ${counts.untracked} untracked (of ${trackedTargets.length})`,
-    `totals: tracked ${arvDiag.tracked} · emulated ${arvDiag.emulated} · untracked ${arvDiag.untracked}`,
-    `target ${t ? t.id : 'none yet'} of ${trackedTargets.length}` +
-      (t ? ` · declared ${t.widthM.toFixed(3)} m · measured ${measured ? measured.toFixed(3) : '—'} m` : ''),
-    `scale ×${arvDiag.lastScale.toFixed(3)} · images ${trackScore ?? 'unrated'} · epoch ${latestTracking?.epoch ?? '?'}`,
-    arvDiag.scores.some((x) => x.score !== 'trackable') ? `untrackable: ${arvDiag.scores.filter((x) => x.score !== 'trackable').map((x) => x.id).join(' ')}` : '',
-    `seen ${tableSeen ? 'yes' : 'no'} · placed ${placed ? 'manual' : 'no'} · last result ${since == null ? '—' : `${since} ms ago`}`,
-    dist != null ? `table ${dist.toFixed(2)} m from the camera` : 'table not shown',
-    `mode ${arMode}${arMode === 'bezel' ? ` · ${bezelActive ? bezelLine() : `bezel off (${bezelOff})`}` : ''}`,
-    viewerMotion.pitch != null ? `pitch ${Math.round(viewerMotion.pitch)}° · moved ${viewerMotion.moved.toFixed(3)} m · turned ${viewerMotion.turned.toFixed(1)}° this interval` : '',
-  ].filter(Boolean).join('\n');
+  const lines = [
+    `${state.padEnd(11)} ${padN(fpsValue, 2)} fps  frame ${String(arvDiag.frames).padStart(6)}  ${arMode}`,
+    `image  ${padN(counts.tracked, 1)} tracked ${padN(counts.emulated, 1)} emul  of ${padN(trackedTargets.length, 2)}  ×${padN(arvDiag.lastScale, 5, 3)}`,
+    `       ${clip(t ? t.id : 'no target yet', 12).padEnd(12)} ${t ? `${padN(t.widthM * 1000, 3)}→${padN(measured ? measured * 1000 : null, 3)} mm` : ''}`.trimEnd(),
+    `table  ${padN(dist, 4, 2)} m  seen ${tableSeen ? 'yes' : 'no '}  last ${padN(since, 5)} ms  ${arvDiag.scores.some((x) => x.score !== 'trackable') ? `${arvDiag.scores.filter((x) => x.score !== 'trackable').length} untrackable` : `images ${trackScore ?? 'unrated'}`}`,
+  ];
+  if (arMode === 'bezel') {
+    if (!bezelActive) lines.push(`bezel  off: ${clip(bezelOff, 36)}`, '', '');
+    else {
+      const p = bezel.profile.settled;
+      lines.push(
+        `bezel  ${padN(bezel.found, 4)}/${padN(bezel.analysed, 4)} found ${padN(bezel.lastMs, 5, 1)} ms  ${bezelFoundRecently() ? `seen ${padN(bezel.distance, 4, 2)} m` : clip(bezel.lastReason ?? 'searching', 18)}`,
+        `       vs image ${padN(bezel.agreeMm, 4)} mm ${padN(bezel.agreeDeg, 4, 1)}°  n ${padN(bezel.agreeN, 4)}  locks ${bezel.locks}`,
+        p
+          ? `       ring ${padN(p.bezelM == null ? null : p.bezelM * 1000, 3)} mm grey ${padN(p.bezel, 3)}/${padN(p.inside, 3)}/${padN(p.surround, 3)} thr ${padN(bezel.profile.threshold, 2)}  rows ${bezel.flipY == null ? `${bezel.votes.up}↑${bezel.votes.down}↓` : bezel.flipY ? '↑' : '↓'}`
+          : `       capturing ${bezel.profile.samples.length}/${bezel.profile.need}  rows ${bezel.votes.up}↑${bezel.votes.down}↓`,
+      );
+    }
+  }
+  lines.push(viewerMotion.pitch != null ? `pitch ${padN(viewerMotion.pitch, 3)}°  moved ${padN(viewerMotion.moved, 5, 3)} m  turned ${padN(viewerMotion.turned, 4, 1)}°` : 'pitch  —');
+  diagEl.textContent = lines.join('\n');
+  overlay.style.setProperty('--diag-h', `${diagEl.offsetHeight}px`);
 }
 
 function updateTracking(frame) {
@@ -1566,11 +1583,12 @@ function updateTracking(frame) {
   arvDiag.declaredWidthM = declaredWidthM;
 
   // Bezel mode: every few frames the camera image is read back and the
-  // screen's frame looked for; a pose from it stands beside the image
-  // tracker's this frame (fusion below), or alone when the tracker has
-  // nothing.
+  // screen's frame looked for. While the bezel keeps being found it is the
+  // authority on where the table is — the image tracker only watches (its
+  // pose is compared, not applied, bar a nudge); when the bezel is lost the
+  // image tracker takes over as in screen-only mode.
   const bezelPose = bezelActive ? bezelFrame(frame, refSpace) : null;
-  let imagePoseApplied = false;
+  const bezelHolds = bezelActive && bezelFoundRecently();
 
   if (imageTrackingActive && frame.getImageTrackingResults) {
     const results = frame.getImageTrackingResults();
@@ -1607,16 +1625,17 @@ function updateTracking(frame) {
         // Trust direct sightings aggressively — the overlay should snap to
         // the observed pixels. 'emulated' results are ARCore extrapolating
         // while the table is out of view; barely move on those, since they
-        // drift and are the main source of steady misplacement.
-        const alpha = result.trackingState === 'tracked' ? 0.7 : 0.05;
-        smoothPos.lerp(tmpPos, alpha);
-        smoothQuat.slerp(tmpQuat, alpha);
+        // drift and are the main source of steady misplacement. Under a
+        // held bezel lock a direct sighting is a nudge and an emulated one
+        // nothing: the two schemes are being compared, not averaged.
+        const alpha = bezelHolds ? (result.trackingState === 'tracked' ? 0.05 : 0) : result.trackingState === 'tracked' ? 0.7 : 0.05;
+        if (alpha > 0) { smoothPos.lerp(tmpPos, alpha); smoothQuat.slerp(tmpQuat, alpha); }
       }
-      imagePoseApplied = result.trackingState === 'tracked';
       // ARCore measures the physical size of the tracked image; use it to
       // correct the layout scale, so a slightly wrong screen-diagonal
-      // setting on the table can't offset the outer cards.
-      if (result.trackingState === 'tracked' && result.measuredWidthInMeters > 0 && target.widthM > 0) {
+      // setting on the table can't offset the outer cards. Not under a
+      // bezel lock: there the screen's published size is what placed it.
+      if (!bezelHolds && result.trackingState === 'tracked' && result.measuredWidthInMeters > 0 && target.widthM > 0) {
         const corr = THREE.MathUtils.clamp(result.measuredWidthInMeters / target.widthM, 0.7, 1.4);
         smoothScale = THREE.MathUtils.lerp(smoothScale, corr, 0.2);
         arvDiag.lastScale = smoothScale;
@@ -1628,22 +1647,24 @@ function updateTracking(frame) {
     }
   }
 
-  // Fusion: a bezel pose pulls the table toward the screen's observed
-  // frame. Beside a direct image sighting it is a gentle second opinion
-  // (0.2); when the tracker only extrapolates, or has nothing, it is the
-  // sighting (0.5), and the first one is the lock.
+  // The bezel pose: the first one is the lock (a snap, even over an image
+  // lock — the bezel's word counts), every later one pulls the table
+  // halfway to the screen's observed frame (two analysed frames settle it;
+  // the half keeps a one-off misdetection from throwing the table).
   if (bezelPose) {
-    const alpha = imagePoseApplied ? 0.2 : 0.5;
-    if (!tableSeen) {
+    if (!tableSeen || bezel.locks === 0) {
       smoothPos.copy(bezelPose.position);
       smoothQuat.copy(bezelPose.quaternion);
+      smoothScale = 1;
+      tableRoot.scale.setScalar(1);
+      arvDiag.lastScale = 1;
       tableSeen = true;
       bezel.locks += 1;
       clearTimeout(searchHintTimer);
       setHud(`Locked onto the table by its bezel. ${playHint()}`);
     } else {
-      smoothPos.lerp(bezelPose.position, alpha);
-      smoothQuat.slerp(bezelPose.quaternion, alpha);
+      smoothPos.lerp(bezelPose.position, 0.5);
+      smoothQuat.slerp(bezelPose.quaternion, 0.5);
     }
     tableRoot.position.copy(smoothPos);
     tableRoot.quaternion.copy(smoothQuat);
@@ -1982,7 +2003,10 @@ function bezelFrame(frame, refSpace) {
     const flips = bezel.flipY == null ? [true, false] : [bezel.flipY];
     for (const flipY of flips) {
       const g = greyFromRGBA(rgba, W, H, flipY);
-      const det = findScreen(g, W, H, threshold != null ? { threshold } : {});
+      let det = findScreen(g, W, H, threshold != null ? { threshold } : {});
+      // The captured profile's threshold first; when it finds nothing, the
+      // frame's own (Otsu) — the lighting may have moved on since capture.
+      if (!det.ok && threshold != null) { const d2 = findScreen(g, W, H, {}); if (d2.ok) { det = d2; bezel.reasons.otsuFallback = (bezel.reasons.otsuFallback ?? 0) + 1; } }
       if (!det.ok) { bezel.lastReason = det.reason; bezel.reasons[det.reason] = (bezel.reasons[det.reason] ?? 0) + 1; continue; }
       if (!bezel.profile.accepts(det)) { bezel.lastReason = 'unlike the captured bezel'; bezel.reasons.profile = (bezel.reasons.profile ?? 0) + 1; continue; }
       const solved = solveBezelPose(det, W, H, P, widthM, heightM, view.transform.matrix);
@@ -2019,9 +2043,10 @@ function bezelFrame(frame, refSpace) {
 
 const bezelUp = new THREE.Vector3(), bezelCandQuat = new THREE.Quaternion();
 /** The pose from a detection: both 180° assignments are solved; the one
- *  nearer the table's current pose wins once locked, else the one that
- *  puts this seat's edge nearest the camera (seat 2 sits at the bottom
- *  edge, +z; seat 1 at the top). Rejected unless the table comes out
+ *  nearer the table's current pose wins once the bezel has locked, else
+ *  the one that puts this seat's edge nearest the camera (seat 2 sits at
+ *  the bottom edge, +z; seat 1 at the top) — an image lock does not
+ *  decide, so a wrong one cannot drag the bezel round with it. Rejected unless the table comes out
  *  level and the right way up, 0.2–3 m away. */
 function solveBezelPose(det, W, H, P, widthM, heightM, viewMatrix) {
   bezelViewMat.fromArray(viewMatrix);
@@ -2035,7 +2060,7 @@ function solveBezelPose(det, W, H, P, widthM, heightM, viewMatrix) {
     bezelUp.set(0, 1, 0).applyQuaternion(bezelOut.quaternion);
     if (bezelUp.y < 0.6) continue; // not level, or the image's rows were the wrong way up
     let score;
-    if (tableSeen) score = bezelOut.quaternion.angleTo(smoothQuat);
+    if (bezel.locks > 0) score = bezelOut.quaternion.angleTo(smoothQuat);
     else {
       // This seat's edge: distance from the camera (the view's origin) to the
       // midpoint of the +z (seat 2) or −z (seat 1) edge, in view space.
