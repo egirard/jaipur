@@ -1094,7 +1094,6 @@ async function enterAR() {
 
   imageTrackingActive = xrSession.enabledFeatures?.includes('image-tracking') ?? false;
   try { localStorage.setItem('arviewer:image-tracking', imageTrackingActive ? 'yes' : 'no'); } catch { /* ignore */ }
-  startBezel(xrSession);
   startDiagReports();
   applyDebugFlags();
   const hitTestAvailable = xrSession.enabledFeatures?.includes('hit-test') ?? true;
@@ -1172,6 +1171,12 @@ async function enterAR() {
     try { await xrSession?.end(); } catch { /* already ended */ }
     return;
   }
+
+  // Only now: XRWebGLBinding needs the GL context marked XR-compatible,
+  // which three's setSession does (makeXRCompatible). Started before it,
+  // the binding's constructor throws and the session runs screen-only —
+  // the first two device runs of "Enter AR with bezel" did exactly that.
+  await startBezel(xrSession);
 
   // Manual placement stays available even when image tracking is enabled —
   // if the tracker never locks (poor lighting, stale image), the player can
@@ -1861,7 +1866,7 @@ const bezel = {
 let bezelPrev = { analysed: 0, found: 0 };
 const bezelFoundRecently = () => bezel.lastFoundAt > 0 && Date.now() - bezel.lastFoundAt < 600;
 
-function startBezel(session) {
+async function startBezel(session) {
   bezelActive = false;
   glBinding = null;
   Object.assign(bezel, { analysed: 0, found: 0, locks: 0, lastMs: 0, lastFoundAt: 0, lastFoundFrame: -1, lastReason: null, reasons: {}, profile: new BezelProfile(6), flipY: null, votes: { up: 0, down: 0 }, agreeMm: null, agreeDeg: null, agreeN: 0, lastCorners: null, frameSize: null, cameraSize: null, pose: null, distance: null });
@@ -1872,7 +1877,13 @@ function startBezel(session) {
   const gl = renderer.getContext();
   if (!(gl instanceof WebGL2RenderingContext)) { bezelOff = 'needs WebGL2'; return; }
   if (!latestTracking?.widthM) { bezelOff = 'the table published no physical size'; return; }
-  try { glBinding = new XRWebGLBinding(session, gl); } catch (err) { bezelOff = `XRWebGLBinding: ${err?.message ?? err}`; return; }
+  if (xrSession !== session) { bezelOff = 'the session ended before the bezel started'; return; }
+  try { glBinding = new XRWebGLBinding(session, gl); }
+  catch (err) {
+    // Belt and braces: ask for compatibility ourselves and try once more.
+    try { await gl.makeXRCompatible(); if (xrSession !== session) { bezelOff = 'the session ended before the bezel started'; return; } glBinding = new XRWebGLBinding(session, gl); }
+    catch (err2) { bezelOff = `XRWebGLBinding: ${err2?.message ?? err2}`; noteError('bezel', bezelOff); return; }
+  }
   bezelActive = true;
   bezelOff = '';
   bezelSvg.classList.remove('hidden');
