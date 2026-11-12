@@ -211,6 +211,17 @@
   #guide.searching #guideLive { animation: guidePulse 1.4s ease-in-out infinite; }
   #armed { color: #7ef0b6; font-size: 13px; font-weight: 600; max-width: 300px; }
   #bezelSvg { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  /* Latency: the round trip to the relay, and the warning when it is long
+     (in the lobby, the phone view and AR alike). */
+  #latency { font-size: 11px; opacity: 0.65; min-height: 1.2em; margin: 2px 0 0; }
+  #latency.slow-text { color: #ffb454; opacity: 1; }
+  #flatLatency.slow-text { background: #a65a00; color: #fff; }
+  .slow {
+    margin: 6px auto 0; max-width: 360px; padding: 8px 12px; border-radius: 10px;
+    background: rgba(166, 90, 0, 0.9); color: #fff; font-size: 13px; line-height: 1.35; text-align: center;
+  }
+  #slowAr { position: fixed; left: 12px; right: 12px; bottom: calc(72px + env(safe-area-inset-bottom)); margin: 0; pointer-events: none; z-index: 6; }
+  #overlay.has-offer #slowAr { bottom: calc(150px + env(safe-area-inset-bottom)); }
   .hidden { display: none !important; }
 </style>
 <script type="importmap">
@@ -234,6 +245,8 @@
       <button id="goFlat" type="button" class="secondary" disabled>Play using phone</button>
     </form>
     <p id="lobbyMsg">Connecting to the table…</p>
+    <p id="latency" class="latency"></p>
+    <p class="slow hidden"></p>
     <p id="fatal" class="hidden"></p>
     <p id="armed" class="hidden"></p>
   </div>
@@ -245,6 +258,7 @@
     <header>
       <span id="flatTitle">Your hand</span>
       <span id="flatTurn" class="pill hidden">Watch the table</span>
+      <span id="flatLatency" class="pill latency hidden" title="Round trip to the relay"></span>
       <button id="flatExit" type="button">Back</button>
     </header>
     <!-- Two forms of the phone view, remembered on the phone: Minimal shows
@@ -258,6 +272,7 @@
       <h2 class="flat-heading">Market</h2>
       <div id="flatMarket" class="flat-cards small"></div>
     </section>
+    <p class="slow hidden"></p>
     <p id="flatMsg"></p>
     <div id="flatPrompt" class="hidden">
       <ul id="flatNotes"></ul>
@@ -286,6 +301,7 @@
     <button id="exit" type="button">Quit AR</button>
     <div id="botOfferAr" class="bot-offer hidden"></div>
     <pre id="diag" class="hidden"></pre>
+    <p id="slowAr" class="slow hidden"></p>
     <div id="guide" class="hidden" role="status" aria-live="polite">
       <div id="guideStep"></div>
       <div id="guideTitle"></div>
@@ -296,7 +312,7 @@
     </div>
     <div id="hud"></div>
   </div>
-  <span id="build">build 20a31f0·table</span>
+  <span id="build">build 106a583·table</span>
   <script>
     // Any script failure lands in the lobby instead of a silently dead page.
     (function () {
@@ -309,8 +325,8 @@
       window.addEventListener('unhandledrejection', function (e) { show(String(e.reason && e.reason.message || e.reason)); });
     })();
   </script>
-  <!-- 20a31f0·table is stamped by the Pages workflow so the HTML always loads
+  <!-- 106a583·table is stamped by the Pages workflow so the HTML always loads
        the script it was published with (Pages caches both for 10 min). -->
-  <script type="module" src="./viewer.js?v=20a31f0·table"></script>
+  <script type="module" src="./viewer.js?v=106a583·table"></script>
 </body>
 </html>

@@ -244,6 +244,7 @@ function connect() {
   ws = new WebSocket(relay);
   ws.onopen = () => {
     diag.relay = 'open';
+    startPings();
     ws.send(JSON.stringify({
       type: 'join', role: 'viewer', session: sessionId,
       ...(seatToken ? { seat: seatToken } : {}),
@@ -253,7 +254,9 @@ function connect() {
   };
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.type === 'joined') {
+    if (msg.type === 'pong') {
+      onPong(msg.t);
+    } else if (msg.type === 'joined') {
       diag.tableConnected = msg.tableConnected;
       readyCheck();
     } else if (msg.type === 'rejected') {
@@ -307,12 +310,78 @@ function connect() {
     }
   };
   ws.onclose = () => {
+    stopPings();
     if (rejected) { diag.relay = 'closed'; readyCheck(); return; }
     diag.relay = 'reconnecting';
     diag.tableConnected = null;
     readyCheck();
     setTimeout(connect, 1500);
   };
+}
+
+// ---- Latency: the round trip to the relay ---------------------------------
+// Every 2 s while the socket is open the phone pings the relay and times the
+// reply (a tap reaches the table in about half of that, plus the table's own
+// half). The last, a running average and the worst are shown in whichever
+// view is up — the lobby's small line, a pill in the phone view's header, the
+// first line of the AR diag panel — and every third reading goes to the
+// table as a `latency` action, so the table can show every phone's and
+// warn too. Over LAT_SLOW_MS on the average (three readings in) the phone
+// warns, in place, and names the way out (a LAN server on the table);
+// the warning clears under LAT_OK_MS. A ping unanswered for 5 s counts as
+// lost and as a 5 s reading.
+const LAT_PING_MS = 2000, LAT_SLOW_MS = 300, LAT_OK_MS = 200, LAT_LOST_MS = 5000, LAT_REPORT_EVERY = 3;
+const latency = { last: null, avg: null, max: 0, n: 0, lost: 0, slow: false, pendingT: null, sinceReport: 0 };
+let pingTimer = null;
+const latencyEl = document.getElementById('latency');
+const flatLatency = document.getElementById('flatLatency');
+const slowEls = [...document.querySelectorAll('.slow')];
+function startPings() {
+  stopPings();
+  Object.assign(latency, { pendingT: null, sinceReport: 0 });
+  pingTimer = setInterval(pingRelay, LAT_PING_MS);
+  pingRelay();
+}
+function stopPings() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } latency.pendingT = null; }
+function pingRelay() {
+  if (ws?.readyState !== WebSocket.OPEN) return;
+  if (latency.pendingT != null && performance.now() - latency.pendingT >= LAT_LOST_MS) { latency.lost += 1; noteLatency(LAT_LOST_MS); }
+  if (latency.pendingT == null) { latency.pendingT = performance.now(); ws.send(JSON.stringify({ type: 'ping', t: latency.pendingT })); }
+}
+function onPong(t) {
+  if (typeof t !== 'number' || t !== latency.pendingT) return;
+  latency.pendingT = null;
+  noteLatency(performance.now() - t);
+}
+function noteLatency(rtt) {
+  latency.last = rtt;
+  latency.n += 1;
+  latency.avg = latency.avg == null ? rtt : latency.avg * 0.7 + rtt * 0.3;
+  latency.max = Math.max(latency.max, rtt);
+  const wasSlow = latency.slow;
+  if (!latency.slow && latency.n >= 3 && latency.avg > LAT_SLOW_MS) latency.slow = true;
+  else if (latency.slow && latency.avg < LAT_OK_MS) latency.slow = false;
+  if (latency.slow && !wasSlow) { try { navigator.vibrate?.(60); } catch { /* fine */ } }
+  renderLatency();
+  latency.sinceReport += 1;
+  if (latency.sinceReport >= LAT_REPORT_EVERY) { latency.sinceReport = 0; sendAction('latency', undefined, latencyReport()); }
+}
+const latencyMode = () => (xrSession ? 'ar' : flatActive ? 'phone' : 'lobby');
+function latencyReport() {
+  return { rttMs: latency.last == null ? null : Math.round(latency.last), avgMs: latency.avg == null ? null : Math.round(latency.avg), maxMs: Math.round(latency.max), n: latency.n, lost: latency.lost, slow: latency.slow, mode: latencyMode() };
+}
+function renderLatency() {
+  const ms = latency.avg == null ? null : Math.round(latency.avg);
+  const text = ms == null ? '' : `Relay round trip ${ms} ms${latency.lost ? ` · ${latency.lost} lost` : ''}`;
+  latencyEl.textContent = text;
+  latencyEl.classList.toggle('slow-text', latency.slow);
+  flatLatency.textContent = ms == null ? '' : `${ms} ms`;
+  flatLatency.classList.toggle('hidden', ms == null);
+  flatLatency.classList.toggle('slow-text', latency.slow);
+  const warn = latency.slow
+    ? `Slow connection: ${ms} ms round trip to the relay — taps will lag${latency.lost ? ` and ${latency.lost} ping${latency.lost === 1 ? '' : 's'} went unanswered` : ''}. A LAN server set on the table (Table options) brings this down to a few ms.`
+    : '';
+  for (const el of slowEls) { el.textContent = warn; el.classList.toggle('hidden', !warn); }
 }
 
 function sendAction(action, nodeId, data) {
@@ -920,8 +989,12 @@ function renderFlat() {
   market.sort((a, b) => (a.xM ?? 0) - (b.xM ?? 0));
   flatMarketWrap.classList.toggle('hidden', !complete || !market.length);
   flatMarket.replaceChildren(...market.map((n) => flatCard(n, assets, false, own && myTurn, own && myTurn ? 'mkt-tappable' : undefined)).filter(Boolean));
-  const notes = complete && Array.isArray(seat?.notes) ? seat.notes.filter((t) => typeof t === 'string') : [];
-  const controls = complete ? controlsOf(seat) : [];
+  // An undo — this player's own, or the other player asking for one — shows
+  // in the minimal view too: it is a question that must reach the player.
+  const allControls = controlsOf(seat);
+  const undoOnly = !complete && allControls.some((c) => String(c.id).startsWith('undo'));
+  const notes = (complete || undoOnly) && Array.isArray(seat?.notes) ? seat.notes.filter((t) => typeof t === 'string').slice(0, complete ? undefined : 1) : [];
+  const controls = complete ? allControls : allControls.filter((c) => String(c.id).startsWith('undo'));
   flatNotes.replaceChildren(...notes.map((t) => { const li = document.createElement('li'); li.textContent = t; return li; }));
   flatControls.replaceChildren(...controls.map((c) => {
     const b = document.createElement('button');
@@ -1422,7 +1495,7 @@ function reportDiag(final = false) {
     untrackable: arvDiag.scores.filter((x) => x.score !== 'trackable').map((x) => x.id),
     target: arvDiag.lastTarget, targetId: trackedTargets[arvDiag.lastTarget]?.id ?? null, targets: trackedTargets.length,
     scale: Number(arvDiag.lastScale.toFixed(3)), sinceResultMs: sinceResult,
-    mode: arMode, bezel: bezelReport(),
+    mode: arMode, bezel: bezelReport(), rttMs: latency.avg == null ? null : Math.round(latency.avg),
     ...takeViewerMotion(),
   });
 }
@@ -1554,7 +1627,7 @@ function renderDiagOverlay(now) {
   const state = !imageTrackingActive && !bezelActive ? 'no-tracking' : since != null && since < 1500 ? (counts.tracked || bezelFoundRecently() ? 'tracked' : 'emulated') : tableSeen ? 'lost' : 'searching';
   const dist = tableRoot.visible ? camera.position.distanceTo(tableRoot.position) : null;
   const lines = [
-    `${state.padEnd(11)} ${padN(fpsValue, 2)} fps  frame ${String(arvDiag.frames).padStart(6)}  ${arMode}`,
+    `${state.padEnd(11)} ${padN(fpsValue, 2)} fps f${String(arvDiag.frames).padStart(6)} ${arMode.padEnd(6)} rtt ${padN(latency.avg, 4)}`,
     `image  ${padN(counts.tracked, 1)} tracked ${padN(counts.emulated, 1)} emul  of ${padN(trackedTargets.length, 2)}  ×${padN(arvDiag.lastScale, 5, 3)}`,
     `       ${clip(t ? t.id : 'no target yet', 12).padEnd(12)} ${t ? `${padN(t.widthM * 1000, 3)}→${padN(measured ? measured * 1000 : null, 3)} mm` : ''}`.trimEnd(),
     `table  ${padN(dist, 4, 2)} m  seen ${tableSeen ? 'yes' : 'no '}  last ${padN(since, 5)} ms  ${arvDiag.scores.some((x) => x.score !== 'trackable') ? `${arvDiag.scores.filter((x) => x.score !== 'trackable').length} untrackable` : `images ${trackScore ?? 'unrated'}`}`,
