@@ -998,6 +998,15 @@
       case 'game/rematched':
         description = 'started a rematch';
         break;
+      case 'turn/undo-requested':
+        description = 'asked to take back a move';
+        break;
+      case 'turn/undo-declined':
+        description = activity.withdrawn ? 'withdrew the undo' : 'said no to the undo';
+        break;
+      case 'turn/undone':
+        description = `took back ${activity.undoneCount === 2 ? 'the last two moves' : 'the last move'}${activity.withConsent ? ' with an okay' : ''}`;
+        break;
     }
     if (activity.roundWinnerUid) {
       description += ` · ${playerName(activity.roundWinnerUid)} won round ${activity.roundNumber ?? ''}`;

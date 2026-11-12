@@ -3,6 +3,7 @@ import {
   SCHEMA_VERSION,
   reduceLobby,
   type GameEvent,
+  type GameEventType,
   type GameActivity,
   type LobbyState
 } from './game-events';
@@ -71,6 +72,58 @@ export interface GameState extends LobbyState {
   epoch: number;
   tabletopIntents: Record<string, TabletopIntent>;
   pendingDraw: PendingDraw | null;
+  /** A player's standing request to take back their last move(s), awaiting the other player's okay. */
+  undoRequest: UndoRequest | null;
+}
+
+export interface UndoRequest {
+  uid: string;
+  eventIds: string[];
+  roundNumber: number;
+  turnNumber: number;
+}
+
+// ---- Undo ------------------------------------------------------------------
+// A move is taken back by a `turn/undone` event naming the move events it
+// voids (`payload.eventIds`): the player's last move, or that move and the
+// computer opponent's reply. The game is a reduction of its events, so
+// voiding is a matter of skipping those events on replay — the deck is
+// dealt from the round's seed, so the replay puts the same cards back on
+// the deck, and whatever was revealed (a card off the deck, a bonus token)
+// is still known to both players: that is why such a move needs the other
+// player's okay (`turn/undo-requested` → `turn/undone` with consent, or
+// `turn/undo-declined`), which the table arranges; here only the voiding
+// is checked. Any draw begun or abandoned in the voided turn is voided
+// too, so no pending draw survives.
+const MOVE_TYPES = new Set<GameEventType>(['cards/taken-one', 'cards/taken-camels', 'cards/exchanged', 'cards/sold']);
+export const isMoveEvent = (type: GameEventType): boolean => MOVE_TYPES.has(type);
+
+/** The ids of the events voided by valid `turn/undone` events, and the ids
+ *  of those undo events themselves. An undo is valid when its `eventIds`
+ *  are exactly the round's trailing moves, in order. */
+export function undoneEvents(events: GameEvent[]): { voided: Set<string>; undos: Set<string> } {
+  const voided = new Set<string>();
+  const undos = new Set<string>();
+  const seen = new Set<string>();
+  let roundCards: { id: string; move: boolean }[] = [];
+  for (const event of events) {
+    if (seen.has(event.id) || event.schemaVersion !== SCHEMA_VERSION || event.reducerVersion !== REDUCER_VERSION) continue;
+    seen.add(event.id);
+    if (event.type === 'round/started' || event.type === 'game/rematched') { roundCards = []; continue; }
+    if (event.type.startsWith('cards/')) { roundCards.push({ id: event.id, move: MOVE_TYPES.has(event.type) }); continue; }
+    if (event.type !== 'turn/undone') continue;
+    const ids = event.payload.eventIds;
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 2 || !ids.every((id) => typeof id === 'string')) continue;
+    const moves = roundCards.filter((c) => c.move).map((c) => c.id);
+    const tail = moves.slice(-ids.length);
+    if (tail.length !== ids.length || !tail.every((id, i) => id === ids[i])) continue;
+    let from = roundCards.findIndex((c) => c.id === ids[0]);
+    while (from > 0 && !roundCards[from - 1].move) from -= 1; // that turn's draw-initiated / draw-abandoned
+    for (const c of roundCards.slice(from)) voided.add(c.id);
+    roundCards = roundCards.slice(0, from);
+    undos.add(event.id);
+  }
+  return { voided, undos };
 }
 
 export interface PendingDraw {
@@ -300,6 +353,11 @@ export function reduceGame(events: GameEvent[]): GameState {
   let epoch = 1;
   const tabletopIntents: Record<string, TabletopIntent> = {};
   let pendingDraw: PendingDraw | null = null;
+  let undoRequest: UndoRequest | null = null;
+  const { voided, undos } = undoneEvents(events);
+  /** The ids of the round's moves so far, in order (the undo events name their tail). */
+  const trailingMoveIds = (count: number): string[] =>
+    lobby.activity.filter((a) => MOVE_TYPES.has(a.type) && a.roundNumber === round?.number).slice(-count).map((a) => a.id);
 
   const actionActorUid = (event: GameEvent): string => {
     const requestedPlayerUid = event.payload.playerUid;
@@ -319,6 +377,7 @@ export function reduceGame(events: GameEvent[]): GameState {
   const finishAction = (actorUid: string): Pick<GameActivity, 'roundWinnerUid' | 'gameWinnerUid'> => {
     if (!round) return {};
     pendingDraw = null;
+    undoRequest = null; // a move played on settles any standing request
     delete tabletopIntents[actorUid];
     round.activeUid = playerUids.find((uid) => uid !== actorUid) ?? round.activeUid;
     round.turnNumber += 1;
@@ -348,6 +407,32 @@ export function reduceGame(events: GameEvent[]): GameState {
       event.schemaVersion !== SCHEMA_VERSION ||
       event.reducerVersion !== REDUCER_VERSION
     ) {
+      continue;
+    }
+    if (voided.has(event.id)) continue; // taken back
+    if (event.type === 'turn/undone' || event.type === 'turn/undo-requested' || event.type === 'turn/undo-declined') {
+      const actorUid = actionActorUid(event);
+      if (!round || !playerUids.includes(actorUid)) { lobby.diagnostics.push(`${event.id}: undo outside a round`); continue; }
+      if (event.type === 'turn/undone') {
+        if (!undos.has(event.id)) { lobby.diagnostics.push(`${event.id}: invalid undo`); continue; }
+        const count = (event.payload.eventIds as string[]).length;
+        pendingDraw = null;
+        undoRequest = null;
+        for (const uid of playerUids) delete tabletopIntents[uid];
+        lobby.activity.push({ id: event.id, type: event.type, actorUid, roundNumber: round.number, turnNumber: round.turnNumber, undoneCount: count, withConsent: event.payload.withConsent === true });
+      } else if (event.type === 'turn/undo-requested') {
+        const ids = event.payload.eventIds;
+        const valid = Array.isArray(ids) && ids.length > 0 && ids.length <= 2 && round.status === 'active' &&
+          trailingMoveIds(ids.length).every((id, i) => id === ids[i]) && trailingMoveIds(ids.length).length === ids.length;
+        if (!valid || undoRequest) { lobby.diagnostics.push(`${event.id}: invalid undo request`); continue; }
+        undoRequest = { uid: actorUid, eventIds: [...(ids as string[])], roundNumber: round.number, turnNumber: round.turnNumber };
+        lobby.activity.push({ id: event.id, type: event.type, actorUid, roundNumber: round.number, turnNumber: round.turnNumber });
+      } else {
+        if (!undoRequest) continue;
+        const withdrawn = actorUid === undoRequest.uid;
+        undoRequest = null;
+        lobby.activity.push({ id: event.id, type: event.type, actorUid, roundNumber: round.number, turnNumber: round.turnNumber, withdrawn });
+      }
       continue;
     }
     if (event.type === 'game/rematched') {
@@ -554,6 +639,7 @@ export function reduceGame(events: GameEvent[]): GameState {
         turnNumber: round.turnNumber - 1,
         cardIds: [card.id],
         cardKinds: [card.kind],
+        revealed: Boolean(replacement),
         ...result
       });
       continue;
@@ -578,9 +664,11 @@ export function reduceGame(events: GameEvent[]): GameState {
         continue;
       }
       const deck = round.deck;
+      let replacements = 0;
       const marketAfterCamels = round.market.flatMap((card) => {
         if (card.kind !== 'camel') return [card];
         const replacement = deck.shift();
+        if (replacement) replacements += 1;
         return replacement ? [replacement] : [];
       });
       round.market = marketAfterCamels;
@@ -594,6 +682,7 @@ export function reduceGame(events: GameEvent[]): GameState {
         turnNumber: round.turnNumber - 1,
         cardIds: camels.map(({ id }) => id),
         cardKinds: camels.map(({ kind }) => kind),
+        revealed: replacements > 0,
         ...result
       });
       continue;
@@ -640,6 +729,7 @@ export function reduceGame(events: GameEvent[]): GameState {
         cardKinds: taken.map(({ kind }) => kind),
         returnedCardIds: returned.map(({ id }) => id),
         returnedCardKinds: returned.map(({ kind }) => kind),
+        revealed: false,
         ...result
       });
       continue;
@@ -653,6 +743,7 @@ export function reduceGame(events: GameEvent[]): GameState {
         ? (round.ownedGoodsTokens[actorUid]?.length ?? 0) +
           (round.ownedBonusTokens[actorUid]?.length ?? 0)
         : 0;
+      const previousBonusCount = round.ownedBonusTokens[actorUid]?.length ?? 0;
       if (
         typeof kind !== 'string' ||
         !Array.isArray(cardIds) ||
@@ -674,6 +765,7 @@ export function reduceGame(events: GameEvent[]): GameState {
         cardIds: [...cardIds] as string[],
         cardKinds: Array.from({ length: cardIds.length }, () => kind),
         tokenCount: nextTokenCount - previousTokenCount,
+        revealed: (round.ownedBonusTokens[actorUid]?.length ?? 0) > previousBonusCount, // a bonus token's value is new to both
         ...result
       });
     }
@@ -685,7 +777,7 @@ export function reduceGame(events: GameEvent[]): GameState {
   lobby.activity.sort(
     (left, right) => (eventOrder.get(left.id) ?? 0) - (eventOrder.get(right.id) ?? 0)
   );
-  return { ...lobby, round, rounds, seals, winnerUid, epoch, tabletopIntents, pendingDraw };
+  return { ...lobby, round, rounds, seals, winnerUid, epoch, tabletopIntents, pendingDraw, undoRequest };
 }
 
 export function legalSingleGoods(round: RoundState, uid: string): Card[] {

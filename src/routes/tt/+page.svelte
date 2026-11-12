@@ -36,7 +36,8 @@
     type Good,
     type PendingDraw,
     type Token,
-    isGood
+    isGood,
+    isMoveEvent,
   } from '$lib/jaipur-rules';
   import { generateRoomCode, isRoomCode } from '$lib/room-code';
   import { ArTabletop, type ArTrackingTargets, currentDiagInches, physicalInfo, DIAG_MIN, DIAG_MAX, type PhysicalInfo, type PhonePrompt, type SalePreview } from '$lib/ar/arTabletop';
@@ -1429,6 +1430,9 @@
       case 'cards/taken-camels': return `took all ${count} ${count === 1 ? 'camel' : 'camels'}`;
       case 'cards/exchanged': return `traded ${count} for ${count}`;
       case 'cards/sold': return `sold ${count} ${kinds[0] ?? 'goods'}${activity.tokenCount ? ` · ${activity.tokenCount} tokens` : ''}`;
+      case 'turn/undo-requested': return 'asked to take back a move';
+      case 'turn/undo-declined': return activity.withdrawn ? 'withdrew the undo' : 'said no to the undo';
+      case 'turn/undone': return `took back ${activity.undoneCount === 2 ? 'the last two moves' : 'the last move'}${activity.withConsent ? ' with an okay' : ''}`;
       case 'game/rematched': return 'started a rematch';
     }
   }
@@ -1459,7 +1463,7 @@
     return { destroy: () => observer.disconnect() };
   }
   let logOpen = $state<{ top: boolean; bottom: boolean }>({ top: false, bottom: false });
-  const isMove = (a: GameActivity) => a.type.startsWith('cards/') || a.type.startsWith('round/') || a.type === 'game/rematched';
+  const isMove = (a: GameActivity) => a.type.startsWith('cards/') || a.type.startsWith('round/') || a.type === 'game/rematched' || a.type === 'turn/undone';
 
   // ---- Table guide (the "?" on the prompt) ---------------------------------
   // Callouts grow and glow into place over the real pieces, facing the player
@@ -1861,6 +1865,10 @@
     if (id === 'clear') { if (canSelectReturns(uid)) await publishIntent(uid, [], exchangeLoads(uid)); return; }
     if (id === 'draw-confirm') { if (pendingDraw?.activeUid === uid) await confirmPendingDraw(); return; }
     if (id === 'draw-cancel') { if (pendingDraw?.activeUid === uid) await abandonPendingDraw(); return; }
+    if (id === 'undo') { await requestUndo(uid); return; }
+    if (id === 'undo-accept') { if (lobby.undoRequest && lobby.undoRequest.uid !== uid) await answerUndo(uid, true); return; }
+    if (id === 'undo-decline') { if (lobby.undoRequest && lobby.undoRequest.uid !== uid) await answerUndo(uid, false); return; }
+    if (id === 'undo-withdraw') { if (lobby.undoRequest?.uid === uid) await answerUndo(uid, false); return; }
     if (round.activeUid !== uid || pendingDraw) return;
     if (id === 'trade-confirm') return confirmExchange(uid);
     if (id === 'trade-cancel') return cancelTrade(uid);
@@ -1893,10 +1901,19 @@
   function phonePrompt(uid: string): PhonePrompt | null {
     const round = lobby.round;
     if (!round || round.status !== 'active') return null;
+    const req = lobby.undoRequest;
+    if (req) {
+      if (req.uid === uid) return { notes: [`Undo requested — waiting for ${playerName(undoOpponentOf(uid)?.uid ?? '')}`], controls: [{ id: 'undo-withdraw', label: 'Withdraw', kind: 'cancel' }] };
+      return { notes: [`${playerName(req.uid)} is requesting an undo. Is that okay?`], controls: [{ id: 'undo-accept', label: 'Yes, undo', kind: 'confirm' }, { id: 'undo-decline', label: 'No', kind: 'cancel' }] };
+    }
     if (pendingDraw?.activeUid === uid) {
       const card = round.market.find((c) => c.id === pendingDraw!.cardIds[0]);
       const what = pendingDraw.kind === 'camels' ? `all ${pendingDraw.cardIds.length} camels` : `the ${label(card?.kind ?? 'camel').toLowerCase()}`;
       return { notes: [`Take ${what}?`], controls: [{ id: 'draw-confirm', label: pendingDraw.kind === 'camels' ? 'Take the camels' : 'Take it', kind: 'confirm' }, { id: 'draw-cancel', label: 'Undo', kind: 'cancel' }] };
+    }
+    if (!pendingDraw && !busy && round.activeUid !== uid && undoableMoves(uid).length > 0) {
+      const asks = undoNeedsConsent(undoableMoves(uid), uid);
+      return { notes: [asks ? 'Your last move can be taken back if the other player agrees.' : 'Your last move can be taken back.'], controls: [{ id: 'undo', label: 'Undo my move', kind: 'plain' }] };
     }
     if (pendingDraw || round.activeUid !== uid) return null;
     if (pendingSale?.uid === uid) {
@@ -1915,6 +1932,56 @@
       return { notes, controls };
     }
     return null;
+  }
+
+  // ---- Undo ----------------------------------------------------------------
+  // A player may take back their last move from their corner — their own
+  // move, or that move and the computer's reply — while nobody else has
+  // played on and the round is still running. A move that showed something
+  // new (a card off the deck, a bonus token's value: `revealed` on the log
+  // entry) needs the other player's okay: the request stands in the centre
+  // prompt, facing them, and on their phone, until they answer or play on.
+  // The engine voids the events (jaipur-rules.ts, "Undo").
+  const isCardMove = (a: GameActivity) => isMoveEvent(a.type);
+  function undoableMoves(uid: string): GameActivity[] {
+    const round = lobby.round;
+    if (!round || round.status !== 'active' || lobby.undoRequest) return [];
+    const moves = lobby.activity.filter((a) => isCardMove(a) && a.roundNumber === round.number);
+    const last = moves.at(-1);
+    if (!last) return [];
+    if (last.actorUid === uid) return [last];
+    const prev = moves.at(-2);
+    if (lobby.bot && last.actorUid === lobby.bot.uid && prev?.actorUid === uid) return [prev, last];
+    return [];
+  }
+  /** Taking these back needs the other player's okay: something was revealed, and the other player is a person. */
+  const undoNeedsConsent = (moves: GameActivity[], uid: string) => !lobby.bot && moves.some((m) => m.actorUid === uid && m.revealed);
+  const undoOpponentOf = (uid: string) => lobby.players.find((p) => p.uid !== uid) ?? null;
+  async function requestUndo(uid: string) {
+    const moves = undoableMoves(uid);
+    if (!repository || !lobby.round || moves.length === 0 || busy) return;
+    const eventIds = moves.map((m) => m.id);
+    const stamp = { playerUid: uid, roundNumber: lobby.round.number, turnNumber: lobby.round.turnNumber };
+    requestBusy = true;
+    try {
+      if (undoNeedsConsent(moves, uid)) await repository.append('turn/undo-requested', { ...stamp, eventIds });
+      else await repository.append('turn/undone', { ...stamp, eventIds, withConsent: false });
+    } finally {
+      requestBusy = false;
+    }
+  }
+  /** The other player's answer (or the requester's withdrawal: okay=false from the requester). */
+  async function answerUndo(uid: string, okay: boolean) {
+    const req = lobby.undoRequest;
+    if (!repository || !req || !lobby.round || busy) return;
+    const stamp = { roundNumber: lobby.round.number, turnNumber: lobby.round.turnNumber };
+    requestBusy = true;
+    try {
+      if (okay && uid !== req.uid) await repository.append('turn/undone', { ...stamp, playerUid: req.uid, byUid: uid, eventIds: req.eventIds, withConsent: true });
+      else await repository.append('turn/undo-declined', { ...stamp, playerUid: uid });
+    } finally {
+      requestBusy = false;
+    }
   }
 
   async function appendFor(
@@ -2529,6 +2596,10 @@
       phoneDiag: (viewerId: string, seat: number, report: Partial<ArViewerDiag>) =>
         ar?.onViewerDiag?.(viewerId, String(seat), { state: 'searching', frames: 60, tracked: 0, emulated: 0, fps: 30, seen: false, score: null, epoch: null, target: -1, targets: 0, scale: 1, sinceResultMs: null, ...report }),
       marketHidden: () => marketHidden,
+      // The round and the log as the table holds them (undo tests compare before and after).
+      round: () => JSON.parse(JSON.stringify(lobby.round)),
+      activity: () => lobby.activity.map((a) => ({ id: a.id, type: a.type, actorUid: a.actorUid, revealed: a.revealed ?? null })),
+      undoRequest: () => lobby.undoRequest,
       // A phone's link report and the table's own round trip, for the
       // latency warning headless.
       phoneLatency: (viewerId: string, seat: number, report: Partial<ArViewerLatency>) =>
@@ -2658,7 +2729,8 @@
       winnerUid: null,
       epoch: 999, // never matches a live bot-turn key
       tabletopIntents: {},
-      pendingDraw: null
+      pendingDraw: null,
+      undoRequest: null
     };
   }
 
@@ -3537,6 +3609,26 @@
     <!-- The player's own switches, in their corner beside the game log:
          Show cards (the eye) and Shield. Lit when on. A phone-played seat
          has no shield. -->
+    {@const undoMoves = undoableMoves(player.uid)}
+    {#if lobby.undoRequest?.uid === player.uid}
+      <span class="seat-undo asked" data-undo-asked={seat}>Undo asked…<button type="button" class="seat-undo-withdraw" aria-label="Withdraw the undo request" data-undo-withdraw={seat} disabled={busy} onclick={(e) => { e.stopPropagation(); void answerUndo(player.uid, false); }}>✕</button></span>
+    {:else}
+      <!-- The player's own last move, taken back; one that revealed something asks the other player first. -->
+      <button
+        type="button"
+        class="seat-undo"
+        data-undo={seat}
+        data-undo-count={undoMoves.length || undefined}
+        data-undo-asks={undoMoves.length > 0 && undoNeedsConsent(undoMoves, player.uid) ? 'consent' : undefined}
+        disabled={undoMoves.length === 0 || busy}
+        aria-label={undoMoves.length === 0 ? 'Undo: nothing to take back' : undoNeedsConsent(undoMoves, player.uid) ? 'Undo: ask to take back your last move' : `Undo your last move${undoMoves.length === 2 ? ' and the computer\'s reply' : ''}`}
+        title={undoMoves.length === 0 ? 'Nothing to take back' : undoNeedsConsent(undoMoves, player.uid) ? 'Your move showed a new card — the other player will be asked' : 'Take back your last move'}
+        onclick={(e) => { e.stopPropagation(); void requestUndo(player.uid); }}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 4 12l5 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /><path d="M4 12h9a5 5 0 0 1 0 10h-3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /></svg>
+        <span>Undo</span>
+      </button>
+    {/if}
     <div class="seat-modes" data-seat-modes={seat} role="group" aria-label={`Player ${seat}'s table modes`}>
         <button
           type="button"
@@ -3701,7 +3793,13 @@
         data-prompt-seat={marketFacingSeat}
         data-prompt-phase={actionAnimating ? 'action' : turnPause ? 'pause' : turnTransitioning ? 'rotation' : 'ready'}
       >
-        {#if actionAnimating}
+        {#if lobby.undoRequest}
+          {@const other = undoOpponentOf(lobby.undoRequest.uid)}
+          <!-- The other player answers here (the prompt faces them: it is their turn) or on their phone. -->
+          <span data-undo-prompt={lobby.undoRequest.uid}>{playerName(lobby.undoRequest.uid)} is requesting an undo. Is that okay?</span>
+          <button type="button" disabled={busy || !other} data-undo-accept onclick={() => other && answerUndo(other.uid, true)}>Yes, undo</button>
+          <button type="button" class="cancel" disabled={busy || !other} data-undo-decline onclick={() => other && answerUndo(other.uid, false)}>No</button>
+        {:else if actionAnimating}
           <span>Finishing move…</span>
         {:else if turnPause}
           <span>Turn complete</span>
@@ -4579,6 +4677,11 @@
      the top player, so the order reads the same from both sides). */
   .top-log, .bottom-log { --seat-mode-size: clamp(1.9rem, 3.6vmin, 3.2rem); display: flex; align-items: center; gap: 0.5rem; }
   .seat-modes { display: flex; gap: 0.35rem; }
+  .seat-undo { display: inline-flex; align-items: center; gap: 0.3rem; height: var(--seat-mode-size); padding: 0 0.75rem 0 0.55rem; border: 1.5px solid #b7aa8d; border-radius: 999px; background: #f5ead3; color: #4a4030; font: inherit; font-size: clamp(0.7rem, 1.4vmin, 0.95rem); font-weight: 700; box-shadow: 0 0.1rem 0.3rem rgb(10 32 30 / 20%); cursor: pointer; white-space: nowrap; }
+  .seat-undo svg { width: 1.1em; height: 1.1em; }
+  .seat-undo:disabled { opacity: 0.4; cursor: default; box-shadow: none; }
+  .seat-undo.asked { background: #fff1d6; border-color: #d38b21; color: #7a4d00; }
+  .seat-undo-withdraw { margin-left: 0.4rem; width: 1.5em; height: 1.5em; padding: 0; border: 0; border-radius: 50%; background: #a6442d; color: #fff; font: inherit; font-size: 0.85em; font-weight: 900; line-height: 1; cursor: pointer; }
   /* The token row stops short of the two buttons (in Shield mode it is the hand's width already). */
   .player-seat { --seat-mode-size: clamp(1.9rem, 3.6vmin, 3.2rem); }
   .seat-tokens:not(.shielded) { margin-right: calc(2 * var(--seat-mode-size) + 1rem); }

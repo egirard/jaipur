@@ -989,8 +989,12 @@ function renderFlat() {
   market.sort((a, b) => (a.xM ?? 0) - (b.xM ?? 0));
   flatMarketWrap.classList.toggle('hidden', !complete || !market.length);
   flatMarket.replaceChildren(...market.map((n) => flatCard(n, assets, false, own && myTurn, own && myTurn ? 'mkt-tappable' : undefined)).filter(Boolean));
-  const notes = complete && Array.isArray(seat?.notes) ? seat.notes.filter((t) => typeof t === 'string') : [];
-  const controls = complete ? controlsOf(seat) : [];
+  // An undo — this player's own, or the other player asking for one — shows
+  // in the minimal view too: it is a question that must reach the player.
+  const allControls = controlsOf(seat);
+  const undoOnly = !complete && allControls.some((c) => String(c.id).startsWith('undo'));
+  const notes = (complete || undoOnly) && Array.isArray(seat?.notes) ? seat.notes.filter((t) => typeof t === 'string').slice(0, complete ? undefined : 1) : [];
+  const controls = complete ? allControls : allControls.filter((c) => String(c.id).startsWith('undo'));
   flatNotes.replaceChildren(...notes.map((t) => { const li = document.createElement('li'); li.textContent = t; return li; }));
   flatControls.replaceChildren(...controls.map((c) => {
     const b = document.createElement('button');

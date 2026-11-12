@@ -15,6 +15,9 @@ export type GameEventType =
   | 'cards/taken-camels'
   | 'cards/exchanged'
   | 'cards/sold'
+  | 'turn/undo-requested'
+  | 'turn/undo-declined'
+  | 'turn/undone'
   | 'game/rematched';
 
 export interface GameEvent {
@@ -48,6 +51,13 @@ export interface GameActivity {
   returnedCardIds?: string[];
   returnedCardKinds?: string[];
   tokenCount?: number;
+  /** A move that showed something new — a card off the deck, a bonus token's value — so taking it back needs the other player's okay. */
+  revealed?: boolean;
+  /** For `turn/undone`: how many moves were taken back, and whether the other player okayed it. */
+  undoneCount?: number;
+  withConsent?: boolean;
+  /** For `turn/undo-declined`: the requester withdrew (true) rather than the other player declining. */
+  withdrawn?: boolean;
   roundWinnerUid?: string;
   gameWinnerUid?: string;
 }

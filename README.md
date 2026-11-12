@@ -102,6 +102,19 @@ see their private cards in AR, while all play happens on the table.
   about a raised set. A seat played from a phone has no shield: on the
   table only the tapped card advances, face down and unmarked, while the
   phone and the AR view show the whole set with its numbers.
+- **Undo**, in the same corner strip: a player takes back their last move
+  — or, against the computer, that move and the computer's reply — while
+  nobody has played on and the round is still running. A move that showed
+  nothing new (a trade, a sale of one or two) is taken back at once; one
+  that did (a card drawn off the deck to refill the market, a bonus token
+  earned) asks the other player first: "Player 1 is requesting an undo. Is
+  that okay?" faces them in the centre prompt, and on their phone, with
+  Yes / No, and the requester's corner reads "Undo asked…" with a withdraw
+  ✕ until it is answered or the other player plays on. The game log says
+  what happened ("took back the last move with an okay", "said no to the
+  undo"). The engine voids the move's events on replay, so the deck gives
+  the same card again (it is known to both now — hence the asking), and
+  any draw begun in that turn is voided with it.
 - Two icon buttons in the bottom-right corner of each player's panel are
   that player's own switches, lit when on: the **eye** is **Show cards**
   (the hand lies face up on the table; never on at the start — a seat

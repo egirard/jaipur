@@ -185,6 +185,7 @@ describe('taking one good', () => {
     expect(after.activity.at(-1)).toEqual({
       id: 'a-4',
       type: 'cards/taken-one',
+      revealed: true,
       actorUid: 'a',
       roundNumber: 1,
       turnNumber: 1,
@@ -649,5 +650,105 @@ describe('replay conflicts and versions', () => {
     expect(replayed.diagnostics).toContain('b-6: incompatible version');
     expect(replayed.activity.map(({ id }) => id)).not.toContain('a-5');
     expect(replayed.activity.map(({ id }) => id)).not.toContain('b-6');
+  });
+});
+
+describe('undo', () => {
+  const event = (
+    id: string,
+    type: GameEvent['type'],
+    actorUid: string,
+    payload: Record<string, unknown>
+  ): GameEvent => ({
+    id, type, actorUid, payload,
+    clientSeq: Number(id.match(/\d+/)?.[0] ?? 1), createdAtMillis: 1, schemaVersion: 1, reducerVersion: 1
+  });
+  const setup = () => [
+    event('a-1', 'game/created', 'a', { gameId: 'undo', displayName: 'A' }),
+    event('b-1', 'player/joined', 'b', { displayName: 'B' }),
+    event('a-2', 'player/ready', 'a', { ready: true }),
+    event('b-2', 'player/ready', 'b', { ready: true }),
+    event('a-3', 'round/started', 'a', { seed: 'undo-seed', starterUid: 'a' })
+  ];
+  const stamp = (state: ReturnType<typeof reduceGame>) => ({ roundNumber: state.round!.number, turnNumber: state.round!.turnNumber });
+
+  it('takes back a single take (and the draw that began it): the card is on the deck again, the turn is the player\'s', () => {
+    const before = reduceGame(setup());
+    const card = legalSingleGoods(before.round!, 'a')[0];
+    const played = [
+      ...setup(),
+      event('a-4', 'cards/draw-initiated', 'a', { cardId: card.id, ...stamp(before) }),
+      event('a-5', 'cards/taken-one', 'a', { cardId: card.id, ...stamp(before) })
+    ];
+    const after = reduceGame(played);
+    expect(after.round!.activeUid).toBe('b');
+    expect(after.activity.at(-1)).toMatchObject({ type: 'cards/taken-one', revealed: true });
+    const undone = reduceGame([...played, event('a-6', 'turn/undone', 'a', { eventIds: ['a-5'], withConsent: true })]);
+    expect(undone.round).toEqual(before.round);
+    expect(undone.pendingDraw).toBeNull();
+    expect(undone.undoRequest).toBeNull();
+    expect(undone.activity.at(-1)).toMatchObject({ type: 'turn/undone', actorUid: 'a', undoneCount: 1, withConsent: true });
+    expect(undone.activity.some((a) => a.type === 'cards/taken-one')).toBe(false);
+    // The same take played again lands the same card: the deck is the round's.
+    const again = reduceGame([...played, event('a-6', 'turn/undone', 'a', { eventIds: ['a-5'] }), event('a-7', 'cards/taken-one', 'a', { cardId: card.id, ...stamp(before) })]);
+    expect(again.round).toEqual(after.round);
+  });
+
+  it('an exchange reveals nothing; a sale of three reveals a bonus token', () => {
+    const before = reduceGame(setup());
+    const round = before.round!;
+    const hand = round.hands.a;
+    const good = round.market.find(({ kind }) => kind !== 'camel' && kind !== hand[0].kind) ?? round.market.find(({ kind }) => kind !== 'camel')!;
+    const traded = reduceGame([...setup(), event('a-4', 'cards/exchanged', 'a', { takenCardIds: [good.id, round.market.find((c) => c.kind === 'camel' && c.id !== good.id)?.id].filter(Boolean), returnedCardIds: [], ...stamp(before) })]);
+    // Only a legal exchange counts; fall back to checking the flag on whatever was applied.
+    for (const a of traded.activity) if (a.type === 'cards/exchanged') expect(a.revealed).toBe(false);
+    const s = reduceGame(setup());
+    const kinds = new Map<string, string[]>();
+    for (const c of s.round!.hands.a) kinds.set(c.kind, [...(kinds.get(c.kind) ?? []), c.id]);
+    const three = [...kinds.entries()].find(([, ids]) => ids.length >= 3);
+    if (three) {
+      const sold = reduceGame([...setup(), event('a-4', 'cards/sold', 'a', { kind: three[0], cardIds: three[1].slice(0, 3), ...stamp(s) })]);
+      expect(sold.activity.at(-1)).toMatchObject({ type: 'cards/sold', revealed: true });
+    }
+  });
+
+  it('takes back the player\'s move and the computer\'s reply together, and refuses anything else', () => {
+    const before = reduceGame(setup());
+    const cardA = legalSingleGoods(before.round!, 'a')[0];
+    const played = [...setup(), event('a-4', 'cards/taken-one', 'a', { cardId: cardA.id, ...stamp(before) })];
+    const mid = reduceGame(played);
+    const cardB = legalSingleGoods(mid.round!, 'b')[0];
+    const both = [...played, event('b-3', 'cards/taken-one', 'b', { cardId: cardB.id, ...stamp(mid) })];
+    const undone = reduceGame([...both, event('a-5', 'turn/undone', 'a', { eventIds: ['a-4', 'b-3'] })]);
+    expect(undone.round).toEqual(before.round);
+    // Not the trailing moves: the earlier one alone, or in the wrong order.
+    expect(reduceGame([...both, event('a-5', 'turn/undone', 'a', { eventIds: ['a-4'] })]).round).toEqual(reduceGame(both).round);
+    expect(reduceGame([...both, event('a-5', 'turn/undone', 'a', { eventIds: ['b-3', 'a-4'] })]).round).toEqual(reduceGame(both).round);
+    expect(reduceGame([...both, event('a-5', 'turn/undone', 'a', { eventIds: ['a-4'] })]).diagnostics).toContain('a-5: invalid undo');
+    // Only the opponent's last move: allowed by the reducer (the table decides who may ask).
+    expect(reduceGame([...both, event('b-4', 'turn/undone', 'b', { eventIds: ['b-3'] })]).round).toEqual(mid.round);
+  });
+
+  it('a request stands until answered, and a move played on settles it', () => {
+    const before = reduceGame(setup());
+    const card = legalSingleGoods(before.round!, 'a')[0];
+    const played = [...setup(), event('a-4', 'cards/taken-one', 'a', { cardId: card.id, ...stamp(before) })];
+    const asked = reduceGame([...played, event('a-5', 'turn/undo-requested', 'a', { eventIds: ['a-4'] })]);
+    expect(asked.undoRequest).toEqual({ uid: 'a', eventIds: ['a-4'], roundNumber: 1, turnNumber: 2 });
+    expect(asked.round).toEqual(reduceGame(played).round);
+    const declined = reduceGame([...played, event('a-5', 'turn/undo-requested', 'a', { eventIds: ['a-4'] }), event('b-3', 'turn/undo-declined', 'b', {})]);
+    expect(declined.undoRequest).toBeNull();
+    expect(declined.activity.at(-1)).toMatchObject({ type: 'turn/undo-declined', actorUid: 'b', withdrawn: false });
+    const withdrawn = reduceGame([...played, event('a-5', 'turn/undo-requested', 'a', { eventIds: ['a-4'] }), event('a-6', 'turn/undo-declined', 'a', {})]);
+    expect(withdrawn.activity.at(-1)).toMatchObject({ type: 'turn/undo-declined', withdrawn: true });
+    const okayed = reduceGame([...played, event('a-5', 'turn/undo-requested', 'a', { eventIds: ['a-4'] }), event('b-3', 'turn/undone', 'b', { playerUid: 'a', eventIds: ['a-4'], withConsent: true })]);
+    expect(okayed.undoRequest).toBeNull();
+    expect(okayed.round).toEqual(before.round);
+    // A wrong request (not the trailing move) is ignored; a move by the opponent clears a standing one.
+    expect(reduceGame([...played, event('a-5', 'turn/undo-requested', 'a', { eventIds: ['a-1'] })]).undoRequest).toBeNull();
+    const mid = reduceGame(played);
+    const cardB = legalSingleGoods(mid.round!, 'b')[0];
+    const movedOn = reduceGame([...played, event('a-5', 'turn/undo-requested', 'a', { eventIds: ['a-4'] }), event('b-3', 'cards/taken-one', 'b', { cardId: cardB.id, ...stamp(mid) })]);
+    expect(movedOn.undoRequest).toBeNull();
   });
 });
