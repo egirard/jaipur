@@ -102,17 +102,25 @@ see their private cards in AR, while all play happens on the table.
   about a raised set. A seat played from a phone has no shield: on the
   table only the tapped card advances, face down and unmarked, while the
   phone and the AR view show the whole set with its numbers.
+- Two icon buttons in the bottom-right corner of each player's panel are
+  that player's own switches, lit when on: the **eye** is **Show cards**
+  (the hand lies face up on the table; never on at the start — a seat
+  played from the table without a phone holds a card to peek, or taps the
+  eye) and the **shield** is **Shield** (for a card shield laid over the
+  hand: the cards move to the player's edge of the mat and a row of card
+  backs — and open slot outlines — peeks out half a card above them, so
+  the opponent still sees how many you hold and how much room you have;
+  remembered per seat from the last run). A computer opponent has neither;
+  a seat played from a phone has no shield (that player reads their cards
+  there).
 - The gear in each player's upper-left corner of the market opens **Table
   options**: the tabletop id, the screen diagonal (check it against a bank
   card outline), the screen/viewport geometry the phones are told about,
   full screen, a new table, the animation demo, **Turn to trader**
   (rotate the market toward the active player; off by default because a
   phone in AR locks onto the pre-rotation capture and flips), **Show
-  hands**, **Shield** (for a card shield laid over each hand: the cards
-  move to the player's edge of the mat and a row of card backs — and open
-  slot outlines — peeks out half a card above them, so the opponent still
-  sees how many you hold and how much room you have; a seat played from a
-  phone is never shielded) and **Sorted hands**
+  cards** and **Shield** for the seat whose gear opened the panel (the same
+  two switches as the corner buttons below), and **Sorted hands**
   (on by default: each hand lies diamond → leather from its open slots; a
   card taken from the market lands by the slots, then slides into place),
   and **Hide the market while phones calibrate** (on by default: while a

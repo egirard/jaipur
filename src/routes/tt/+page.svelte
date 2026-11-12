@@ -596,7 +596,7 @@
   function publishAr() {
     if (actionAnimating) { arPublishHeld = true; return; }
     arPublishHeld = false;
-    void tick().then(() => ar?.publishFromState(lobby, showHands ? lobby.players.filter((p) => p.uid !== lobby.bot?.uid).map((p) => p.uid) : []));
+    void tick().then(() => ar?.publishFromState(lobby, lobby.players.filter((p) => handShown(p.uid)).map((p) => p.uid)));
   }
   let arrivingCardIds = $state<string[]>([]);
   // Safety net: a card hidden as "arriving" whose flight never finished
@@ -879,9 +879,9 @@
       musicLevel = level('jaipur:tabletop:music-level') ?? level('jaipur:tabletop:music-volume') ?? 0.35;
       sfxLevel = level('jaipur:tabletop:sfx-level') ?? 1;
       startMusic(); // plays now where autoplay is allowed, else on the first gesture
-      const savedHands = localStorage.getItem('jaipur:tabletop:show-hands');
-      if (savedHands === 'on' || savedHands === 'off') showHandsChoice = savedHands;
-      shieldMode = localStorage.getItem('jaipur:tabletop:shield') === 'on';
+      // Shield is remembered per seat (the old single key stands in for both).
+      const shieldBoth = localStorage.getItem('jaipur:tabletop:shield') === 'on';
+      shieldSeat = { 1: (localStorage.getItem('jaipur:tabletop:shield:1') ?? (shieldBoth ? 'on' : 'off')) === 'on', 2: (localStorage.getItem('jaipur:tabletop:shield:2') ?? (shieldBoth ? 'on' : 'off')) === 'on' };
       sortHands = localStorage.getItem('jaipur:tabletop:sort-hands') !== 'off';
       showArTargets = localStorage.getItem('jaipur:tabletop:ar-targets') === 'on';
       marketGate = localStorage.getItem('jaipur:tabletop:market-gate') !== 'off';
@@ -1178,31 +1178,34 @@
     }
   }
 
-  // "Show hands": a human's hand cards lie face up on the table (a computer
-  // opponent's never are). Unless the players
-  // chose otherwise, it is on against a computer opponent (nobody to hide
-  // from) and off with two humans (their phones show their cards).
-  let showHandsChoice = $state<'auto' | 'on' | 'off'>('auto');
-  // A player seated from the table itself ("Play without phone") has no phone to see their cards on.
-  const hasPhonelessPlayer = $derived(lobby.players.some((p) => p.uid.startsWith('table-')));
-  const showHands = $derived(showHandsChoice === 'auto' ? Boolean(lobby.bot) || hasPhonelessPlayer : showHandsChoice === 'on');
-  // Show hands changes what the AR phones may see (placed return cards): republish.
-  $effect(() => { void showHands; publishAr(); });
-  // "Shield" (Table options): for a card shield laid over each human's hand.
-  // The hand sits at the player's edge of the mat and a second card back
-  // lies under each card, shifted half a card toward the market, so the
-  // shield covers the cards themselves (face up with Show hands, or held to
-  // peek) while a row of half backs stays out from under it: the opponent
-  // counts those, the owner reads the cards. Off by default; a computer
-  // opponent's hand is never shielded (nothing to hide behind), nor is a
-  // seat played from a phone (in AR or the phone view): that player reads
-  // their cards on the phone, and the hand lies face down on the table.
-  let shieldMode = $state(false);
+  // "Show cards" and "Shield": each player's own, switched from the two
+  // icon buttons in the bottom-right corner of their panel (and from Table
+  // options, for the seat whose gear opened it).
+  //
+  // Show cards: the player's hand cards lie face up on the table. Never on
+  // at the start — a seat played from the table without a phone holds a
+  // card to peek, or taps the eye — and never for a computer opponent.
+  let showCards = $state<Record<Seat, boolean>>({ 1: false, 2: false });
+  // Shield: for a card shield laid over the player's hand. The hand sits
+  // at the player's edge of the mat and a second card back lies under each
+  // card, shifted half a card toward the market, so the shield covers the
+  // cards themselves (face up with Show cards, or held to peek) while a row
+  // of half backs stays out from under it: the opponent counts those, the
+  // owner reads the cards. Remembered per seat from the last run (off until
+  // chosen); a computer opponent's hand is never shielded (nothing to hide
+  // behind), nor is a seat played from a phone (in AR or the phone view):
+  // that player reads their cards on the phone, and the hand lies face down
+  // on the table.
+  let shieldSeat = $state<Record<Seat, boolean>>({ 1: false, 2: false });
+  const seatOfUid = (uid: string): Seat | null => lobby.players.find((p) => p.uid === uid)?.seat ?? null;
   /** A seat joined from a phone (its QR, in AR or the phone view): the player sees their cards there, never on the table. */
   const phonePlayed = (uid: string) => uid.startsWith('ar-');
-  const shielded = (uid: string) => shieldMode && uid !== lobby.bot?.uid && !phonePlayed(uid);
+  const handShown = (uid: string) => { const seat = seatOfUid(uid); return seat != null && showCards[seat] && uid !== lobby.bot?.uid; };
+  const shielded = (uid: string) => { const seat = seatOfUid(uid); return seat != null && shieldSeat[seat] && uid !== lobby.bot?.uid && !phonePlayed(uid); };
+  // Show cards changes what the AR phones may see (placed return cards): republish.
+  $effect(() => { void showCards[1]; void showCards[2]; publishAr(); });
   // The hand row moves on the mat with the setting: the AR hand nodes follow its rects.
-  $effect(() => { void shieldMode; publishAr(); });
+  $effect(() => { void shieldSeat[1]; void shieldSeat[2]; publishAr(); });
   // "Sorted hands" (Table options, on by default): each hand lies diamond →
   // leather from its open slots (src/lib/handOrder.ts). A card still in
   // flight lands where new cards always have, by the slots; once it has
@@ -1379,14 +1382,13 @@
     if (away) pauseMusic(); else startMusic();
   }
 
-  function toggleShowHands() {
-    showHandsChoice = showHands ? 'off' : 'on';
-    localStorage.setItem('jaipur:tabletop:show-hands', showHandsChoice);
+  function toggleShowCards(seat: Seat) {
+    showCards = { ...showCards, [seat]: !showCards[seat] };
   }
 
-  function toggleShield() {
-    shieldMode = !shieldMode;
-    localStorage.setItem('jaipur:tabletop:shield', shieldMode ? 'on' : 'off');
+  function toggleShield(seat: Seat) {
+    shieldSeat = { ...shieldSeat, [seat]: !shieldSeat[seat] };
+    try { localStorage.setItem(`jaipur:tabletop:shield:${seat}`, shieldSeat[seat] ? 'on' : 'off'); } catch { /* private mode */ }
   }
 
   function toggleMarketFacing() {
@@ -1690,7 +1692,7 @@
   // Seat a bot of the chosen level on an empty seat (one bot per table).
   // "Play without phone": a human sits at this seat from the table itself,
   // with no phone to show them their cards — so Show hands defaults on
-  // for them (see showHands) and hold-to-peek is always there.
+  // for them (the eye button in their corner, handShown) and hold-to-peek is always there.
   let seatNameEntry = $state<{ seat: Seat; name: string } | null>(null);
   // The table's own keyboard, brought up by a tap on the name field (a
   // kiosk screen has no system keyboard; inputmode=none keeps a tablet's
@@ -3384,13 +3386,13 @@
             class:arriving={arrivingCardIds.includes(card.id)}
             class:selected
             class:loaded
-            class:revealed={(showHands && player.uid !== lobby.bot?.uid) || revealedCardIds.includes(card.id)}
+            class:revealed={handShown(player.uid) || revealedCardIds.includes(card.id)}
             aria-disabled={!(canSelectReturns(player.uid) || convertibleDraw(player.uid)) || loaded}
             aria-pressed={selected}
             aria-label={`${selected ? 'Deselect' : 'Select'} face-down card for a trade; hold to peek at it`}
             data-table-hand-card={card.id}
             data-card-arriving={arrivingCardIds.includes(card.id) || undefined}
-            data-card-revealed={(showHands && player.uid !== lobby.bot?.uid) || revealedCardIds.includes(card.id) || undefined}
+            data-card-revealed={handShown(player.uid) || revealedCardIds.includes(card.id) || undefined}
             onclick={(e) => { e.preventDefault(); }}
             onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && (canSelectReturns(player.uid) || convertibleDraw(player.uid)) && !loaded) { e.preventDefault(); void tapHandCard(player.uid, card.id); } }}
             onpointerdown={(e) => startLongPress(e, card.id, (canSelectReturns(player.uid) || convertibleDraw(player.uid)) && !loaded ? () => { void tapHandCard(player.uid, card.id); } : undefined)}
@@ -3527,6 +3529,44 @@
       {/if}
     </div>
   </section>
+{/snippet}
+
+{#snippet seatModes(seat: Seat)}
+  {@const player = playerForSeat(seat)}
+  {#if player && player.uid !== lobby.bot?.uid}
+    <!-- The player's own switches, in their corner beside the game log:
+         Show cards (the eye) and Shield. Lit when on. A phone-played seat
+         has no shield. -->
+    <div class="seat-modes" data-seat-modes={seat} role="group" aria-label={`Player ${seat}'s table modes`}>
+        <button
+          type="button"
+          class="seat-mode"
+          class:on={showCards[seat]}
+          aria-pressed={showCards[seat]}
+          aria-label={`Show cards for Player ${seat}: ${showCards[seat] ? 'on' : 'off'}`}
+          title={`Show cards ${showCards[seat] ? 'on' : 'off'}`}
+          data-show-cards-toggle={seat}
+          data-on={showCards[seat] || undefined}
+          onclick={(e) => { e.stopPropagation(); toggleShowCards(seat); }}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /><circle cx="12" cy="12" r="3" fill="currentColor" /></svg>
+        </button>
+        <button
+          type="button"
+          class="seat-mode"
+          class:on={shielded(player.uid)}
+          aria-pressed={shieldSeat[seat]}
+          aria-label={`Shield for Player ${seat}: ${shieldSeat[seat] ? 'on' : 'off'}${phonePlayed(player.uid) ? ' (a seat played from a phone is not shielded)' : ''}`}
+          title={phonePlayed(player.uid) ? 'No shield: this seat reads its cards on the phone' : `Shield ${shieldSeat[seat] ? 'on' : 'off'}`}
+          data-shield-toggle={seat}
+          data-on={shielded(player.uid) || undefined}
+          disabled={phonePlayed(player.uid)}
+          onclick={(e) => { e.stopPropagation(); toggleShield(seat); }}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 4 5.5v6c0 4.6 3.4 8.4 8 10 4.6-1.6 8-5.4 8-10v-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /><path d="M12 6v13.2" stroke="currentColor" stroke-width="1.5" opacity="0.6" /></svg>
+        </button>
+      </div>
+  {/if}
 {/snippet}
 
 {#snippet gameLog(inverted: boolean)}
@@ -3916,23 +3956,23 @@
         <button
           type="button"
           class="orientation-toggle"
-          aria-pressed={showHands}
-          aria-label="Show hand cards face up on the table"
-          data-show-hands={showHands ? 'on' : 'off'}
-          onclick={toggleShowHands}
-        >Show hands {showHands ? 'on' : 'off'}</button>
-        <small>Hand cards lie face up on the table. On by default against a computer opponent{showHandsChoice === 'auto' ? ' (as now)' : ''}; off with two players, whose phones show them their cards. Hold a card to peek either way.</small>
+          aria-pressed={showCards[scalePanelSeat]}
+          aria-label={`Show Player ${scalePanelSeat}'s hand cards face up on the table`}
+          data-show-hands={showCards[scalePanelSeat] ? 'on' : 'off'}
+          onclick={() => toggleShowCards(scalePanelSeat)}
+        >Show cards {showCards[scalePanelSeat] ? 'on' : 'off'}</button>
+        <small>Player {scalePanelSeat}'s hand cards lie face up on the table — the same as the eye button in the corner of the panel. Never on at the start; hold a card to peek either way.</small>
       </div>
       <div class="facing-option">
         <button
           type="button"
           class="orientation-toggle"
-          aria-pressed={shieldMode}
-          aria-label="Shield mode: a row of card backs peeks out above each hand"
-          data-shield-mode={shieldMode ? 'on' : 'off'}
-          onclick={toggleShield}
-        >Shield {shieldMode ? 'on' : 'off'}</button>
-        <small>For a card shield laid over each hand: the cards move to the player's edge of the mat and a second row of backs peeks out half a card above them. The owner reads the cards under the shield (face up with Show hands, or held to peek); the opponent sees only how many backs there are. Off by default; a computer opponent's hand is never shielded, nor is a seat played from a phone (that player reads their cards there).</small>
+          aria-pressed={shieldSeat[scalePanelSeat]}
+          aria-label={`Shield mode for Player ${scalePanelSeat}: a row of card backs peeks out above the hand`}
+          data-shield-mode={shieldSeat[scalePanelSeat] ? 'on' : 'off'}
+          onclick={() => toggleShield(scalePanelSeat)}
+        >Shield {shieldSeat[scalePanelSeat] ? 'on' : 'off'}</button>
+        <small>For a card shield laid over Player {scalePanelSeat}'s hand (the shield button in the corner of the panel does the same): the cards move to the player's edge of the mat and a second row of backs peeks out half a card above them. The owner reads the cards under the shield (face up with Show cards, or held to peek); the opponent sees only how many backs there are. Remembered per seat; a computer opponent's hand is never shielded, nor is a seat played from a phone (that player reads their cards there).</small>
       </div>
       <div class="facing-option">
         <button
@@ -4175,8 +4215,8 @@
     />
   </div>
 
-  <div class="top-log">{@render gameLog(true)}</div>
-  <div class="bottom-log">{@render gameLog(false)}</div>
+  <div class="top-log">{@render seatModes(1)}{@render gameLog(true)}</div>
+  <div class="bottom-log">{@render seatModes(2)}{@render gameLog(false)}</div>
   <p class="table-status" class:for-top={marketFacingSeat === 1} data-status={statusKind}>{status} · Build {buildHash}</p>
   {#if tutorial}
     <!-- Table guide: fixed over the whole screen; every callout faces the
@@ -4534,6 +4574,20 @@
      worth. A token still in flight is kept invisible here (`arriving`). */
   .seat-tokens { --earned-size: clamp(1.4rem, 3.2vmin, 3.6rem); display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: 0.2rem; min-height: clamp(1.6rem, 3.6vmin, 4rem); max-height: calc(2 * var(--earned-size) + 0.2rem + 0.3rem + 2px); overflow: hidden; padding: 0.15rem 0.5rem; border: 1px solid #b7aa8d; border-radius: 1.4rem; background: #f5ead3; font-size: clamp(0.65rem, 1.3vmin, 0.82rem); }
   .seat-tokens.dense { --earned-size: clamp(1.1rem, 2.5vmin, 2.8rem); }
+  /* The player's two mode buttons sit in their bottom-right corner, in the
+     fixed strip beside the game log pill (the strip is rotated whole for
+     the top player, so the order reads the same from both sides). */
+  .top-log, .bottom-log { --seat-mode-size: clamp(1.9rem, 3.6vmin, 3.2rem); display: flex; align-items: center; gap: 0.5rem; }
+  .seat-modes { display: flex; gap: 0.35rem; }
+  /* The token row stops short of the two buttons (in Shield mode it is the hand's width already). */
+  .player-seat { --seat-mode-size: clamp(1.9rem, 3.6vmin, 3.2rem); }
+  .seat-tokens:not(.shielded) { margin-right: calc(2 * var(--seat-mode-size) + 1rem); }
+  .seat-mode { display: grid; width: var(--seat-mode-size); height: var(--seat-mode-size); place-items: center; padding: 0; border: 1.5px solid #b7aa8d; border-radius: 50%; background: #f5ead3; color: #6b5f48; box-shadow: 0 0.1rem 0.3rem rgb(10 32 30 / 20%); cursor: pointer; }
+  .seat-mode svg { width: 62%; height: 62%; }
+  .seat-mode.on { border-color: #d38b21; background: #d38b21; color: #fff8e8; box-shadow: 0 0 0 0.2rem rgb(211 139 33 / 30%), 0 0.1rem 0.3rem rgb(10 32 30 / 25%); }
+  .seat-mode.on::after { content: ''; position: absolute; right: -0.15rem; top: -0.15rem; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: #2f9e44; border: 1.5px solid #fff; }
+  .seat-mode { position: relative; }
+  .seat-mode:disabled { opacity: 0.45; cursor: default; }
   /* Shield mode: the row is exactly as wide as the hand's seven cells and
      starts where they start, so a card shield laid over the hand covers
      the coins too; it never wraps. The space between coins (--n of them,
